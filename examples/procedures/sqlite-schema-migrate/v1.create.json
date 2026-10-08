@@ -1,0 +1,34 @@
+{
+  "canonical_key": "sqlite.schema.migrate",
+  "version": {
+    "philosophy": "An applied migration is history. Databases in the field were built from it, so it must never change; every schema change is a new, forward-only migration that preserves existing records.",
+    "method": "Add the next numbered migration, apply it to a copy of a real database, prove that existing records read back unchanged, and refuse to run against schemas newer than the code understands.",
+    "contract": {
+      "inputs": {
+        "change": "The schema change required and the behaviour that needs it.",
+        "database_copy": "A copy of a representative existing database file."
+      },
+      "outputs": {
+        "migration": "One new migration file with the next sequence number.",
+        "evidence": "Test output showing that existing records survive the migration unchanged."
+      },
+      "preconditions": [
+        "No applied migration file is modified."
+      ],
+      "postconditions": [
+        "The schema version advances by exactly one per new migration.",
+        "Records written before the migration read back byte-for-byte identical."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        { "id": "inspect", "action": "Read the existing migrations and the record contract the change affects." },
+        { "id": "write", "action": "Add NNNN_<name>.sql with the next number; never edit an earlier file." },
+        { "id": "test", "action": "Add a test that opens a database created before the change and reads existing records back." },
+        { "id": "apply", "action": "Run the migration against a copy of a real database file and compare record reads before and after." },
+        { "id": "document", "action": "Update the record contract documentation and note compatibility consequences for older binaries." }
+      ]
+    },
+    "revision_reason": "Initial version."
+  }
+}

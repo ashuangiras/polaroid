@@ -1,0 +1,12 @@
+# Build output
+/bin/
+
+# Local databases (polaroidd defaults to ./polaroid.db) and SQLite WAL files
+*.db
+*.db-shm
+*.db-wal
+
+# Test and profiling output
+*.out
+*.test
+*.prof

@@ -1,0 +1,62 @@
+# Architecture overview
+
+Polaroid stores procedures that agents find, follow, and correct. It manages generic records, versions, and (later) relationships and evidence. It never runs an LLM and never executes instructions: agents do that with their own tools. Task knowledge lives in record content; adding a task never changes code.
+
+This page describes what is **implemented** (increment 1: procedure identity and immutable versions). Planned components are listed at the end and in the [roadmap](../development/roadmap.md).
+
+## Components and dependency direction
+
+One Go module, one repository. Dependencies point inward to the domain:
+
+```mermaid
+flowchart LR
+  cli["cmd/polaroid<br/>CLI client"] -- HTTP/JSON --> daemon
+  subgraph daemon["cmd/polaroidd (composition root)"]
+    transport["internal/transport/http"] --> memory["internal/memory"]
+    sqlite["internal/storage/sqlite"] --> memory
+  end
+  sqlite --> db[("SQLite file")]
+```
+
+| Component | Contract | Depends on |
+| --- | --- | --- |
+| `internal/memory` | Record types, validation, version rules, `Service`, and the `Store` interface it needs | Standard library only (`uuid`, `encoding/json/jsontext`) |
+| `internal/storage/sqlite` | Implements `memory.Store`: atomic writes, canonical-key uniqueness, immutability, migrations | `memory`, `database/sql`, `modernc.org/sqlite` |
+| `internal/transport/http` | The [HTTP API](http-api.md): parsing, JSON-shape checks, error mapping, security checks | `memory`, `net/http` |
+| `cmd/polaroidd` | Configuration, wiring, listener, timeouts, graceful shutdown | all of the above |
+| `cmd/polaroid` | Generic CLI over the HTTP API | Standard library only |
+
+Each internal package is tested on its own against its contract: validation rules in `memory`, persistence and concurrency in `storage/sqlite` (real database files), and the full stack through real HTTP in `transport/http`. `internal/archtest` fails the build if `memory` imports HTTP, SQL or storage code, if storage imports transport, or if transport imports storage.
+
+There is deliberately one interface (`memory.Store`): it lets the domain stay ignorant of SQLite. No other abstraction exists until a second implementation or a test needs one.
+
+## Request flow
+
+1. `polaroidd` accepts a request; the server enforces header/read/write timeouts.
+2. `transport/http` applies the loopback-host check (when bound to loopback) and cross-origin protection, decodes the body strictly (1 MiB limit, unknown or duplicate members rejected), and calls `memory.Service`.
+3. `memory.Service` validates the envelope, assigns IDs, version numbers and timestamps, and calls the `Store`.
+4. `storage/sqlite` performs the write in one transaction, or the read in one statement.
+5. Domain errors map to `400`/`404`/`409`; anything else is logged and returned as `500 internal` without detail.
+
+## Consistency and concurrency
+
+- **Writes** run in one transaction that takes SQLite's write lock at `BEGIN` (`_txlock=immediate`, `busy_timeout` 5s). Concurrent writers queue; none fails mid-transaction.
+- **Revisions** carry the base version they were derived from. The store checks "base equals latest" and inserts `latest + 1` inside that transaction, so of N concurrent revisions from one base exactly one succeeds and the rest get `409 version_conflict`. Nothing is merged or overwritten.
+- **Reads** are single SQL statements, so a history is always one consistent snapshot (WAL mode lets reads proceed during writes).
+- **Integrity backstops in the schema**: unique canonical keys; triggers reject any `UPDATE` or `DELETE` of procedures and versions and any non-contiguous version number; `CHECK` constraints require `contract` and `instructions` to be JSON objects. These hold even for a client that bypasses `polaroidd`.
+- **Durability**: `synchronous=FULL`. Schema migrations run in a write transaction at startup; a database newer than the binary is refused.
+
+## Security posture (increment 1)
+
+There is no authentication or authorization yet ([ADR-0006](decisions/0006-local-unauthenticated-api.md)). The daemon listens on `127.0.0.1:7417` by default, and then:
+
+- rejects requests whose `Host` is not a loopback name (blocks DNS rebinding from web pages);
+- rejects unsafe cross-origin browser requests (`net/http.CrossOriginProtection`);
+- requires `Content-Type: application/json` on writes and limits bodies to 1 MiB;
+- never returns internal error text.
+
+Binding to a non-loopback address is possible (`-addr`) but logs a warning: anyone who can reach the port can read and write records. Access control is planned.
+
+## Planned components (not implemented)
+
+Repository bindings, subprocedure references and composition (increment 2), and execution evidence with context-specific verification and resolution (increment 3) will extend `memory` and add tables via new migrations. MCP transport would sit beside `transport/http`. See [records.md](records.md#planned-records-not-implemented) and the [roadmap](../development/roadmap.md).

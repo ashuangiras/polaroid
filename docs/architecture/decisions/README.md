@@ -1,0 +1,14 @@
+# Architecture decision records
+
+Short records of consequential choices. An accepted ADR is never edited in substance. To change a decision, add a new ADR that supersedes it, and mark the old one `Superseded by ADR-NNNN`.
+
+| ADR | Decision | Status |
+| --- | --- | --- |
+| [0001](0001-single-module-layered-packages.md) | One Go module with layered internal packages | Accepted |
+| [0002](0002-go-toolchain-and-provisional-module-path.md) | Go 1.27.1 minimum, the Go 1.27.2 toolchain, and the provisional module path `example.com/polaroid` | Accepted |
+| [0003](0003-sqlite-with-modernc-driver.md) | SQLite through the pure-Go `modernc.org/sqlite` driver | Accepted |
+| [0004](0004-append-only-versions-with-expected-base.md) | Append-only versions guarded by an expected base version | Accepted |
+| [0005](0005-strict-json-with-encoding-json-v2.md) | Strict JSON decoding with `encoding/json/v2` | Accepted |
+| [0006](0006-local-unauthenticated-api.md) | A loopback-only, unauthenticated API until access control exists | Accepted |
+
+Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.

@@ -1,0 +1,32 @@
+name: Bug report
+description: Polaroid behaves differently from its documented contract.
+body:
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: The exact commands or requests you ran, and the responses, exit codes or logs you got.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened. Link the contract, for example docs/architecture/http-api.md or records.md.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: The smallest sequence that reproduces the problem from a fresh database.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Commit, output of `go version`, and OS and architecture.
+    validations:
+      required: true

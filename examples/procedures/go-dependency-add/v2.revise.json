@@ -1,0 +1,35 @@
+{
+  "base_version": 1,
+  "version": {
+    "philosophy": "A dependency is a long-term liability: its code, license and maintenance become yours. Add one only when the standard library cannot reasonably do the job, and only with a verified permissive license and a pinned version.",
+    "method": "Justify the need, compare maintained candidates, pin an explicit version, verify every newly linked module's license from its source, and record it in the dependency inventory before relying on it.",
+    "contract": {
+      "inputs": {
+        "module": "Module path of the candidate dependency.",
+        "purpose": "The capability the repository needs and why the standard library is insufficient."
+      },
+      "outputs": {
+        "module_change": "go.mod and go.sum changes that add the pinned module.",
+        "inventory": "One inventory entry per newly linked module: path, version, license and purpose."
+      },
+      "preconditions": [
+        "The repository's checks pass before the change."
+      ],
+      "postconditions": [
+        "Every third-party module linked into the build is recorded with a verified permissive license.",
+        "The repository's checks pass after the change."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        { "id": "justify", "action": "State the capability needed and why the standard library is insufficient." },
+        { "id": "evaluate", "action": "Compare maintained candidates: release activity, open advisories, transitive dependencies." },
+        { "id": "pin", "action": "Run `go get <module>@<version>` with an explicit version, then `go mod tidy`." },
+        { "id": "license", "action": "List the modules actually compiled with `go list -deps -test -f '{{with .Module}}{{.Path}} {{.Version}}{{end}}' ./...` and read each module's LICENSE file from the module cache." },
+        { "id": "record", "action": "Add one inventory entry per compiled module with version, license and purpose." },
+        { "id": "verify", "action": "Run the repository's full check suite and record the result." }
+      ]
+    },
+    "revision_reason": "Step 'license' used `go list -m all`, which lists every module in the module graph, including modules that are never compiled into the build. That reports licenses that do not apply and makes the inventory disagree with the binaries. Inventory only the modules that `go list -deps -test` reports as compiled."
+  }
+}
