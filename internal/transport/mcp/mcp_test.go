@@ -270,6 +270,17 @@ func TestAgentWorkflowThroughTools(t *testing.T) {
 		!strings.Contains(r, `"verified_by":"`+parentRun+`"`) {
 		t.Fatalf("resolve_binding: %s", r)
 	}
+	// Selection evidence names its commit; target verification is per commit.
+	if r := h.ok(t, "resolve_binding", `{"binding_id":"`+binding+`","environment":"ci.linux","commit":"`+commit+`","inputs":{}}`); !strings.Contains(r,
+		`"selection_evidence":{"execution_id":"`+parentRun+`","repository":"github.com/o/r","commit":"`+commit+`","environment":{"name":"ci.linux"}},"target_verification":{`) ||
+		!strings.Contains(r, `"verified":true,"latest_execution_id":"`+parentRun+`"`) {
+		t.Fatalf("resolve_binding at the recorded commit: %s", r)
+	}
+	other := strings.Repeat("b", 40)
+	if r := h.ok(t, "resolve_binding", `{"binding_id":"`+binding+`","environment":"ci.linux","commit":"`+other+`","inputs":{}}`); !strings.Contains(r, `"verified_by":"`+parentRun+`"`) ||
+		!strings.Contains(r, `"verified":false,"execution_ids":[]`) || strings.Contains(r, `"verified":true`) {
+		t.Fatalf("resolve_binding at an unseen commit: %s", r)
+	}
 	// The parent's evidence fixes the leaf at version 1, although version 2 is the latest.
 	g := h.ok(t, "get_graph", `{"procedure_id":"`+parent+`","version":1,"repository":"github.com/o/r","environment":"ci.linux"}`)
 	if !strings.Contains(g, `"selected_by":"evidence","inputs":{},"node":{"procedure_id":"`+leaf+`","canonical_key":"demo.leaf","version":1,"verified_by":"`+child+`"`) {
@@ -307,6 +318,12 @@ func TestToolArgumentsAreStrict(t *testing.T) {
 	}
 	h.fail(t, "get_procedure", `{"canonical_key":"no.such"}`, "not_found")
 	h.fail(t, "get_graph", `{"procedure_id":"x","version":1,"repository":"github.com/o/r"}`, "invalid_request")
+	if e := h.fail(t, "resolve_binding", `{"binding_id":"x","environment":"ci.linux","commit":"0123456"}`, "invalid_request"); !slices.Equal(e.fields(), []string{"commit", "inputs"}) {
+		t.Fatalf("invalid target: fields %v", e.fields())
+	}
+	if e := h.fail(t, "get_graph", `{"procedure_id":"x","version":1,"commit":"`+commit+`","inputs":{}}`, "invalid_request"); !slices.Equal(e.fields(), []string{"repository", "environment"}) {
+		t.Fatalf("target without a context: fields %v", e.fields())
+	}
 }
 
 func TestFeedbackThroughTools(t *testing.T) {

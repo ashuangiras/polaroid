@@ -11,11 +11,25 @@ import (
 
 // graphNodeJSON and bindingResolutionJSON restate the documented shapes.
 type graphNodeJSON struct {
-	ProcedureID  string `json:"procedure_id"`
-	CanonicalKey string `json:"canonical_key"`
-	Version      int    `json:"version"`
-	VerifiedBy   string `json:"verified_by"`
-	References   []struct {
+	ProcedureID       string `json:"procedure_id"`
+	CanonicalKey      string `json:"canonical_key"`
+	Version           int    `json:"version"`
+	VerifiedBy        string `json:"verified_by"`
+	SelectionEvidence *struct {
+		ExecutionID string `json:"execution_id"`
+		Repository  string `json:"repository"`
+		Commit      string `json:"commit"`
+		Environment struct {
+			Name string `json:"name"`
+		} `json:"environment"`
+	} `json:"selection_evidence"`
+	TargetVerification *struct {
+		Combination       combinationJSON `json:"combination"`
+		Verified          bool            `json:"verified"`
+		LatestExecutionID string          `json:"latest_execution_id"`
+		ExecutionIDs      []string        `json:"execution_ids"`
+	} `json:"target_verification"`
+	References []struct {
 		Name          string         `json:"name"`
 		VersionPolicy jsontext.Value `json:"version_policy"`
 		SelectedBy    string         `json:"selected_by"`

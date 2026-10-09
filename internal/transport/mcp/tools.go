@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"errors"
 	"slices"
 	"strings"
@@ -33,6 +34,13 @@ type (
 		Version     int    `json:"version"`
 		Repository  string `json:"repository,omitzero" jsonschema:"resolve contextual references from evidence in this repository; requires environment"`
 		Environment string `json:"environment,omitzero" jsonschema:"resolve contextual references from evidence in this environment; requires repository"`
+		targetArgs
+	}
+	// targetArgs ask for each selected combination's status at an exact
+	// commit and inputs (ADR-0018).
+	targetArgs struct {
+		Commit string         `json:"commit,omitzero" jsonschema:"the full commit you will run at; requires inputs. Each node then reports target_verification"`
+		Inputs jsontext.Value `json:"inputs,omitzero" jsonschema:"the root's effective inputs at that commit; requires commit"`
 	}
 	createProcedureArgs struct {
 		CanonicalKey string `json:"canonical_key"`
@@ -64,6 +72,7 @@ type (
 	resolveBindingArgs struct {
 		BindingID   string `json:"binding_id"`
 		Environment string `json:"environment"`
+		targetArgs
 	}
 	listExecutionsArgs struct {
 		ProcedureID string `json:"procedure_id"`
@@ -84,6 +93,13 @@ type (
 		Kind string `json:"kind,omitzero" jsonschema:"only reports of this kind: problem or suggestion"`
 	}
 )
+
+func (a targetArgs) target() *memory.Target {
+	if a.Commit == "" && a.Inputs == nil {
+		return nil
+	}
+	return &memory.Target{Commit: a.Commit, Inputs: a.Inputs}
+}
 
 func (t *tools) register(s *sdk.Server) {
 	const read, write = true, false
@@ -115,10 +131,11 @@ func (t *tools) register(s *sdk.Server) {
 			return wire.NewVersion(v), err
 		})
 	add(s, t, "get_graph", "Get a version's composition graph with the exact version each reference selects. "+
-		"With repository and environment, contextual references resolve from verification evidence.", read,
+		"With repository and environment, contextual references resolve from verification evidence, reported per node as selection_evidence (any commit). "+
+		"Add commit and inputs to get target_verification: whether each selected combination is verified at that exact commit and inputs.", read,
 		func(ctx context.Context, in graphArgs) (any, error) {
 			g, err := t.svc.CompositionGraph(ctx, in.ProcedureID, in.Version,
-				memory.ResolutionContext{Repository: in.Repository, Environment: in.Environment})
+				memory.ResolutionContext{Repository: in.Repository, Environment: in.Environment, Target: in.target()})
 			return wire.NewGraphNode(g), err
 		})
 	add(s, t, "create_procedure", "Create a procedure and its version 1. contract and instructions are free-form JSON objects.", write,
@@ -146,9 +163,11 @@ func (t *tools) register(s *sdk.Server) {
 			r, err := t.svc.BindingRevision(ctx, in.BindingID, in.Revision)
 			return wire.NewBindingRevision(r), err
 		})
-	add(s, t, "resolve_binding", "Resolve a binding's latest revision in its repository and an environment, from verification evidence.", read,
+	add(s, t, "resolve_binding", "Resolve a binding's latest revision in its repository and an environment. "+
+		"Versions are selected from earlier evidence, reported per node as selection_evidence with the commit it ran at; that is not verification of your checkout. "+
+		"Add commit and inputs to get target_verification for each selected combination at exactly that commit and inputs.", read,
 		func(ctx context.Context, in resolveBindingArgs) (any, error) {
-			r, err := t.svc.ResolveBinding(ctx, in.BindingID, in.Environment)
+			r, err := t.svc.ResolveBinding(ctx, in.BindingID, in.Environment, in.target())
 			return wire.NewBindingResolution(r), err
 		})
 	add(s, t, "create_binding", "Bind a procedure in a repository under a local name, with inputs and a version policy.", write,
