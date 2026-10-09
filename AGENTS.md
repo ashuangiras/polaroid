@@ -42,7 +42,7 @@ Polaroid is a versioned procedural memory service for agents, written in Go, wit
 | `make test` / `make race` | Runs the tests, or the tests with the race detector. |
 | `make build` | Builds `bin/polaroidd` and `bin/polaroid`. |
 | `make vuln` | Runs govulncheck. Needs network. |
-| `make demo` | Runs the live create, revise, conflict, two-repository binding, execution and restart demonstration. Needs `jq`. |
+| `make demo` | Runs the live create, revise, conflict, two-repository binding, execution and restart demonstration, then a scripted replay of the procedural-memory loop on the development procedures. Needs `jq`. |
 | `make e2e` / `make e2e-mcp` | Runs the end-to-end scripts: every feature, and `/mcp` with independent clients, against a real daemon. Reports go to `bin/e2e/`. `E2E_INTEROP=0` skips the independent-client checks. |
 | `make run ARGS="-db x.db"` | Runs the daemon. |
 
@@ -58,5 +58,5 @@ Polaroid is a versioned procedural memory service for agents, written in Go, wit
 | `internal/transport/mcp` | MCP server at `/mcp`: tools, resources, argument decoding |
 | `internal/transport/wire` | Record and error JSON shapes shared by both transports |
 | `internal/archtest` | Package-boundary tests |
-| `examples/` | Example procedure records (task knowledge) |
+| `examples/` | Example procedure records (task knowledge), and Polaroid's development procedures in `examples/development/`, loaded with `scripts/load-fixtures.sh` |
 | `docs/` | Architecture, decisions, workflow, status, roadmap |
