@@ -12,5 +12,6 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0006](0006-local-unauthenticated-api.md) | A loopback-only, unauthenticated API until access control exists | Accepted |
 | [0007](0007-repository-identity-for-bindings.md) | Repositories are identified by a canonical path, and bindings by repository and local name | Accepted |
 | [0008](0008-subprocedure-references.md) | Subprocedure references are stored relationally and written only with their version | Accepted |
+| [0009](0009-reference-graph-rules.md) | Reference graphs are acyclic per procedure, bounded, and resolve contextual references to the latest version | Accepted |
 
 Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.
