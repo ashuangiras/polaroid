@@ -72,7 +72,7 @@ This page is a snapshot of the repository's current state, replaced at every han
   - strict decoding, a 1 MiB limit, a loopback-host check and cross-origin protection.
 - **`polaroidd`:** `-addr` and `-db` flags or the `POLAROID_*` environment variables, loopback by default, server timeouts, and graceful shutdown on SIGINT or SIGTERM.
 - **`polaroid` CLI:** a generic client. It reads JSON from a file or stdin, prints response bodies to stdout, and exits with 0, 1 or 2. Binding commands: `bindings`, `bind`, `get-binding`, `get-binding-revision`, `revise-binding`.
-- **Supporting material:** example records, the live demo (`make demo`, now including a two-repository binding), package-boundary tests, a dependency and license gate, CI workflow, Copilot instructions, and the docs and ADRs.
+- **Supporting material:** example records, the live demo (`make demo`, now including a two-repository binding), the end-to-end scripts (`make e2e`, `make e2e-mcp`; run by `make ci` and CI with the interop checks off since [#27](https://github.com/ashuangiras/polaroid/issues/27)), package-boundary tests, a dependency and license gate, CI workflow, Copilot instructions, and the docs and ADRs.
 
 **Not implemented:** discovery, aliases, access control, pagination, and the PoC import. See the [roadmap](roadmap.md).
 
@@ -80,6 +80,9 @@ This page is a snapshot of the repository's current state, replaced at every han
 
 | Check | Where | Result |
 | --- | --- | --- |
+| #27 verified through Polaroid's own procedures (#28) at `d306ae9`, in a clean worktree, recorded over MCP in a local demonstration store | darwin/arm64, Go 1.27.2, golangci-lint 2.14.0 | **Pass**, as parent execution `01a1216f-564c-722d-a6df-2680d6e87be2` (`dev.change.verify` v1, verified) with children `go.module.build` v1 and `go.module.checks` v2: `go test ./...` 7 packages `ok`; `make check` `0 issues.`, 14 `ok` lines, `deps-check: PASS`; `make vuln` `No vulnerabilities found.`; `make demo` `demo: PASS`; `make e2e` `passed=192 failed=0`; `make e2e-mcp E2E_INTEROP=0` `passed=81 failed=0`. The first attempt failed on a deliberately stale, labelled instruction; see [#28](https://github.com/ashuangiras/polaroid/issues/28). |
+| GitHub Actions `ci`, run 37955899457 (PR #29 for #27, `d306ae9`) | ubuntu-latest | **Pass.** `make ci` now includes `REPORT: bin/e2e/REPORT.md  passed=192 failed=0` and `REPORT: bin/e2e/MCP-REPORT.md  passed=81 failed=0`; `sqlite3` is preinstalled on the runner. |
+| Negative check for #27 | darwin/arm64 | Changing the `GET /healthz is 200` claim to expect 299 made `make e2e` report `passed=191 failed=1` and exit non-zero (`make: *** [e2e] Error 1`), which fails `make ci`. Reverted. |
 | `make ci` with `GOLANGCI_LINT=<golangci-lint 2.14.0 release binary>`, branch `issue-21-protocol-2025-11-25` | darwin/arm64, local Go 1.27.2 | **Pass.** `0 issues`; all 7 packages with tests `ok` in `go test` and in `go test -race`; `deps-check: PASS (18 modules …)`; `No vulnerabilities found.`; `demo: PASS`. |
 | Live interop for #21 (end-to-end scripts) | darwin/arm64 | **Pass.** TypeScript SDK 1.32.1 negotiated 2025-11-25 with no session, listed 20 tools and called `report_feedback`; MCP Inspector 2.10.1 listed 20 tools; 2025-06-18 requests were refused; a foreign Host and a cross-site request got 403 at 2025-11-25. MCP: 86/86 checks; HTTP and CLI: 197/197. |
 | `make e2e` and `make e2e-mcp` (the end-to-end scripts, now committed in `scripts/`) | darwin/arm64, bash 5 | **Pass.** 197/197 and 86/86 checks. Without npm, `e2e-mcp` reports its 4 interop checks as skipped and passes 82/82; under bash 3.2 both scripts stop with "bash 4 or newer is required". |
@@ -153,7 +156,4 @@ Negative checks showed that the gates detect what they claim to detect. Each mut
 
 ## Next work item
 
-No increment is scoped beyond increment 4. Candidates, for the owner to choose and file:
-
-- Triage the new feedback reports from agents using `/mcp`, and turn them into issues.
-- Scope an item from the roadmap's "Later" list.
+[#28](https://github.com/ashuangiras/polaroid/issues/28): Polaroid-guided development, with development procedures as records that improve through execution.
