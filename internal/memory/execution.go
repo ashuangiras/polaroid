@@ -39,6 +39,25 @@ type ExecutionRecord struct {
 	Inputs          jsontext.Value
 	Outcome         Outcome
 	Evidence        jsontext.Value
+	Children        []ChildExecution
+}
+
+// ChildExecution links an already-recorded execution to the parent's
+// reference it fulfilled (ADR-0011).
+type ChildExecution struct {
+	Reference   string
+	ExecutionID string
+}
+
+// LinkedChildError reports that the child at Index is already linked to
+// another parent execution.
+type LinkedChildError struct {
+	Index    int
+	ParentID string
+}
+
+func (e *LinkedChildError) Error() string {
+	return fmt.Sprintf("child %d is already linked to execution %q", e.Index, e.ParentID)
 }
 
 // Execution is an immutable record of one finished run (ADR-0010).
@@ -88,7 +107,33 @@ func (r ExecutionRecord) validate() (ExecutionRecord, error) {
 	if string(r.Evidence) == "{}" {
 		p.add("evidence", "must not be empty")
 	}
+	r.Children = checkChildren(&p, r.Children)
 	return r, p.err()
+}
+
+// checkChildren returns a copy of children, or nil if there are none.
+func checkChildren(p *problems, children []ChildExecution) []ChildExecution {
+	if len(children) == 0 {
+		return nil
+	}
+	references := make(map[string]bool, len(children))
+	executions := make(map[string]bool, len(children))
+	for i, c := range children {
+		field := fmt.Sprintf("children[%d]", i)
+		checkKey(p, field+".reference", c.Reference)
+		if c.Reference != "" && references[c.Reference] {
+			p.add(field+".reference", "is already fulfilled by an earlier child")
+		}
+		references[c.Reference] = true
+		switch {
+		case c.ExecutionID == "":
+			p.add(field+".execution_id", "is required")
+		case executions[c.ExecutionID]:
+			p.add(field+".execution_id", "is already listed as an earlier child")
+		}
+		executions[c.ExecutionID] = true
+	}
+	return append([]ChildExecution(nil), children...)
 }
 
 // RecordExecution stores in as a new execution. The procedure version must
@@ -107,13 +152,21 @@ func (s *Service) RecordExecution(ctx context.Context, in ExecutionRecord) (Exec
 	}
 	e := Execution{ID: uuid.NewV7().String(), CreatedAt: timestamp(), ExecutionRecord: rec}
 	if err := s.store.CreateExecution(ctx, e); err != nil {
+		var linked *LinkedChildError
+		if errors.As(err, &linked) {
+			return Execution{}, &ValidationError{Problems: []FieldProblem{{
+				Field:   fmt.Sprintf("children[%d].execution_id", linked.Index),
+				Message: fmt.Sprintf("is already the child of execution %q", linked.ParentID),
+			}}}
+		}
 		return Execution{}, fmt.Errorf("record execution: %w", err)
 	}
 	return e, nil
 }
 
 func (s *Service) checkExecutionTargets(ctx context.Context, r ExecutionRecord) error {
-	if _, err := s.store.Version(ctx, r.ProcedureID, r.Version); err != nil {
+	v, err := s.store.Version(ctx, r.ProcedureID, r.Version)
+	if err != nil {
 		if !errors.Is(err, ErrNotFound) {
 			return fmt.Errorf("read version: %w", err)
 		}
@@ -123,14 +176,60 @@ func (s *Service) checkExecutionTargets(ctx context.Context, r ExecutionRecord) 
 		}
 		return &ValidationError{Problems: []FieldProblem{{Field: "version", Message: fmt.Sprintf("procedure %q has no version %d", r.ProcedureID, r.Version)}}}
 	}
-	if r.BindingID == "" {
-		return nil
+	var p problems
+	if r.BindingID != "" {
+		if err := s.checkBinding(ctx, r, &p); err != nil {
+			return err
+		}
 	}
+	if err := s.checkChildLinks(ctx, r, v, &p); err != nil {
+		return err
+	}
+	return p.err()
+}
+
+// checkChildLinks checks each child against the parent version's references
+// and run (ADR-0011). Whether a child already has another parent is left to
+// the store, which decides it atomically.
+func (s *Service) checkChildLinks(ctx context.Context, r ExecutionRecord, v Version, p *problems) error {
+	for i, c := range r.Children {
+		field := fmt.Sprintf("children[%d]", i)
+		var ref *Reference
+		for j := range v.References {
+			if v.References[j].Name == c.Reference {
+				ref = &v.References[j]
+			}
+		}
+		if ref == nil {
+			p.add(field+".reference", fmt.Sprintf("version %d has no reference named %q", v.Number, c.Reference))
+		}
+		child, err := s.store.Execution(ctx, c.ExecutionID)
+		if errors.Is(err, ErrNotFound) {
+			p.add(field+".execution_id", fmt.Sprintf("execution %q does not exist", c.ExecutionID))
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("read child execution: %w", err)
+		}
+		if child.Repository != r.Repository || child.Commit != r.Commit {
+			p.add(field+".execution_id", fmt.Sprintf("ran in %s at %s, not the parent's %s at %s", child.Repository, child.Commit, r.Repository, r.Commit))
+		}
+		switch {
+		case ref == nil:
+		case child.ProcedureID != ref.ProcedureID:
+			p.add(field+".execution_id", fmt.Sprintf("ran procedure %q, but reference %q targets %q", child.ProcedureID, ref.Name, ref.ProcedureID))
+		case ref.VersionPolicy.Kind == PolicyPin && child.Version != ref.VersionPolicy.Pin:
+			p.add(field+".execution_id", fmt.Sprintf("ran version %d, but reference %q pins version %d", child.Version, ref.Name, ref.VersionPolicy.Pin))
+		}
+	}
+	return nil
+}
+
+func (s *Service) checkBinding(ctx context.Context, r ExecutionRecord, p *problems) error {
 	h, err := s.store.BindingHistory(ctx, r.BindingID)
 	if err != nil {
 		return describeLookup(err, fmt.Sprintf("binding %q", r.BindingID))
 	}
-	var p problems
 	if h.Binding.ProcedureID != r.ProcedureID {
 		p.add("binding_id", fmt.Sprintf("binds procedure %q, not %q", h.Binding.ProcedureID, r.ProcedureID))
 	}
@@ -147,7 +246,7 @@ func (s *Service) checkExecutionTargets(ctx context.Context, r ExecutionRecord) 
 			p.add("version", fmt.Sprintf("binding revision %d pins version %d", r.BindingRevision, policy.Pin))
 		}
 	}
-	return p.err()
+	return nil
 }
 
 // Execution returns one execution.

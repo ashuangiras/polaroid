@@ -193,6 +193,8 @@ Content-Type: application/json
   - an abbreviated commit;
   - empty `evidence`.
 
+A parent execution adds `"children": [{"reference": "pinned-child", "execution_id": "…"}, …]`, listing child executions recorded earlier. They are returned in the same order, and the field is absent when there are none. A link to an unknown reference or execution is `400` naming `children[i].reference` or `children[i].execution_id`. So is a child that ran another procedure, a version other than the pin, another repository or commit, or a child already linked to another parent. See [records.md](records.md#subprocedure-execution-implemented).
+
 ### List executions
 
 `GET /v1/executions?procedure_id=…` lists one procedure's executions, oldest first, optionally filtered by `version` and `repository`.
@@ -200,7 +202,7 @@ Content-Type: application/json
 - `procedure_id` is required.
 - Each parameter may appear once.
 - Any other parameter is rejected with `400`.
-- List items have every execution field except `inputs` and `evidence`.
+- List items have every execution field except `inputs`, `evidence` and `children`.
 
 ## Errors
 

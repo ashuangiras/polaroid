@@ -69,9 +69,10 @@ type Store interface {
 	// BindingRevision returns one revision, or an error wrapping ErrNotFound.
 	BindingRevision(ctx context.Context, bindingID string, number int) (BindingRevision, error)
 
-	// CreateExecution stores e. The caller has checked that its version and
-	// binding revision exist and match; the store never modifies or deletes
-	// an execution.
+	// CreateExecution stores e and its child links. The caller has checked
+	// that its version, binding revision and children exist and match; the
+	// store returns a *LinkedChildError if a child already has a parent, and
+	// never modifies or deletes an execution.
 	CreateExecution(ctx context.Context, e Execution) error
 
 	// Execution returns one execution, or an error wrapping ErrNotFound.

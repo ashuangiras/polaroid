@@ -2,7 +2,7 @@
 
 This page defines Polaroid's records, how they are identified and how they are versioned. Each section is marked as **implemented** or **planned**. The [HTTP API](http-api.md) serves the implemented records with exactly these field names.
 
-Summary: a **procedure** is a shared identity with immutable **versions**. A version may **reference** other procedures it composes. A **binding** lets one repository use a procedure under a local name, with immutable **binding revisions** that hold the repository's inputs and version policy. An **execution** records one finished run of an exact version.
+Summary: a **procedure** is a shared identity with immutable **versions**. A version may **reference** other procedures it composes. A **binding** lets one repository use a procedure under a local name, with immutable **binding revisions** that hold the repository's inputs and version policy. An **execution** records one finished run of an exact version, and may link the **child executions** that fulfilled its references.
 
 ## Implemented records
 
@@ -121,20 +121,27 @@ An execution is an immutable record of one finished run, written once after the 
 | `inputs` | JSON object | client | The effective inputs. Free-form, and may be `{}`. |
 | `outcome` | string | client | `succeeded` or `failed`. |
 | `evidence` | JSON object | client | Free-form and non-empty, for example commands with their exit codes, or links to external artifacts with digests. Limited only by the 1 MiB request size. |
+| `children` | list of `{reference, execution_id}` | client | Optional. The [child executions](#subprocedure-execution-implemented) that fulfilled the version's references, in the order given. Omitted from responses when there are none. |
 | `created_at` | RFC 3339 timestamp, UTC | server | |
 
 `environment.attributes`, `inputs` and `evidence` are stored like `contract`: compacted, but otherwise exactly as submitted.
 
 An unknown procedure or binding is `404`. A missing version or binding revision, and every mismatch, is `400` naming the field. The database enforces the same rules with foreign keys and triggers, and it rejects `UPDATE` and `DELETE`. Recording an execution changes no other record.
 
+### Subprocedure execution (implemented)
+
+A child execution is an ordinary execution that fulfilled one of a parent version's references. It is recorded first, and the parent links it in `children` when the parent is recorded ([ADR-0011](decisions/0011-subprocedure-executions.md)). A link is accepted only if all of these hold:
+
+- `reference` names a reference of the parent's version;
+- the child execution exists and ran the reference's target procedure;
+- for a pinned reference, the child ran exactly the pinned version. A contextual reference accepts any version, and the child records the exact one;
+- the child has the parent's `repository` and `commit`. Its environment may differ.
+
+Each reference is fulfilled by at most one child, and none is required. Each execution is the child of at most one parent. Every violation is `400` naming `children[i].reference` or `children[i].execution_id`. Children may have children of their own, so a tree is recorded bottom-up. Links are written only in the parent's transaction and never change. The database enforces all of these rules too.
+
 ## Planned records (not implemented)
 
 These follow the established design. None of them exist in code, storage or the API yet. Their fields and rules are settled in the [roadmap](../development/roadmap.md) work items, and the open questions below must be answered before implementation.
-
-### Subprocedure execution (increment 3)
-
-- A **subprocedure execution** is a child execution linked to its parent through the named reference it fulfilled.
-- When a reference asked for contextual resolution, the execution still records the exact versions actually used.
 
 ### Verification semantics (increment 3)
 

@@ -10,13 +10,34 @@ import (
 	"github.com/ashuangiras/polaroid/internal/memory"
 )
 
-// CreateExecution implements memory.Store.
+// CreateExecution implements memory.Store. Child links go first: the schema
+// accepts them only for a parent that does not exist yet (ADR-0011).
 func (s *Store) CreateExecution(ctx context.Context, e memory.Execution) error {
 	var bindingID, bindingRevision any
 	if e.BindingID != "" {
 		bindingID, bindingRevision = e.BindingID, e.BindingRevision
 	}
 	return s.write(ctx, func(tx *sql.Tx) error {
+		for i, c := range e.Children {
+			var parent string
+			err := tx.QueryRowContext(ctx,
+				`SELECT parent_execution_id FROM execution_children WHERE child_execution_id = ?`, c.ExecutionID).Scan(&parent)
+			if err == nil {
+				return &memory.LinkedChildError{Index: i, ParentID: parent}
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("read parent of child %d: %w", i, err)
+			}
+			_, err = tx.ExecContext(ctx, `
+				INSERT INTO execution_children
+					(parent_execution_id, parent_procedure_id, parent_version, parent_repository, parent_commit_hash,
+					 position, reference, child_execution_id)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				e.ID, e.ProcedureID, e.Version, e.Repository, e.Commit, i, c.Reference, c.ExecutionID)
+			if err != nil {
+				return fmt.Errorf("insert child %d: %w", i, err)
+			}
+		}
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO executions
 				(id, procedure_id, version, binding_id, binding_revision, repository, commit_hash,
@@ -35,19 +56,40 @@ func (s *Store) CreateExecution(ctx context.Context, e memory.Execution) error {
 const executionColumns = `id, procedure_id, version, binding_id, binding_revision, repository, commit_hash,
 	environment_name, environment_attributes, outcome, created_at`
 
-// Execution implements memory.Store.
+// Execution implements memory.Store. It reads the execution and its child
+// links in one statement: one row per child, or one row without children.
 func (s *Store) Execution(ctx context.Context, id string) (memory.Execution, error) {
-	var inputs, evidence []byte
-	row := s.db.QueryRowContext(ctx, `SELECT `+executionColumns+`, inputs, evidence FROM executions WHERE id = ?`, id)
-	e, err := scanExecution(row, &inputs, &evidence)
-	if errors.Is(err, sql.ErrNoRows) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+executionColumns+`, inputs, evidence, c.reference, c.child_execution_id
+		FROM executions LEFT JOIN execution_children AS c ON c.parent_execution_id = executions.id
+		WHERE id = ? ORDER BY c.position`, id)
+	if err != nil {
+		return memory.Execution{}, fmt.Errorf("query execution: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var e memory.Execution
+	found := false
+	for rows.Next() {
+		var inputs, evidence []byte
+		var reference, child sql.NullString
+		row, err := scanExecution(rows, &inputs, &evidence, &reference, &child)
+		if err != nil {
+			return memory.Execution{}, err
+		}
+		if !found {
+			e, found = row, true
+			e.Inputs, e.Evidence = jsontext.Value(inputs), jsontext.Value(evidence)
+		}
+		if child.Valid {
+			e.Children = append(e.Children, memory.ChildExecution{Reference: reference.String, ExecutionID: child.String})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return memory.Execution{}, fmt.Errorf("read execution: %w", err)
+	}
+	if !found {
 		return memory.Execution{}, memory.ErrNotFound
 	}
-	if err != nil {
-		return memory.Execution{}, err
-	}
-	e.Inputs = jsontext.Value(inputs)
-	e.Evidence = jsontext.Value(evidence)
 	return e, nil
 }
 

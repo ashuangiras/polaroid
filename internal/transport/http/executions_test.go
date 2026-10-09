@@ -27,10 +27,14 @@ type executionJSON struct {
 		Name       string         `json:"name"`
 		Attributes jsontext.Value `json:"attributes"`
 	} `json:"environment"`
-	Inputs    jsontext.Value `json:"inputs"`
-	Outcome   string         `json:"outcome"`
-	Evidence  jsontext.Value `json:"evidence"`
-	CreatedAt time.Time      `json:"created_at"`
+	Inputs   jsontext.Value `json:"inputs"`
+	Outcome  string         `json:"outcome"`
+	Evidence jsontext.Value `json:"evidence"`
+	Children []struct {
+		Reference   string `json:"reference"`
+		ExecutionID string `json:"execution_id"`
+	} `json:"children"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // executionRequest returns a record-execution body. fields overrides or adds
@@ -50,7 +54,7 @@ func executionRequest(procedureID string, version int, fields map[string]string)
 		members[k] = v
 	}
 	var parts []string
-	for _, k := range []string{"procedure_id", "version", "binding_id", "binding_revision", "repository", "commit", "environment", "inputs", "outcome", "evidence"} {
+	for _, k := range []string{"procedure_id", "version", "binding_id", "binding_revision", "repository", "commit", "environment", "inputs", "outcome", "evidence", "children"} {
 		if v, ok := members[k]; ok && v != "-" {
 			parts = append(parts, fmt.Sprintf("%q: %s", k, v))
 		}
