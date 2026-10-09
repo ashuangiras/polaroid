@@ -285,7 +285,7 @@ func TestAgentWorkflowThroughTools(t *testing.T) {
 	}
 	// The parent's evidence fixes the leaf at version 1, although version 2 is the latest.
 	g := h.ok(t, "get_graph", `{"procedure_id":"`+parent+`","version":1,"repository":"github.com/o/r","environment":"ci.linux"}`)
-	if !strings.Contains(g, `"selected_by":"evidence","inputs":{},"node":{"procedure_id":"`+leaf+`","canonical_key":"demo.leaf","version":1,"verified_by":"`+child+`"`) {
+	if !strings.Contains(g, `"selected_by":"evidence","inputs":{},"node":{"procedure_id":"`+leaf+`","canonical_key":"demo.leaf","version":1,"scope":"unspecified","verified_by":"`+child+`"`) {
 		t.Fatalf("resolved graph: %s", g)
 	}
 	h.ok(t, "get_execution", `{"id":"`+parentRun+`"}`)
@@ -430,6 +430,39 @@ func TestRepositoriesScopesAndPagesThroughTools(t *testing.T) {
 	}
 	if got := h.ok(t, "list_executions", `{}`); got != `{"executions":[]}` {
 		t.Fatalf("list_executions without filters = %s", got)
+	}
+}
+
+// TestIdentitySnapshotsAndLabelsThroughTools checks the ADR-0022 and
+// ADR-0023 fields and arguments through MCP, as HTTP serves them.
+func TestIdentitySnapshotsAndLabelsThroughTools(t *testing.T) {
+	h := newHarness(t)
+	leaf := field(t, h.ok(t, "create_procedure", `{"canonical_key":"demo.leaf","philosophy":"p","method":"m","contract":{},"instructions":{},"revision_reason":"r"}`), "id")
+	h.ok(t, "create_procedure", `{"canonical_key":"demo.other","philosophy":"p","method":"m","contract":{},"instructions":{},"revision_reason":"r"}`)
+	runID := field(t, h.ok(t, "record_execution", run(leaf, 1, "succeeded", "")), "id")
+	repo := field(t, h.ok(t, "register_repository", `{"identifier":"github.com/o/a","name":"A"}`), "id")
+	h.ok(t, "add_repository_alias", `{"repository_id":"`+repo+`","identifier":"github.com/o/r","reason":"Renamed."}`)
+
+	if e := h.ok(t, "get_execution", `{"id":"`+runID+`"}`); !strings.Contains(e, `"repository":"github.com/o/r","repository_id":"`+repo+`"`) {
+		t.Fatalf("get_execution = %s", e)
+	}
+	g := h.ok(t, "get_graph", `{"procedure_id":"`+leaf+`","version":1,"repository":"github.com/o/a","environment":"ci.linux","commit":"`+commit+`","inputs":{}}`)
+	if !strings.Contains(g, `"scope":"unspecified"`) || !strings.Contains(g, `"repository":"github.com/o/a","repository_id":"`+repo+`"`) ||
+		!strings.Contains(g, `"verified":true,"latest_execution_id":"`+runID+`"`) {
+		t.Fatalf("get_graph under the canonical identifier = %s", g)
+	}
+
+	first := h.ok(t, "list_procedures", `{"limit":1,"snapshot":true}`)
+	next := field(t, first, "next")
+	h.ok(t, "create_procedure", `{"canonical_key":"demo.a","philosophy":"p","method":"m","contract":{},"instructions":{},"revision_reason":"r"}`)
+	if second := h.ok(t, "list_procedures", `{"limit":1,"snapshot":true,"after":"`+next+`"}`); !strings.Contains(second, `"canonical_key":"demo.other"`) || strings.Contains(second, `"next"`) {
+		t.Fatalf("second snapshot page = %s", second)
+	}
+	if e := h.fail(t, "list_procedures", `{"limit":1,"after":"`+next+`"}`, "invalid_request"); !slices.Equal(e.fields(), []string{"after"}) {
+		t.Fatalf("a snapshot cursor in a live traversal: %+v", e)
+	}
+	if e := h.fail(t, "list_bindings", `{"repository":"github.com/o/a","snapshot":true}`, "invalid_request"); !slices.Equal(e.fields(), []string{"snapshot"}) {
+		t.Fatalf("snapshot without limit: %+v", e)
 	}
 }
 

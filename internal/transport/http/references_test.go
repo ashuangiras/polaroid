@@ -168,7 +168,7 @@ func TestVersionsFromBeforeReferencesReadBackUnchanged(t *testing.T) {
 	_ = raw.Close()
 
 	s := newTestServerAt(t, path)
-	const v1 = `{"procedure_id":"p1","version":1,"philosophy":"p","method":"m","contract":{"inputs":{}},"instructions":{"steps":["one"]},"revision_reason":"r","created_at":"2026-10-09T12:00:00.123456789Z"}`
+	const v1 = `{"procedure_id":"p1","version":1,"philosophy":"p","method":"m","scope":"unspecified","contract":{"inputs":{}},"instructions":{"steps":["one"]},"revision_reason":"r","created_at":"2026-10-09T12:00:00.123456789Z"}`
 	if got := s.call(t, http.MethodGet, "/v1/procedures/p1/versions/1", ""); string(got.body) != v1+"\n" {
 		t.Fatalf("version 1 =\n %s\nwant\n %s", got.body, v1)
 	}

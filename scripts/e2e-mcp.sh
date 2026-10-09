@@ -337,6 +337,13 @@ check "one report per page, with a next cursor" json_has '. == {"n":1,"next":tru
 NEXT="$(tool list_feedback '{"limit":1}' | text | jq -r .next)"
 step list_feedback "{\"limit\":5,\"after\":\"$NEXT\"}" '{n: (.feedback | length), next: has("next")}'
 check "the rest after the cursor, without a cursor at the end" json_has '. == {"n":1,"next":false}'
+step list_procedures '{"limit":1,"snapshot":true}' '{n: (.procedures | length), next: (.next != null)}'
+check "a snapshot page (ADR-0023)" json_has '. == {"n":1,"next":true}'
+SNAP_NEXT="$(tool list_procedures '{"limit":1,"snapshot":true}' | text | jq -r .next)"
+step list_procedures "{\"limit\":1,\"after\":\"$SNAP_NEXT\"}" '.error.fields[0].field'
+check "a snapshot cursor is refused in a live traversal" equal "$LAST" '"after"'
+step get_version "{\"procedure_id\":\"$LEAF\",\"version\":1}" '.scope'
+check "a version names its own scope" equal "$LAST" '"unspecified"'
 
 ########################################################################
 section "Same documents as the HTTP API" \
@@ -353,7 +360,8 @@ for pair in "get_procedure|{\"id\":\"$LEAF\"}|/v1/procedures/$LEAF" \
 	"get_feedback|{\"id\":\"$FB\"}|/v1/feedback/$FB" \
 	"list_feedback|{\"kind\":\"problem\"}|/v1/feedback?kind=problem" \
 	"get_repository|{\"identifier\":\"mirror.example/service\"}|/v1/repositories/by-identifier/mirror.example/service" \
-	"list_procedures|{\"repository\":\"github.com/example/service\",\"limit\":2}|/v1/procedures?repository=github.com/example/service&limit=2"; do
+    "list_procedures|{\"repository\":\"github.com/example/service\",\"limit\":2}|/v1/procedures?repository=github.com/example/service&limit=2" \
+    "list_procedures|{\"limit\":1,\"snapshot\":true}|/v1/procedures?limit=1&snapshot=true"; do
 	IFS='|' read -r name args path <<<"$pair"
 	A="$(tool "$name" "$args" | text | shasum -a 256 | cut -c1-16)"
 	B="$(curl -sS "$URL$path" | shasum -a 256 | cut -c1-16)" # both end in exactly one newline

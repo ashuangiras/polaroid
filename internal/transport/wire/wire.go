@@ -236,9 +236,10 @@ func (c BindingConfig) Domain() memory.BindingConfig {
 	return memory.BindingConfig{Inputs: c.Inputs, VersionPolicy: c.VersionPolicy.Domain(), RevisionReason: c.RevisionReason}
 }
 
-// Procedure is a list item. scope, goal and applicability are the latest
-// version's (ADR-0020); goal, applicability and origin are omitted when
-// absent.
+// Procedure is a list item. scope, goal and applicability describe version
+// latest_version only (ADR-0023); resolution may select another version,
+// whose own scope its graph node reports. goal, applicability and origin
+// are omitted when absent.
 type Procedure struct {
 	ID            string         `json:"id"`
 	CanonicalKey  string         `json:"canonical_key"`
@@ -272,11 +273,14 @@ func NewProcedureList(procedures []memory.Procedure, next string) ProcedureList 
 	return body
 }
 
+// Version is one version. scope is this version's own declaration: shared,
+// local or unspecified (ADR-0023); applicability is omitted when unspecified.
 type Version struct {
 	ProcedureID   string         `json:"procedure_id"`
 	Version       int            `json:"version"`
 	Philosophy    string         `json:"philosophy"`
 	Method        string         `json:"method"`
+	Scope         string         `json:"scope"`
 	Goal          string         `json:"goal,omitzero"`
 	Applicability *Applicability `json:"applicability,omitzero"`
 	Contract      jsontext.Value `json:"contract"`
@@ -294,6 +298,7 @@ func NewVersion(v memory.Version) Version {
 		Version:        v.Number,
 		Philosophy:     v.Philosophy,
 		Method:         v.Method,
+		Scope:          v.Applicability.Name(),
 		Goal:           v.Goal,
 		Applicability:  NewApplicability(v.Applicability),
 		Contract:       v.Contract,
@@ -422,6 +427,7 @@ type GraphNode struct {
 	ProcedureID        string              `json:"procedure_id"`
 	CanonicalKey       string              `json:"canonical_key"`
 	Version            int                 `json:"version"`
+	Scope              string              `json:"scope"`
 	Applicability      *Applicability      `json:"applicability,omitzero"`
 	VerifiedBy         string              `json:"verified_by,omitzero"`
 	SelectionEvidence  *SelectionEvidence  `json:"selection_evidence,omitzero"`
@@ -429,12 +435,14 @@ type GraphNode struct {
 	References         []GraphEdge         `json:"references"`
 }
 
-// SelectionEvidence is the execution that selected a node, and where it ran.
+// SelectionEvidence is the execution that selected a node, and where it ran:
+// the identifier it was recorded with, and its repository_id if registered.
 type SelectionEvidence struct {
-	ExecutionID string          `json:"execution_id"`
-	Repository  string          `json:"repository"`
-	Commit      string          `json:"commit"`
-	Environment EnvironmentName `json:"environment"`
+	ExecutionID  string          `json:"execution_id"`
+	Repository   string          `json:"repository"`
+	RepositoryID string          `json:"repository_id,omitzero"`
+	Commit       string          `json:"commit"`
+	Environment  EnvironmentName `json:"environment"`
 }
 
 // TargetVerification is a verification-list entry for the node's selected
@@ -460,12 +468,13 @@ func NewGraphNode(n memory.GraphNode) GraphNode {
 		ProcedureID:   n.ProcedureID,
 		CanonicalKey:  n.CanonicalKey,
 		Version:       n.Version,
+		Scope:         n.Applicability.Name(),
 		Applicability: NewApplicability(n.Applicability),
 		VerifiedBy:    n.VerifiedBy,
 		References:    make([]GraphEdge, len(n.Edges)),
 	}
 	if e := n.Evidence; e != nil {
-		body.SelectionEvidence = &SelectionEvidence{ExecutionID: e.ExecutionID, Repository: e.Repository, Commit: e.Commit, Environment: EnvironmentName{Name: e.Environment}}
+		body.SelectionEvidence = &SelectionEvidence{ExecutionID: e.ExecutionID, Repository: e.Repository, RepositoryID: e.RepositoryID, Commit: e.Commit, Environment: EnvironmentName{Name: e.Environment}}
 	}
 	if s := n.Target; s != nil {
 		body.TargetVerification = &TargetVerification{
@@ -562,6 +571,9 @@ func (r ExecutionRecord) Domain() memory.ExecutionRecord {
 
 // ExecutionSummary is an execution without its inputs and evidence, as
 // listed. binding_id and binding_revision are omitted when no binding was used.
+// repository is the identifier submitted with the execution; repository_id,
+// derived when read, is the repository it is registered to, omitted if it
+// is not registered (ADR-0022).
 type ExecutionSummary struct {
 	ID              string      `json:"id"`
 	ProcedureID     string      `json:"procedure_id"`
@@ -569,6 +581,7 @@ type ExecutionSummary struct {
 	BindingID       string      `json:"binding_id,omitzero"`
 	BindingRevision int         `json:"binding_revision,omitzero"`
 	Repository      string      `json:"repository"`
+	RepositoryID    string      `json:"repository_id,omitzero"`
 	Commit          string      `json:"commit"`
 	Environment     Environment `json:"environment"`
 	Outcome         string      `json:"outcome"`
@@ -583,6 +596,7 @@ func NewExecutionSummary(e memory.Execution) ExecutionSummary {
 		BindingID:       e.BindingID,
 		BindingRevision: e.BindingRevision,
 		Repository:      e.Repository,
+		RepositoryID:    e.Identity.ID,
 		Commit:          e.Commit,
 		Environment:     Environment{Name: e.Environment.Name, Attributes: e.Environment.Attributes},
 		Outcome:         string(e.Outcome),
@@ -610,6 +624,7 @@ type Execution struct {
 	BindingID       string         `json:"binding_id,omitzero"`
 	BindingRevision int            `json:"binding_revision,omitzero"`
 	Repository      string         `json:"repository"`
+	RepositoryID    string         `json:"repository_id,omitzero"`
 	Commit          string         `json:"commit"`
 	Environment     Environment    `json:"environment"`
 	Inputs          jsontext.Value `json:"inputs"`
@@ -634,6 +649,7 @@ func NewExecution(e memory.Execution) Execution {
 		BindingID:       s.BindingID,
 		BindingRevision: s.BindingRevision,
 		Repository:      s.Repository,
+		RepositoryID:    s.RepositoryID,
 		Commit:          s.Commit,
 		Environment:     s.Environment,
 		Inputs:          e.Inputs,
@@ -644,14 +660,17 @@ func NewExecution(e memory.Execution) Execution {
 	}
 }
 
-// Combination is the context an execution verifies. children is omitted
-// when the version has no linked children, at any level.
+// Combination is the context an execution verifies. repository is the
+// canonical identifier of a registered repository, with repository_id, or
+// else the unregistered identifier (ADR-0022). children is omitted when the
+// version has no linked children, at any level.
 type Combination struct {
-	Repository  string          `json:"repository"`
-	Commit      string          `json:"commit"`
-	Environment EnvironmentName `json:"environment"`
-	Inputs      jsontext.Value  `json:"inputs"`
-	Children    []ChildVersion  `json:"children,omitzero"`
+	Repository   string          `json:"repository"`
+	RepositoryID string          `json:"repository_id,omitzero"`
+	Commit       string          `json:"commit"`
+	Environment  EnvironmentName `json:"environment"`
+	Inputs       jsontext.Value  `json:"inputs"`
+	Children     []ChildVersion  `json:"children,omitzero"`
 }
 
 type ChildVersion struct {
@@ -662,11 +681,12 @@ type ChildVersion struct {
 
 func newCombination(c memory.Combination) Combination {
 	return Combination{
-		Repository:  c.Repository,
-		Commit:      c.Commit,
-		Environment: EnvironmentName{Name: c.Environment},
-		Inputs:      c.Inputs,
-		Children:    newChildVersions(c.Children),
+		Repository:   c.Repository,
+		RepositoryID: c.RepositoryID,
+		Commit:       c.Commit,
+		Environment:  EnvironmentName{Name: c.Environment},
+		Inputs:       c.Inputs,
+		Children:     newChildVersions(c.Children),
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -154,8 +155,13 @@ func (s *Store) AppendVersion(ctx context.Context, baseVersion int, next memory.
 }
 
 // ListProcedures implements memory.Store: the latest version decides goal,
-// applicability and the scope and repository filters.
+// applicability and the scope and repository filters. Every row read is at
+// or below the snapshot's boundary, which is unbounded for a live read.
 func (s *Store) ListProcedures(ctx context.Context, f memory.ProcedureFilter) ([]memory.Procedure, error) {
+	marks, err := boundary(f.Snapshot, 4)
+	if err != nil {
+		return nil, err
+	}
 	afterKey := ""
 	if f.After != nil {
 		afterKey = f.After.Key
@@ -169,15 +175,19 @@ func (s *Store) ListProcedures(ctx context.Context, f memory.ProcedureFilter) ([
 		       o.repository_id, o.reason, o.created_at
 		FROM procedures AS p
 		JOIN procedure_versions AS v ON v.procedure_id = p.id
-		     AND v.version = (SELECT MAX(version) FROM procedure_versions WHERE procedure_id = p.id)
-		LEFT JOIN procedure_origins AS o ON o.procedure_id = p.id
-		WHERE (? = '' OR p.canonical_key > ?)
+		     AND v.version = (SELECT MAX(pv.version) FROM procedure_versions AS pv
+		                      WHERE pv.procedure_id = p.id AND pv.rowid <= ?)
+		LEFT JOIN procedure_origins AS o ON o.procedure_id = p.id AND o.rowid <= ?
+		WHERE p.rowid <= ?
+		  AND (? = '' OR p.canonical_key > ?)
 		  AND (? = '' OR COALESCE(v.scope, 'none') = ?)
-		  AND (? = '' OR v.scope IS NOT 'local' OR v.scope_repository_id = ?)
+		  AND (? = '' OR v.scope IS NOT 'local' OR v.scope_repository_id = (
+		       SELECT ri.repository_id FROM repository_identifiers AS ri WHERE ri.identifier = ? AND ri.rowid <= ?))
 		  AND (? = '' OR instr(p.canonical_key, ?) > 0 OR instr(lower(COALESCE(v.goal, '')), ?) > 0)
 		ORDER BY p.canonical_key
 		LIMIT ?`,
-		afterKey, afterKey, scope, scope, f.Repository, f.RepositoryID, f.Query, f.Query, f.Query, fetchLimit(f.Page.Limit))
+		marks[1], marks[2], marks[0], afterKey, afterKey, scope, scope, f.Repository, f.Repository, marks[3],
+		f.Query, f.Query, f.Query, fetchLimit(f.Page.Limit))
 	if err != nil {
 		return nil, fmt.Errorf("query procedures: %w", err)
 	}
@@ -214,6 +224,58 @@ func fetchLimit(limit int) int {
 		return -1
 	}
 	return limit + 1
+}
+
+// Snapshot boundaries (ADR-0023) are row ID high-water marks. The tables
+// they cover are append-only (triggers reject UPDATE and DELETE) and writes
+// are serialized (dsnParams), so row IDs grow in commit order and a mark
+// includes exactly the rows committed before it was read.
+const (
+	procedureSnapshot = `SELECT
+		(SELECT COALESCE(MAX(rowid), 0) FROM procedures),
+		(SELECT COALESCE(MAX(rowid), 0) FROM procedure_versions),
+		(SELECT COALESCE(MAX(rowid), 0) FROM procedure_origins),
+		(SELECT COALESCE(MAX(rowid), 0) FROM repository_identifiers)`
+	bindingSnapshot = `SELECT
+		(SELECT COALESCE(MAX(rowid), 0) FROM bindings),
+		(SELECT COALESCE(MAX(rowid), 0) FROM binding_revisions),
+		(SELECT COALESCE(MAX(rowid), 0) FROM repository_identifiers)`
+)
+
+// ProcedureSnapshot implements memory.Store: procedures, versions, origins
+// and repository identifiers, read in one statement.
+func (s *Store) ProcedureSnapshot(ctx context.Context) (memory.Snapshot, error) {
+	marks := make(memory.Snapshot, 4)
+	if err := s.db.QueryRowContext(ctx, procedureSnapshot).Scan(&marks[0], &marks[1], &marks[2], &marks[3]); err != nil {
+		return nil, fmt.Errorf("read procedure snapshot: %w", err)
+	}
+	return marks, nil
+}
+
+// BindingSnapshot implements memory.Store: bindings, binding revisions and
+// repository identifiers, read in one statement.
+func (s *Store) BindingSnapshot(ctx context.Context) (memory.Snapshot, error) {
+	marks := make(memory.Snapshot, 3)
+	if err := s.db.QueryRowContext(ctx, bindingSnapshot).Scan(&marks[0], &marks[1], &marks[2]); err != nil {
+		return nil, fmt.Errorf("read binding snapshot: %w", err)
+	}
+	return marks, nil
+}
+
+// boundary returns the n marks of snapshot, each unbounded for a live read,
+// or memory.ErrInvalidSnapshot if snapshot has another length.
+func boundary(snapshot memory.Snapshot, n int) (memory.Snapshot, error) {
+	if snapshot == nil {
+		marks := make(memory.Snapshot, n)
+		for i := range marks {
+			marks[i] = math.MaxInt64
+		}
+		return marks, nil
+	}
+	if len(snapshot) != n {
+		return nil, memory.ErrInvalidSnapshot
+	}
+	return snapshot, nil
 }
 
 func applicability(scope, repositoryID sql.NullString) memory.Applicability {

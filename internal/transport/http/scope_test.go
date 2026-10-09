@@ -176,13 +176,13 @@ func TestApplicability(t *testing.T) {
 	// Promotion is a new version; B may now bind the procedure, and only the shared version applies there.
 	s.mustPost(t, "/v1/procedures/"+local+"/versions", reviseWith(1, `"goal":"Release a Go module.","applicability":{"shared":{}},`+ref(shared, `{"contextual":{}}`)))
 	bRelease := idOf(t, s.mustPost(t, "/v1/bindings", bindRequest("github.com/o/b", "release", local, `{"contextual":{}}`)))
-	if got := resolution(bRelease); !strings.Contains(got, `"graph":{"procedure_id":"`+local+`","canonical_key":"a.release","version":2,"applicability":{"shared":{}}`) {
+	if got := resolution(bRelease); !strings.Contains(got, `"graph":{"procedure_id":"`+local+`","canonical_key":"a.release","version":2,"scope":"shared","applicability":{"shared":{}}`) {
 		t.Fatalf("B resolves the promoted procedure to: %s", got)
 	}
 
 	// Narrowing: version 2 of the shared procedure is local to A.
 	s.mustPost(t, "/v1/procedures/"+shared+"/versions", reviseWith(1, localAt(a)))
-	if got := resolution(bBuild); !strings.Contains(got, `"version":1,"applicability":{"shared":{}}`) {
+	if got := resolution(bBuild); !strings.Contains(got, `"version":1,"scope":"shared","applicability":{"shared":{}}`) {
 		t.Fatalf("B's existing binding after narrowing: %s", got)
 	}
 	if got := resolution(bRelease); !strings.Contains(got, `"node":{"procedure_id":"`+shared+`","canonical_key":"go.build","version":1,`) {

@@ -156,25 +156,37 @@ func (s *Service) ReviseBinding(ctx context.Context, bindingID string, in Bindin
 	return r, nil
 }
 
+// BindingFilter selects the bindings of one repository, by identity
+// (ADR-0019), for the store.
+type BindingFilter struct {
+	Repository string
+	After      *Position
+	Limit      int
+	Snapshot   Snapshot
+}
+
 // ListBindings returns the bindings of one repository ordered by local name,
 // and the cursor of the next page if there is one. A registered identifier
 // lists the bindings of every identifier of its repository (ADR-0019).
 func (s *Service) ListBindings(ctx context.Context, repository string, page Page) ([]Binding, string, error) {
 	var p problems
 	checkRepository(&p, "repository", repository)
-	after := page.keyPosition(&p)
+	g := newPager("bindings", false, page, repository)
+	after := g.start(&p)
 	if err := p.err(); err != nil {
 		return nil, "", err
 	}
-	identifiers, _, err := s.sameRepository(ctx, repository)
-	if err != nil {
-		return nil, "", err
+	if page.Snapshot && after == nil {
+		var err error
+		if g.Snapshot, err = s.store.BindingSnapshot(ctx); err != nil {
+			return nil, "", fmt.Errorf("read snapshot boundary: %w", err)
+		}
 	}
-	bindings, err := s.store.ListBindings(ctx, identifiers, after, page.Limit)
+	bindings, err := s.store.ListBindings(ctx, BindingFilter{Repository: repository, After: after, Limit: page.Limit, Snapshot: g.Snapshot})
 	if err != nil {
-		return nil, "", fmt.Errorf("list bindings: %w", err)
+		return nil, "", listError("bindings", err)
 	}
-	bindings, next := trim(page, bindings, func(b Binding) string { return keyCursor(b.Name, b.ID) })
+	bindings, next := trim(page, bindings, func(b Binding) string { return g.next(b.Name, time.Time{}, b.ID) })
 	return bindings, next, nil
 }
 

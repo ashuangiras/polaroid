@@ -19,9 +19,10 @@ type childVersionJSON struct {
 }
 
 type combinationJSON struct {
-	Repository  string `json:"repository"`
-	Commit      string `json:"commit"`
-	Environment struct {
+	Repository   string `json:"repository"`
+	RepositoryID string `json:"repository_id"`
+	Commit       string `json:"commit"`
+	Environment  struct {
 		Name string `json:"name"`
 	} `json:"environment"`
 	Inputs   jsontext.Value     `json:"inputs"`

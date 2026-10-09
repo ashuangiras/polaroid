@@ -93,7 +93,7 @@ func TestTwoRepositoriesBindOneProcedure(t *testing.T) {
 		if err != nil || !reflect.DeepEqual(r, want.Revisions[0]) {
 			t.Fatalf("BindingRevision(%s, 1) = %+v, %v", want.Binding.ID, r, err)
 		}
-		list, err := s.ListBindings(ctx, []string{want.Binding.Repository}, nil, 0)
+		list, err := s.ListBindings(ctx, memory.BindingFilter{Repository: want.Binding.Repository})
 		if err != nil || !reflect.DeepEqual(list, []memory.Binding{want.Binding}) {
 			t.Fatalf("ListBindings(%s) = %+v, %v", want.Binding.Repository, list, err)
 		}
@@ -117,7 +117,7 @@ func TestListBindingsIsPerRepositoryAndOrderedByName(t *testing.T) {
 		}
 	}
 
-	list, err := s.ListBindings(ctx, []string{"github.com/ashuangiras/polaroid"}, nil, 0)
+	list, err := s.ListBindings(ctx, memory.BindingFilter{Repository: "github.com/ashuangiras/polaroid"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestListBindingsIsPerRepositoryAndOrderedByName(t *testing.T) {
 	if want := []string{"a-first@1", "add-dependency@3"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("list = %v, want %v", got, want)
 	}
-	if empty, err := s.ListBindings(ctx, []string{"no/such/repository"}, nil, 0); err != nil || empty == nil || len(empty) != 0 {
+	if empty, err := s.ListBindings(ctx, memory.BindingFilter{Repository: "no/such/repository"}); err != nil || empty == nil || len(empty) != 0 {
 		t.Fatalf("ListBindings(unknown) = %#v, %v; want an empty, non-nil list", empty, err)
 	}
 }

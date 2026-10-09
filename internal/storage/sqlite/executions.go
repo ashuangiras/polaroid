@@ -59,8 +59,22 @@ func (s *Store) CreateExecution(ctx context.Context, e *memory.Execution) error 
 	})
 }
 
+// executionColumns end with the registered repository of the execution's
+// identifier and its canonical identifier, NULL if it is not registered
+// (ADR-0022). Queries using them read FROM executions without an alias.
 const executionColumns = `id, procedure_id, version, binding_id, binding_revision, repository, commit_hash,
-	environment_name, environment_attributes, outcome, created_at`
+	environment_name, environment_attributes, outcome, created_at,
+	(SELECT ri.repository_id FROM repository_identifiers AS ri WHERE ri.identifier = executions.repository),
+	(SELECT rc.identifier FROM repository_identifiers AS ri
+	 JOIN repository_identifiers AS rc ON rc.repository_id = ri.repository_id AND rc.canonical = 1
+	 WHERE ri.identifier = executions.repository)`
+
+// sameIdentity is a condition on the column repository: it names the
+// identifier given twice as arguments, or another identifier of the
+// repository that identifier is registered to (ADR-0022).
+const sameIdentity = `(repository = ? OR repository IN (
+	SELECT ro.identifier FROM repository_identifiers AS ro
+	WHERE ro.repository_id = (SELECT repository_id FROM repository_identifiers WHERE identifier = ?)))`
 
 // Execution implements memory.Store.
 func (s *Store) Execution(ctx context.Context, id string) (memory.Execution, error) {
@@ -188,10 +202,10 @@ func (r txRuns) Run(ctx context.Context, id string) (memory.Execution, error) {
 
 func (r txRuns) RunIDs(ctx context.Context, f memory.VerificationFilter) ([]string, error) {
 	return queryStrings(ctx, r.tx, `SELECT id FROM executions
-		WHERE procedure_id = ? AND version = ? AND (? = '' OR repository = ?)
+		WHERE procedure_id = ? AND version = ? AND (? = '' OR `+sameIdentity+`)
 		  AND (? = '' OR commit_hash = ?) AND (? = '' OR environment_name = ?)
 		ORDER BY created_at, id`,
-		f.ProcedureID, f.Version, f.Repository, f.Repository, f.Commit, f.Commit, f.Environment, f.Environment)
+		f.ProcedureID, f.Version, f.Repository, f.Repository, f.Repository, f.Commit, f.Commit, f.Environment, f.Environment)
 }
 
 func (r txRuns) ReferenceNames(ctx context.Context, procedureID string, version int) ([]string, error) {
@@ -201,8 +215,8 @@ func (r txRuns) ReferenceNames(ctx context.Context, procedureID string, version 
 
 func (r txRuns) LatestRuns(ctx context.Context, procedureID string, c memory.ResolutionContext) ([]memory.VersionRun, error) {
 	rows, err := r.tx.QueryContext(ctx, `SELECT version, id FROM executions
-		WHERE procedure_id = ? AND repository = ? AND environment_name = ?
-		ORDER BY version DESC, created_at DESC, id DESC`, procedureID, c.Repository, c.Environment)
+		WHERE procedure_id = ? AND `+sameIdentity+` AND environment_name = ?
+		ORDER BY version DESC, created_at DESC, id DESC`, procedureID, c.Repository, c.Repository, c.Environment)
 	if err != nil {
 		return nil, fmt.Errorf("query latest runs: %w", err)
 	}
@@ -222,6 +236,18 @@ func (r txRuns) LatestRuns(ctx context.Context, procedureID string, c memory.Res
 		return nil, fmt.Errorf("read latest runs: %w", err)
 	}
 	return runs, nil
+}
+
+// Identity implements memory.ResolutionReader.
+func (r txRuns) Identity(ctx context.Context, identifier string) (memory.RepositoryIdentity, error) {
+	var id memory.RepositoryIdentity
+	err := r.tx.QueryRowContext(ctx, `SELECT rc.repository_id, rc.identifier FROM repository_identifiers AS ri
+		JOIN repository_identifiers AS rc ON rc.repository_id = ri.repository_id AND rc.canonical = 1
+		WHERE ri.identifier = ?`, identifier).Scan(&id.ID, &id.Identifier)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return memory.RepositoryIdentity{}, fmt.Errorf("read repository identity: %w", err)
+	}
+	return id, nil
 }
 
 // queryStrings returns the single text column of every row.
@@ -248,12 +274,12 @@ func queryStrings(ctx context.Context, q querier, query string, args ...any) ([]
 // scanExecution reads executionColumns, followed by any extra destinations.
 func scanExecution(row interface{ Scan(...any) error }, extra ...any) (memory.Execution, error) {
 	var e memory.Execution
-	var bindingID sql.NullString
+	var bindingID, repositoryID, canonical sql.NullString
 	var bindingRevision sql.NullInt64
 	var attributes []byte
 	var outcome, created string
 	dest := append([]any{&e.ID, &e.ProcedureID, &e.Version, &bindingID, &bindingRevision, &e.Repository, &e.Commit,
-		&e.Environment.Name, &attributes, &outcome, &created}, extra...)
+		&e.Environment.Name, &attributes, &outcome, &created, &repositoryID, &canonical}, extra...)
 	if err := row.Scan(dest...); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return memory.Execution{}, err
@@ -261,6 +287,7 @@ func scanExecution(row interface{ Scan(...any) error }, extra ...any) (memory.Ex
 		return memory.Execution{}, fmt.Errorf("scan execution: %w", err)
 	}
 	e.BindingID, e.BindingRevision = bindingID.String, int(bindingRevision.Int64)
+	e.Identity = memory.RepositoryIdentity{ID: repositoryID.String, Identifier: canonical.String}
 	e.Environment.Attributes = jsontext.Value(attributes)
 	e.Outcome = memory.Outcome(outcome)
 	var err error

@@ -35,12 +35,12 @@ func TestCompositionGraphEndpoint(t *testing.T) {
 	resp := s.call(t, http.MethodGet, "/v1/procedures/"+root+"/versions/1/graph", "")
 	expect(t, resp, http.StatusOK, "")
 	leafNode := func(n int) string {
-		return fmt.Sprintf(`{"procedure_id":%q,"canonical_key":"go.dependency.add","version":%d,"references":[]}`, leaf, n)
+		return fmt.Sprintf(`{"procedure_id":%q,"canonical_key":"go.dependency.add","version":%d,"scope":"unspecified","references":[]}`, leaf, n)
 	}
-	want := fmt.Sprintf(`{"procedure_id":%q,"canonical_key":"compose.root","version":1,"references":[`+
+	want := fmt.Sprintf(`{"procedure_id":%q,"canonical_key":"compose.root","version":1,"scope":"unspecified","references":[`+
 		`{"name":"old-leaf","version_policy":{"pin":1},"selected_by":"pin","inputs":{},"node":%s},`+
 		`{"name":"mid","version_policy":{"contextual":{}},"selected_by":"latest","inputs":{"module":{"input":"driver"}},"node":`+
-		`{"procedure_id":%q,"canonical_key":"compose.mid","version":1,"references":[`+
+		`{"procedure_id":%q,"canonical_key":"compose.mid","version":1,"scope":"unspecified","references":[`+
 		`{"name":"leaf","version_policy":{"contextual":{}},"selected_by":"latest","inputs":{},"node":%s}]}}]}`,
 		root, leafNode(1), mid, leafNode(2))
 	if got := strings.TrimSpace(string(resp.body)); got != want {

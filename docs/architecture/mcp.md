@@ -9,7 +9,7 @@
 - **Responses:** JSON (`application/json`), never SSE. There is no `Mcp-Session-Id`, and `GET` and `DELETE` are not used.
 - **Limits and security:** bodies are limited to 1 MiB. `/mcp` sits behind the same loopback `Host` check and cross-origin protection as the API, with no authentication ([ADR-0006](decisions/0006-local-unauthenticated-api.md)).
 - **Caching:** every `server/discover`, list and `resources/read` result carries `ttlMs: 0`, the protocol's cache hint (SEP-2549) for "immediately stale". The tools change when `polaroidd` is upgraded and records change with every write, so a client must not answer from a cached result. `serverInfo.version` is informational and stays `v1`; it does not change with the tool catalogue.
-- **Server capabilities:** `tools` and `resources`, plus short instructions that describe the agent loop. They tell agents to find their repository's bindings and the procedures that apply there (`list_procedures` with `repository`, scope shared, local or unspecified), that `selection_evidence` explains why a version was selected and does not verify their checkout, that `commit` and `inputs` give `target_verification` for the exact run, and that an unverified target still has to be run and recorded ([ADR-0018](decisions/0018-selection-evidence-and-target-verification.md)). New procedures declare applicability and origin. The last step asks agents to report problems with Polaroid, and suggestions for it, with `report_feedback`, naming the subject ([ADR-0015](decisions/0015-feedback-reports.md), [ADR-0021](decisions/0021-targeted-feedback-and-bounded-lists.md)).
+- **Server capabilities:** `tools` and `resources`, plus short instructions that describe the agent loop. They tell agents to find their repository's bindings and the procedures that apply there (`list_procedures` with `repository`; a listed scope is the latest version's, and unspecified declares nothing), that evidence under any identifier of a registered repository counts for all of them ([ADR-0022](decisions/0022-repository-identity-in-evidence.md)), that every graph node names its version's own scope, to be read with that version's contract before reuse, that `selection_evidence` explains why a version was selected and does not verify their checkout, that `commit` and `inputs` give `target_verification` for the exact run, and that an unverified target still has to be run and recorded ([ADR-0018](decisions/0018-selection-evidence-and-target-verification.md)). Lists continue with the same arguments, and the procedure and binding lists can page a snapshot ([ADR-0023](decisions/0023-pagination-guarantees-and-scope-labels.md)). New procedures declare applicability and origin. The last step asks agents to report problems with Polaroid, and suggestions for it, with `report_feedback`, naming the subject ([ADR-0015](decisions/0015-feedback-reports.md), [ADR-0021](decisions/0021-targeted-feedback-and-bounded-lists.md)).
 
 ## Tools
 
@@ -20,7 +20,7 @@ Arguments are flat JSON objects, named after the record fields in [records.md](r
 
 | Tool | Read-only | Arguments | Result |
 | --- | --- | --- | --- |
-| `list_procedures` | yes | `repository`, `scope`, `q`, `limit` and `after`, all optional | `{"procedures":[…]}`, with `next` when more remain |
+| `list_procedures` | yes | `repository`, `scope`, `q`, `limit`, `after` and `snapshot`, all optional | `{"procedures":[…]}`, with `next` when more remain |
 | `get_procedure` | yes | `id` or `canonical_key` (exactly one) | procedure history |
 | `get_version` | yes | `procedure_id`, `version` | version |
 | `get_graph` | yes | `procedure_id`, `version`; `repository` and `environment` together, optional; `commit` and `inputs` together, optional, with a context | graph node, [resolved from evidence](records.md#contextual-resolution-implemented) when given a context, with [target verification](records.md#selection-evidence-and-target-verification-implemented) when given a target |
@@ -31,7 +31,7 @@ Arguments are flat JSON objects, named after the record fields in [records.md](r
 | `add_repository_alias` | no | `repository_id`, `identifier`, `reason` | repository |
 | `get_repository` | yes | `id` or `identifier` (exactly one; canonical or alias) | repository |
 | `list_repositories` | yes | `limit` and `after`, optional | `{"repositories":[…]}`, with `next` when more remain |
-| `list_bindings` | yes | `repository`; `limit` and `after` optional | `{"bindings":[…]}`, with `next` when more remain |
+| `list_bindings` | yes | `repository`; `limit`, `after` and `snapshot` optional | `{"bindings":[…]}`, with `next` when more remain |
 | `get_binding` | yes | `id` | binding history |
 | `get_binding_revision` | yes | `binding_id`, `revision` | binding revision |
 | `resolve_binding` | yes | `binding_id`, `environment`; `commit` and `inputs` together, optional | binding resolution, with target verification when given a target |

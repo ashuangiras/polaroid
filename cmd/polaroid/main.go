@@ -44,7 +44,7 @@ var queryCommands = map[string]bool{"list": true, "bindings": true, "executions"
 var commands = []command{
 	{"health", "", "check that the daemon and its storage are available", 0, 0,
 		func(c *client, _ []string) error { return c.do(http.MethodGet, "/healthz", nil) }},
-	{"list", "[NAME=VALUE...]", "list procedures; NAME is repository, scope, q, limit or after", 0, 0,
+	{"list", "[NAME=VALUE...]", "list procedures; NAME is repository, scope, q, limit, after or snapshot", 0, 0,
 		func(c *client, _ []string) error { return c.do(http.MethodGet, c.path("/v1/procedures", nil), nil) }},
 	{"create", "[FILE]", "create a procedure from request JSON in FILE or stdin", 0, 1,
 		func(c *client, args []string) error { return c.send(http.MethodPost, "/v1/procedures", args) }},
@@ -81,7 +81,7 @@ var commands = []command{
 		func(c *client, args []string) error {
 			return c.send(http.MethodPost, procedurePath(args[0])+"/versions", args[1:])
 		}},
-	{"bindings", "REPOSITORY [NAME=VALUE...]", "list the bindings of a repository; NAME is limit or after", 1, 1,
+	{"bindings", "REPOSITORY [NAME=VALUE...]", "list the bindings of a repository; NAME is limit, after or snapshot", 1, 1,
 		func(c *client, args []string) error {
 			return c.do(http.MethodGet, c.path("/v1/bindings", url.Values{"repository": {args[0]}}), nil)
 		}},

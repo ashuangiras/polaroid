@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json/jsontext"
-	json "encoding/json/v2"
 	"errors"
 	"fmt"
 
@@ -81,25 +80,31 @@ func (s *Store) AppendBindingRevision(ctx context.Context, baseRevision int, nex
 	})
 }
 
-// ListBindings implements memory.Store.
-func (s *Store) ListBindings(ctx context.Context, identifiers []string, after *memory.Position, limit int) ([]memory.Binding, error) {
-	name, id := "", ""
-	if after != nil {
-		name, id = after.Key, after.ID
-	}
-	list, err := json.Marshal(identifiers)
+// ListBindings implements memory.Store. The repository matches by identity
+// as registered at the boundary, which is unbounded for a live read.
+func (s *Store) ListBindings(ctx context.Context, f memory.BindingFilter) ([]memory.Binding, error) {
+	marks, err := boundary(f.Snapshot, 3)
 	if err != nil {
-		return nil, fmt.Errorf("encode identifiers: %w", err)
+		return nil, err
+	}
+	name, id := "", ""
+	if f.After != nil {
+		name, id = f.After.Key, f.After.ID
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT b.id, b.repository, b.name, b.procedure_id, b.created_at, MAX(r.revision)
 		FROM bindings AS b
-		JOIN binding_revisions AS r ON r.binding_id = b.id
-		WHERE b.repository IN (SELECT value FROM json_each(?))
+		JOIN binding_revisions AS r ON r.binding_id = b.id AND r.rowid <= ?
+		WHERE b.rowid <= ?
+		  AND (b.repository = ? OR b.repository IN (
+		       SELECT ro.identifier FROM repository_identifiers AS ro
+		       WHERE ro.rowid <= ? AND ro.repository_id = (
+		             SELECT ri.repository_id FROM repository_identifiers AS ri WHERE ri.identifier = ? AND ri.rowid <= ?)))
 		  AND (? = '' OR b.name > ? OR (b.name = ? AND b.id > ?))
 		GROUP BY b.id
 		ORDER BY b.name, b.id
-		LIMIT ?`, string(list), name, name, name, id, fetchLimit(limit))
+		LIMIT ?`, marks[1], marks[0], f.Repository, marks[2], f.Repository, marks[2],
+		name, name, name, id, fetchLimit(f.Limit))
 	if err != nil {
 		return nil, fmt.Errorf("query bindings: %w", err)
 	}

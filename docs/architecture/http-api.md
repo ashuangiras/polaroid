@@ -13,7 +13,7 @@ This page is the contract of the API that `polaroidd` serves. It covers only wha
 | --- | --- | --- |
 | `GET /healthz` | `200 {"status":"ok"}` | The daemon and its database are reachable. |
 | `POST /v1/procedures` | `201` history, with a `Location` header | Create a procedure and its version 1, with an optional `origin`. |
-| `GET /v1/procedures[?repository=…][&scope=…][&q=…][&limit=…&after=…]` | `200 {"procedures":[...]}` | List procedures, ordered by canonical key, optionally [filtered and paged](#discovery-filters-and-pages). |
+| `GET /v1/procedures[?repository=…][&scope=…][&q=…][&limit=…&after=…][&snapshot=true]` | `200 {"procedures":[...]}` | List procedures, ordered by canonical key, optionally [filtered and paged](#discovery-filters-and-pages). |
 | `GET /v1/procedures/{id}` | `200` history | A procedure and all of its versions, oldest first. |
 | `GET /v1/procedures/by-key/{canonical_key}` | `200` history | The same history, looked up by canonical key. |
 | `POST /v1/procedures/{id}/origin` | `201` history | Record where and why the procedure was first created, once. |
@@ -22,7 +22,7 @@ This page is the contract of the API that `polaroidd` serves. It covers only wha
 | `GET /v1/procedures/{id}/versions/{n}/verifications[?repository=…][&commit=…][&environment=…]` | `200 {"verifications":[...]}` | The version's execution combinations and whether each is verified. Not paginated. |
 | `POST /v1/procedures/{id}/versions` | `201` version, with a `Location` header | Append a version derived from `base_version`. |
 | `POST /v1/bindings` | `201` binding history, with a `Location` header | Create a binding and its revision 1. |
-| `GET /v1/bindings?repository={repository}[&limit=…&after=…]` | `200 {"bindings":[...]}` | List one repository's bindings, ordered by name; a registered identifier covers every identifier of its repository. |
+| `GET /v1/bindings?repository={repository}[&limit=…&after=…][&snapshot=true]` | `200 {"bindings":[...]}` | List one repository's bindings, ordered by name; a registered identifier covers every identifier of its repository. |
 | `GET /v1/bindings/{id}` | `200` binding history | A binding and all of its revisions, oldest first. |
 | `GET /v1/bindings/{id}/revisions/{n}` | `200` binding revision | One revision. |
 | `POST /v1/bindings/{id}/revisions` | `201` binding revision, with a `Location` header | Append a revision derived from `base_revision`. |
@@ -68,7 +68,7 @@ Location: /v1/procedures/01a11de2-5b69-705a-a457-278000c106be
    "contract":{"inputs":{}},"instructions":{"steps":["a"]},"revision_reason":"Initial version.","created_at":"2026-10-08T23:38:56.233022Z"}]}
 ```
 
-A **history** has the fields `id`, `canonical_key`, `created_at`, `latest_version`, `scope`, `goal`, `applicability` and `origin` (the last three only when present) and `versions`. A list item has the same fields without `versions`. `scope` is the latest version's applicability: `shared`, `local` or `unspecified`. A **version** has the fields `procedure_id`, `version`, `philosophy`, `method`, `goal` and `applicability` (only when given), `contract`, `instructions`, `references` (only when the version has references), `revision_reason` and `created_at`. `contract` and `instructions` are returned with insignificant whitespace removed. Otherwise they are exactly as submitted.
+A **history** has the fields `id`, `canonical_key`, `created_at`, `latest_version`, `scope`, `goal`, `applicability` and `origin` (the last three only when present) and `versions`. A list item has the same fields without `versions`. `scope`, `goal` and `applicability` describe version `latest_version` only: `scope` is its applicability, `shared`, `local` or `unspecified` ([ADR-0023](decisions/0023-pagination-guarantees-and-scope-labels.md)). A **version** has the fields `procedure_id`, `version`, `philosophy`, `method`, `scope` (this version's own declaration, always present), `goal` and `applicability` (only when given), `contract`, `instructions`, `references` (only when the version has references), `revision_reason` and `created_at`. `contract` and `instructions` are returned with insignificant whitespace removed. Otherwise they are exactly as submitted.
 
 A create request may add `"origin": {"repository_id": …, "reason": …}`, and a version may add `"goal"` and `"applicability": {"shared": {}}` or `{"repository": "<repository id>"}` ([records.md](records.md#applicability-and-origin-implemented)). `POST /v1/procedures/{id}/origin` with `{"repository_id", "reason"}` records an origin later, once: a second one is `409 origin_exists`, and an unregistered repository is `400` naming `origin.repository_id`.
 
@@ -98,7 +98,7 @@ A graph deeper than 32 references or larger than 2048 nodes is rejected with `42
 
 `GET /v1/procedures/{id}/versions/{n}/graph[?repository=…&environment=…[&commit=…&inputs=…]]` returns a nested tree.
 
-- Each node has `procedure_id`, `canonical_key`, `version` (the exact version selected), `verified_by` and `selection_evidence` (only when the node has evidence in the context), `target_verification` (only with a target) and `references`, which is empty for a leaf.
+- Each node has `procedure_id`, `canonical_key`, `version` (the exact version selected), `scope` (that version's own declaration), `applicability` (when declared), `verified_by` and `selection_evidence` (only when the node has evidence in the context), `target_verification` (only with a target) and `references`, which is empty for a leaf.
 - Each reference has its stored `name` and `version_policy`, then `selected_by` (`pin`, `evidence` or `latest`), its stored `inputs`, and the selected child `node`.
 - Without `repository` and `environment`, pinned references select the pin and contextual references the target's latest version at the moment of the read.
 - With them, the graph is resolved from evidence in that repository and environment ([records.md](records.md#contextual-resolution-implemented)). They must be given together.
@@ -106,7 +106,7 @@ A graph deeper than 32 references or larger than 2048 nodes is rejected with `42
 - Each parameter may appear once, and any other query parameter is `400`.
 - The whole walk reads one consistent snapshot.
 
-`selection_evidence` is `{"execution_id", "repository", "commit", "environment": {"name"}}`: the execution that selected the node, which may have run at any commit and with any inputs. `verified_by` repeats its ID, for compatibility. Neither says anything about another commit.
+`selection_evidence` is `{"execution_id", "repository", "repository_id", "commit", "environment": {"name"}}`: the execution that selected the node, which may have run at any commit and with any inputs, with the identifier it was recorded under and, when registered, its repository (`repository_id`, [ADR-0022](decisions/0022-repository-identity-in-evidence.md)). `verified_by` repeats its ID, for compatibility. Neither says anything about another commit.
 
 `target_verification` has the shape of an entry of the [verifications list](#verification): `combination` is the node's exact selected combination at the target (repository, `commit`, environment, the node's effective `inputs` in canonical form, and the selected child-version tree), `verified` is the status of its latest execution there, and `latest_execution_id` and `execution_ids` list those executions. If nothing has run in that combination, `verified` is `false`, `execution_ids` is `[]` and `latest_execution_id` is omitted.
 
@@ -211,11 +211,20 @@ The response is `201` with the repository and `Location: /v1/repositories/{id}`:
 - `scope`: `shared`, `local` or `unspecified`;
 - `q`: the canonical key or the latest goal contains this text, ignoring ASCII case.
 
-The procedure, repository, binding, execution and feedback lists take **opt-in pagination** ([ADR-0021](decisions/0021-targeted-feedback-and-bounded-lists.md)):
+The procedure, repository, binding, execution and feedback lists take **opt-in pagination** ([ADR-0021](decisions/0021-targeted-feedback-and-bounded-lists.md), [ADR-0023](decisions/0023-pagination-guarantees-and-scope-labels.md)):
 
-- `limit` (1 to 500) returns at most that many items. If more remain, the body adds `"next"`, an opaque cursor; pass it back as `after`, with a `limit`, to continue. The last page has no `next`.
-- Without `limit` the list is complete, as before, and has no `next`. `after` without `limit` is `400`, and so is an `after` that is not a cursor.
-- Order is stable and unique: procedures by canonical key, bindings by name, and repositories, executions and feedback by `created_at` then `id`. Those three assign `created_at` inside the write transaction, strictly after every stored one, so a record committed while you page always sorts after your cursor: continuing never skips or repeats one. In the key-ordered lists, a record created while you page is seen only if it sorts after the cursor; none is repeated.
+- `limit` (1 to 500) returns at most that many items. If more remain, the body adds `"next"`, an opaque cursor; pass it back as `after`, with a `limit` (which may change) and **the same other parameters**, to continue. The last page has no `next`.
+- Without `limit` the list is complete, as before, and has no `next`. `after` without `limit` is `400`, and so is an `after` that is not a cursor, or a cursor issued by another list or with other parameters (`400` on `after`). Cursors issued before ADR-0023 are still accepted, as positions without that check.
+- **Order** is stable, with unique tie-breakers: procedures by `canonical_key` (unique); bindings by `name`, then `id`; repositories, executions and feedback by `created_at`, then `id`.
+- **A page is a fresh read; the default traversal is live, not a snapshot.** A cursor means "after this item, in this order".
+  - Time-ordered lists (repositories, executions, feedback): `created_at` is assigned inside the write transaction, strictly after every stored one, so a record committed while you page sorts after your cursor and a later page returns it. Continuing never skips or repeats one.
+  - Key-ordered lists (procedures, bindings): a record created while you page is returned only if its key sorts after the cursor. None is repeated.
+  - Filters are evaluated on each page against the state then: a procedure's latest version (for `scope`, `q` and `repository`) and the repository registry (for every `repository` filter). A record whose membership changes between pages may be missed, or returned late. Item contents, such as `latest_version`, are as of the page that returned them.
+  - To see what a traversal could not return, start again without `after`.
+- **Snapshot traversal** (`snapshot=true`, with `limit`, on `GET /v1/procedures` and `GET /v1/bindings`): the first page fixes a boundary, carried by its cursors, and every page reads only records committed before it.
+  - **Membership and contents are fixed as of the first page.** For procedures: which exist, each one's latest version (so `latest_version`, `scope`, `goal`, `applicability`), its origin, and repository identity for `repository`. For bindings: which exist, `latest_revision`, and the identity for `repository`.
+  - **Every record within the boundary is returned exactly once**, wherever its key sorts. Records committed later are excluded: start a new snapshot to see them.
+  - **Nothing else is a snapshot:** reading a record by ID, or any other list, returns current state. `snapshot` must be given on every page; it is `400` without `limit`, with `true` or `false` as its only values, and an unknown parameter on the other lists.
 - A filter given but empty is `400`.
 
 ### Append a binding revision
@@ -297,7 +306,8 @@ Verification is derived from stored executions on every read; nothing is stored 
 ```
 
 - `verified` is the verification of `latest_execution_id`, the newest execution in the combination. `execution_ids` lists all of them, oldest first.
-- `repository`, `commit` (full hash) and `environment` (name) optionally filter the executions. Each may appear once, must be valid, and any other parameter is rejected with `400`.
+- A combination's `repository` is the repository identity: the canonical identifier of a registered repository, with its `repository_id`, or else the unregistered identifier. Executions recorded under any identifier of a registered repository share its combinations ([ADR-0022](decisions/0022-repository-identity-in-evidence.md)).
+- `repository` (matched by identity), `commit` (full hash) and `environment` (name) optionally filter the executions. Each may appear once, must be valid, and any other parameter is rejected with `400`.
 - An unknown procedure or version is `404`. A version without executions gets `{"verifications":[]}`.
 
 ### Feedback
@@ -416,3 +426,9 @@ Changes for [#35](https://github.com/ashuangiras/polaroid/issues/35), all additi
 - New endpoints for repositories and origins; new optional request fields `origin`, `goal`, `applicability`, `subject`, `repository` and `execution_id`; new optional query parameters; the new response field `scope` on procedures, and `next` on paged lists only.
 - `GET /v1/executions` without `procedure_id`, which used to be `400`, now lists every execution. `limit` on a list, which used to be an unknown parameter (`400`), now pages.
 - Writes that a declared applicability forbids are `400`. No stored version declares one, so no existing binding, execution or reference is affected.
+
+Changes for [#37](https://github.com/ashuangiras/polaroid/issues/37) ([ADR-0022](decisions/0022-repository-identity-in-evidence.md), [ADR-0023](decisions/0023-pagination-guarantees-and-scope-labels.md)):
+
+- New response fields: `scope` on versions and graph nodes; `repository_id` on executions, execution summaries, selection evidence and combinations of registered identifiers. New query parameter `snapshot` on the procedure and binding lists.
+- Verification, verification lists, target verification and resolution match evidence by repository identity. Unregistered identifiers, and repositories without aliases, behave as before. Executions recorded under an alias now join their repository's combinations (whose `repository` is the canonical identifier), which may change those combinations' status. No execution changes.
+- A cursor reused with another list or other parameters, which used to continue from an arbitrary position, is now `400`. Cursors issued before the change are still accepted.

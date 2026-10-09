@@ -148,11 +148,11 @@ func (a *api) recordOrigin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) listProcedures(w http.ResponseWriter, r *http.Request) {
-	query, ok := strictQuery(w, r, "repository", "scope", "q", "limit", "after")
+	query, ok := strictQuery(w, r, "repository", "scope", "q", "limit", "after", "snapshot")
 	if !ok {
 		return
 	}
-	page, ok := pageQuery(w, query)
+	page, ok := snapshotPageQuery(w, query)
 	if !ok {
 		return
 	}
