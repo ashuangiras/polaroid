@@ -6,6 +6,8 @@
 # writes bin/e2e/MCP-REPORT.md.
 # Usage: make e2e-mcp (needs bash 4+, curl and jq; npm, for the TypeScript SDK and MCP
 # Inspector checks, which are skipped and reported as skipped without it).
+# E2E_INTEROP=0 skips every independent-client check (npm downloads, a local
+# VS Code install), as `make ci` does, so the rest is deterministic.
 # Exits non-zero if any check fails.
 # Variables are read inside the single-quoted commands that show() evaluates.
 # shellcheck disable=SC2034
@@ -372,7 +374,9 @@ check "after restart, list_feedback returns the identical reports" equal "$(tool
 section "Independent MCP clients (interoperability)" \
 	"The tests above use raw JSON-RPC; the automated tests use the Go SDK's own client. This section points two independent clients at the same daemon: the official **TypeScript SDK** (\`@modelcontextprotocol/sdk\`, the library behind most Node-based agents) and the official **MCP Inspector** CLI." \
 	"\`npx @modelcontextprotocol/inspector --cli http://127.0.0.1:7417/mcp --transport http --method tools/list\`."
-if ! command -v npm >/dev/null; then
+if [[ "${E2E_INTEROP:-1}" == 0 ]]; then
+	note "> **Skipped:** \`E2E_INTEROP=0\` (as in \`make ci\`), so the TypeScript SDK, MCP Inspector and VS Code checks did not run. They are not counted as passed."
+elif ! command -v npm >/dev/null; then
 	note "> **Skipped:** npm is not installed, so the TypeScript SDK and MCP Inspector checks did not run. They are not counted as passed."
 else
 if [[ ! -d "$TSDIR/node_modules/@modelcontextprotocol/sdk" ]]; then
@@ -402,7 +406,9 @@ show '(cd "$TSDIR" && npx --no-install mcp-inspector --cli "$URL/mcp" --transpor
 check "MCP Inspector 2.10.1 lists the 20 tools" equal "$LAST" 20
 fi
 VSCODE_GITHUB="/Applications/Visual Studio Code.app/Contents/Resources/app/node_modules.asar.unpacked/@github"
-if [[ -d "$VSCODE_GITHUB" ]]; then
+if [[ "${E2E_INTEROP:-1}" == 0 ]]; then
+	:
+elif [[ -d "$VSCODE_GITHUB" ]]; then
 	show 'grep -rlE "server/discover" "$VSCODE_GITHUB" --include="*.js" 2>/dev/null | head -2; code --version 2>/dev/null | head -1'
 	check "VS Code's bundled Copilot agent runtime implements server/discover (protocol 2026-07-28)" out_has "@github/copilot"
 else

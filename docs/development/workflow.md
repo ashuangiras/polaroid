@@ -24,7 +24,8 @@ Run the gates and keep their real output:
 | Offline checks | `make check` | fmt-check, vet, golangci-lint 2.14.0, build, test, race, deps-check. |
 | Vulnerabilities | `make vuln` | Needs network. |
 | Live demonstration | `make demo` | Needs `jq`. Runs real binaries. |
-| CI | the `ci` workflow | Runs `make ci`, which is all of the above, on `ubuntu-latest`. |
+| End-to-end scripts | `make e2e`, `make e2e-mcp` | Need bash 4+, `curl`, `jq` and `sqlite3`. Reports go to `bin/e2e/`. `e2e-mcp` also runs independent MCP clients from npm and inspects a local VS Code; `E2E_INTEROP=0` skips them. |
+| CI | the `ci` workflow | Runs `make ci`, which is all of the above with `E2E_INTEROP=0`, on `ubuntu-latest`. |
 
 A gate counts only if you ran it. If a tool or the network is unavailable, write "not run", with the reason. A check you have only ever seen pass is unproven. For a new check, show that it fails on a deliberate violation before you rely on it.
 

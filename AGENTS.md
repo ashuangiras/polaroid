@@ -30,7 +30,7 @@ Polaroid is a versioned procedural memory service for agents, written in Go, wit
 
 ## Before you call it done
 
-- Run `make check`. It needs no network once the Go modules are downloaded. Also run `make vuln` and `make demo` when network and `jq` are available. CI runs `make ci`, which is all three.
+- Run `make check`. It needs no network once the Go modules are downloaded. Also run `make vuln`, `make demo`, `make e2e` and `make e2e-mcp` when network, `jq` and `sqlite3` are available. CI runs `make ci`, which is all of them, with the end-to-end interop checks off (`E2E_INTEROP=0`).
 - Report only checks you actually ran, with their real outcome. List the checks you did not run and why.
 - Leave a handoff in [docs/development/status.md](docs/development/status.md) and in the pull request or issue: completed work, evidence, blockers and the next action.
 
@@ -43,7 +43,7 @@ Polaroid is a versioned procedural memory service for agents, written in Go, wit
 | `make build` | Builds `bin/polaroidd` and `bin/polaroid`. |
 | `make vuln` | Runs govulncheck. Needs network. |
 | `make demo` | Runs the live create, revise, conflict, two-repository binding, execution and restart demonstration. Needs `jq`. |
-| `make e2e` / `make e2e-mcp` | Runs the end-to-end scripts: every feature, and `/mcp` with independent clients, against a real daemon. Reports go to `bin/e2e/`. |
+| `make e2e` / `make e2e-mcp` | Runs the end-to-end scripts: every feature, and `/mcp` with independent clients, against a real daemon. Reports go to `bin/e2e/`. `E2E_INTEROP=0` skips the independent-client checks. |
 | `make run ARGS="-db x.db"` | Runs the daemon. |
 
 ## Layout
