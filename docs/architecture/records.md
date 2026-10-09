@@ -2,7 +2,7 @@
 
 This page defines Polaroid's records, how they are identified and how they are versioned. Each section is marked as **implemented** or **planned**. The [HTTP API](http-api.md) serves the implemented records with exactly these field names.
 
-Summary: a **procedure** is a shared identity with immutable **versions**. A version may **reference** other procedures it composes. A **binding** lets one repository use a procedure under a local name, with immutable **binding revisions** that hold the repository's inputs and version policy. An **execution** records one finished run of an exact version, and may link the **child executions** that fulfilled its references.
+Summary: a **procedure** is a shared identity with immutable **versions**. A version may **reference** other procedures it composes. A **binding** lets one repository use a procedure under a local name, with immutable **binding revisions** that hold the repository's inputs and version policy. An **execution** records one finished run of an exact version, and may link the **child executions** that fulfilled its references. **Verification** is derived from executions per combination of context and child versions.
 
 ## Implemented records
 
@@ -139,20 +139,31 @@ A child execution is an ordinary execution that fulfilled one of a parent versio
 
 Each reference is fulfilled by at most one child, and none is required. Each execution is the child of at most one parent. Every violation is `400` naming `children[i].reference` or `children[i].execution_id`. Children may have children of their own, so a tree is recorded bottom-up. Links are written only in the parent's transaction and never change. The database enforces all of these rules too.
 
+### Verification (implemented)
+
+Verification is derived from executions and their links on every read. Nothing is stored for it ([ADR-0012](decisions/0012-derived-verification.md)).
+
+- **Verified execution.** An execution is verified when it succeeded **and** every reference of its version is fulfilled by a linked child that is itself verified, recursively. An execution of a version without references is verified when it succeeded. A parent without a child for some reference is never verified. Each direct reason is reported as `outcome_failed`, `missing_child` or `child_not_verified`.
+- **Combination.** An execution verifies one combination, made of these parts:
+  - its `repository`, `commit` and `environment.name`. `environment.attributes` is not part of it;
+  - its `inputs` in canonical form: object members sorted, insignificant whitespace removed, and strings and non-integer numbers canonicalized as in RFC 8785. Integers are kept exact, so `1.0`, `1e0` and `1` are equal, but distinct large integers never are;
+  - its **child-version tree**: each linked child's reference name and version, with that child's own tree, in the version's reference order.
+
+  Success in one combination says nothing about another. Changing any child's version anywhere in the tree makes a new combination, which needs a fresh parent execution. Earlier executions stay with the combination they were recorded in.
+- **Status of a combination.** It is the verification of its **latest** execution, by `created_at` and then `id`. A failure after a success therefore makes the combination unverified until a newer execution succeeds. Every execution remains listed in `execution_ids`.
+
 ## Planned records (not implemented)
 
 These follow the established design. None of them exist in code, storage or the API yet. Their fields and rules are settled in the [roadmap](../development/roadmap.md) work items, and the open questions below must be answered before implementation.
 
-### Verification semantics (increment 3)
+### Contextual resolution from evidence (increment 3)
 
-- Verification is specific to one combination of repository, commit, environment, effective inputs and child versions. Success in one repository does not establish success in another.
-- When the child-version combination changes, the parent needs fresh verification. Historical evidence stays associated with the combination it was recorded for.
-- A successful parent execution is validated against its children's evidence.
+Contextual references and contextual binding policies will be resolved using verification evidence for the requesting context, always reporting the exact versions selected.
 
 ### Open questions
 
-- When evidence exists, what does contextual resolution select: the latest version verified in a matching context, or something else? (Until then, the composition graph selects the latest version; see [ADR-0009](decisions/0009-reference-graph-rules.md).)
-- How does verification match an environment: by `environment.name` alone, as [ADR-0010](decisions/0010-execution-records.md) intends, or also by some attributes?
+- When evidence exists, what does contextual resolution select: the latest version verified in a matching combination, or something else? (Until then, the composition graph selects the latest version; see [ADR-0009](decisions/0009-reference-graph-rules.md).)
+- What does a requesting context consist of, given that a combination includes the commit and inputs, which a resolving agent may not know in advance?
 
 ## Compatibility
 

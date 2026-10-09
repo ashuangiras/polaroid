@@ -63,6 +63,47 @@ func (a *api) listExecutions(w http.ResponseWriter, r *http.Request) {
 	a.respond(w, r, http.StatusOK, body)
 }
 
+func (a *api) getVerification(w http.ResponseWriter, r *http.Request) {
+	v, err := a.svc.Verification(r.Context(), r.PathValue("id"))
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	a.respond(w, r, http.StatusOK, newVerificationBody(v))
+}
+
+func (a *api) listVerifications(w http.ResponseWriter, r *http.Request) {
+	number, ok := versionNumber(w, r)
+	if !ok {
+		return
+	}
+	query, ok := strictQuery(w, r, "repository", "commit", "environment")
+	if !ok {
+		return
+	}
+	statuses, err := a.svc.Verifications(r.Context(), memory.VerificationFilter{
+		ProcedureID: r.PathValue("id"),
+		Version:     number,
+		Repository:  query.Get("repository"),
+		Commit:      query.Get("commit"),
+		Environment: query.Get("environment"),
+	})
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	body := verificationListBody{Verifications: make([]combinationStatusBody, len(statuses))}
+	for i, s := range statuses {
+		body.Verifications[i] = combinationStatusBody{
+			Combination:       newCombinationBody(s.Combination),
+			Verified:          s.Verified,
+			LatestExecutionID: s.LatestExecutionID,
+			ExecutionIDs:      s.ExecutionIDs,
+		}
+	}
+	a.respond(w, r, http.StatusOK, body)
+}
+
 // strictQuery parses the query string, accepting only the allowed
 // parameters, each at most once, so a filter this server does not support
 // is never silently ignored. On failure it writes the error response.

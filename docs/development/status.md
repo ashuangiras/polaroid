@@ -2,7 +2,7 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
-**As of 2026-10-09:** increments 1 and 2 are implemented, and so are the first two items of increment 3: [#7](https://github.com/ashuangiras/polaroid/issues/7) (execution records) and [#9](https://github.com/ashuangiras/polaroid/issues/9) (subprocedure executions). Increment 2 covered [#1](https://github.com/ashuangiras/polaroid/issues/1) repository bindings, [#2](https://github.com/ashuangiras/polaroid/issues/2) named subprocedure references, and [#3](https://github.com/ashuangiras/polaroid/issues/3) reference-graph validation with bounded traversal. The repository is the private repository [ashuangiras/polaroid](https://github.com/ashuangiras/polaroid), and the local toolchain is Go 1.27.2.
+**As of 2026-10-09:** increments 1 and 2 are implemented, and so are the first three items of increment 3: [#7](https://github.com/ashuangiras/polaroid/issues/7) (execution records), [#9](https://github.com/ashuangiras/polaroid/issues/9) (subprocedure executions) and [#11](https://github.com/ashuangiras/polaroid/issues/11) (context-specific verification). Increment 2 covered [#1](https://github.com/ashuangiras/polaroid/issues/1) repository bindings, [#2](https://github.com/ashuangiras/polaroid/issues/2) named subprocedure references, and [#3](https://github.com/ashuangiras/polaroid/issues/3) reference-graph validation with bounded traversal. The repository is the private repository [ashuangiras/polaroid](https://github.com/ashuangiras/polaroid), and the local toolchain is Go 1.27.2.
 
 ## Implemented
 
@@ -45,6 +45,11 @@ This page is a snapshot of the repository's current state, replaced at every han
   - each reference has at most one child, and each execution has at most one parent. Every violation is `400` naming `children[i].reference` or `children[i].execution_id`;
   - concurrent parents cannot claim the same child: exactly one succeeds. Trees nest, and `children` is omitted when empty, so earlier executions are served unchanged;
   - migration `0005` adds `execution_children`. A trigger and a deferred foreign key allow links only in the parent's transaction, a trigger checks each link against its reference, and links are immutable.
+- **Verification** ([#11](https://github.com/ashuangiras/polaroid/issues/11), [ADR-0012](../architecture/decisions/0012-derived-verification.md)):
+  - derived on read from executions and links. Nothing is stored and there is no migration; each read is one snapshot (one transaction);
+  - an execution is verified when it succeeded and every reference of its version has a linked, verified child, recursively. Otherwise it reports its direct problems: `outcome_failed`, `missing_child`, `child_not_verified`;
+  - a combination is repository, commit, `environment.name`, canonical inputs (sorted members, RFC 8785 floats, exact integers) and the child-version tree. Its status is that of its latest execution;
+  - `GET /v1/executions/{id}/verification` and `GET /v1/procedures/{id}/versions/{n}/verifications[?repository&commit&environment]`. CLI commands: `verification`, `verifications`.
 - **Persistence:** SQLite in WAL mode with `synchronous=FULL`. Migrations are counted by `user_version`, and a database with a newer schema is refused.
 - **HTTP API v1** ([contract](../architecture/http-api.md)):
   - procedures: create, list, get by ID, get by key, get one version, get a version's composition graph, revise, and `/healthz`;
@@ -55,19 +60,20 @@ This page is a snapshot of the repository's current state, replaced at every han
 - **`polaroid` CLI:** a generic client. It reads JSON from a file or stdin, prints response bodies to stdout, and exits with 0, 1 or 2. Binding commands: `bindings`, `bind`, `get-binding`, `get-binding-revision`, `revise-binding`.
 - **Supporting material:** example records, the live demo (`make demo`, now including a two-repository binding), package-boundary tests, a dependency and license gate, CI workflow, Copilot instructions, and the docs and ADRs.
 
-**Not implemented:** verification, evidence-based contextual resolution (and any resolution of contextual binding policies), discovery, aliases, MCP, access control, and the PoC import. See the [roadmap](roadmap.md).
+**Not implemented:** evidence-based contextual resolution (and any resolution of contextual binding policies), discovery, aliases, MCP, access control, and the PoC import. See the [roadmap](roadmap.md).
 
 ## Verification evidence
 
 | Check | Where | Result |
 | --- | --- | --- |
-| `make ci` with `GOLANGCI_LINT=<golangci-lint 2.14.0 release binary>`, branch `issue-9-subprocedure-executions` | darwin/arm64, local Go 1.27.2 | **Pass.** `0 issues`; 6/6 packages `ok` in `go test` and in `go test -race`; `deps-check: PASS (10 modules …)`; `No vulnerabilities found.`; `demo: PASS`. |
+| `make ci` with `GOLANGCI_LINT=<golangci-lint 2.14.0 release binary>`, branch `issue-11-verification` | darwin/arm64, local Go 1.27.2 | **Pass.** `0 issues`; 6/6 packages `ok` in `go test` and in `go test -race`; `deps-check: PASS (10 modules …)`; `No vulnerabilities found.`; `demo: PASS`. |
+| GitHub Actions `ci`, runs 37927228332 (PR for #9) and 37927243040 (`main` at `2d2f897`) | ubuntu-latest | **Pass.** |
 | GitHub Actions `ci`, runs 37925117183 (PR for #7) and 37925136844 (`main` at `0dcff5a`) | ubuntu-latest | **Pass.** |
 | GitHub Actions `ci`, runs 37923015793 (PR for #3) and 37923034159 (`main` at `c85211c`) | ubuntu-latest | **Pass.** |
 | GitHub Actions `ci`, runs 37918349018 (PR for #1) and 37918365752 (`main` at `ce8e024`) | ubuntu-latest | **Pass.** |
 | GitHub Actions `ci`, run [37912026720](https://github.com/ashuangiras/polaroid/actions/runs/37912026720) on commit `7fb84cd` (increment 1) | ubuntu-latest, Go 1.27.2, golangci-lint 2.14.0 | **Pass.** |
 | `make lint` with the `golangci-lint` on `PATH` (2.12.2) | darwin/arm64 | **Fails, as designed.** The output reads `golangci-lint 2.14.0 is required, found 2.12.2`. |
-| Test inventory | darwin/arm64, Go 1.27.2 | The source has 110 `Test` functions, and 110 top-level tests passed (plus 184 subtests). |
+| Test inventory | darwin/arm64, Go 1.27.2 | The source has 118 `Test` functions, and 118 top-level tests passed (plus 192 subtests). |
 
 Negative checks showed that the gates detect what they claim to detect. Each mutation below was made temporarily, the expected tests failed, and the mutation was reverted:
 
@@ -88,6 +94,11 @@ Negative checks showed that the gates detect what they claim to detect. Each mut
 - Discarding the service's child-link problems fails six `TestChildLinksAreChecked` cases. The schema still blocked every bad link.
 - Disabling the store's "already linked" detection fails `TestAChildHasAtMostOneParent`, `TestConcurrentParentsClaimAChildOnce` and one HTTP case. The `UNIQUE` constraint still blocked the second claim.
 - Disabling the link-consistency trigger fails three `TestSchemaRejectsInvalidAndChangedChildLinks` cases. This check first showed that those cases were being rejected for the wrong reason: a committed control case had already linked the shared child and parent. The test now gives each case its own parent and child.
+- Ignoring a reference without a linked child fails `TestVerificationCoverageRule`, `TestVerificationReadsStoredExecutions` and `TestExecutionVerification`.
+- Letting any verified execution decide a combination fails `TestListCombinations` and `TestVerificationCombinations`.
+- Comparing inputs compacted instead of canonical fails `TestCombinationKey` and `TestVerificationCombinations`.
+- Canonicalizing integers as doubles (plain RFC 8785) fails `TestCombinationKey`: two distinct integers above 2^53 merged.
+- Leaving the child-version tree out of the combination key fails `TestListCombinations`, `TestVerificationReadsStoredExecutions` and `TestVerificationCombinations`.
 - Leaking internal error text fails `TestInternalErrorsAreNotExposed`.
 - Making the CLI exit 0 on API errors fails `TestFailedRequestsExitOne`.
 - Adding `net/http` to `internal/memory` fails `TestPackageBoundaries`.
@@ -101,9 +112,9 @@ Negative checks showed that the gates detect what they claim to detect. Each mut
 
 ## Next work item
 
-Refine roadmap item **3.3 Context-specific verification** and file it as an issue. Settle these first:
+Refine roadmap item **3.4 Contextual resolution from evidence** and file it as an issue. Settle these first:
 
-- what a verification is: a stored record, or a value computed from executions;
-- which context keys it matches on, for example repository, commit, `environment.name`, effective inputs and child versions;
-- whether a succeeded parent must have a child for every reference, and how the children's outcomes count;
-- when a changed child-version combination needs fresh verification.
+- what a requesting context is, since a combination includes the commit and inputs, which a resolving agent may not know in advance;
+- what is selected: the latest version verified in a matching context, the latest version overall when nothing matches, or an error;
+- whether resolution covers composition graphs, contextual binding policies, or both;
+- how the selected versions and their supporting evidence are reported.

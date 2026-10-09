@@ -181,11 +181,16 @@ func TestExecutionCommands(t *testing.T) {
 		t.Fatalf("record output is not an execution: %q (%v)", recorded.stdout, err)
 	}
 
-	for args, want := range map[[3]string]string{
-		{"get-execution", e.ID}:                `"evidence":{"exit":0}`,
-		{"executions", p.ID}:                   e.ID,
-		{"executions", p.ID, "scratch"}:        e.ID,
-		{"executions", p.ID, "github.com/o/r"}: `{"executions":[]}`,
+	const commit = "0123456789abcdef0123456789abcdef01234567"
+	for args, want := range map[[6]string]string{
+		{"get-execution", e.ID}:                                   `"evidence":{"exit":0}`,
+		{"executions", p.ID}:                                      e.ID,
+		{"executions", p.ID, "scratch"}:                           e.ID,
+		{"executions", p.ID, "github.com/o/r"}:                    `{"executions":[]}`,
+		{"verification", e.ID}:                                    `"verified":true`,
+		{"verifications", p.ID, "1"}:                              `"latest_execution_id":"` + e.ID + `"`,
+		{"verifications", p.ID, "1", "scratch", commit, "laptop"}: `"execution_ids":["` + e.ID + `"]`,
+		{"verifications", p.ID, "1", "scratch", commit, "other"}:  `{"verifications":[]}`,
 	} {
 		r := cli("", nil, append([]string{"-server", server}, slices.DeleteFunc(args[:], func(s string) bool { return s == "" })...)...)
 		mustSucceed(t, r)
@@ -278,6 +283,10 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		{"get-execution"},
 		{"executions"},
 		{"executions", "a", "b", "c"},
+		{"verification"},
+		{"verification", "a", "b"},
+		{"verifications", "a"},
+		{"verifications", "a", "1", "r", "c", "e", "x"},
 		{"-server", "ftp://example.com", "list"},
 		{"-server", "127.0.0.1:7417", "list"},
 		{"-no-such-flag", "list"},

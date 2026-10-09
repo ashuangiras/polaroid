@@ -82,6 +82,14 @@ type Store interface {
 	// their Inputs and Evidence.
 	ListExecutions(ctx context.Context, f ExecutionFilter) ([]Execution, error)
 
+	// ExecutionVerification returns VerifyExecution of one execution, read
+	// from a single consistent snapshot.
+	ExecutionVerification(ctx context.Context, id string) (Verification, error)
+
+	// Verifications returns ListCombinations for f, read from a single
+	// consistent snapshot.
+	Verifications(ctx context.Context, f VerificationFilter) ([]CombinationStatus, error)
+
 	// Ping reports whether the store can serve requests.
 	Ping(ctx context.Context) error
 }

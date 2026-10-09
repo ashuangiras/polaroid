@@ -45,6 +45,7 @@ func NewHandler(svc *memory.Service, logger *slog.Logger) http.Handler {
 	a.mux.HandleFunc("POST /v1/procedures/{id}/versions", a.reviseProcedure)
 	a.mux.HandleFunc("GET /v1/procedures/{id}/versions/{version}", a.getVersion)
 	a.mux.HandleFunc("GET /v1/procedures/{id}/versions/{version}/graph", a.getGraph)
+	a.mux.HandleFunc("GET /v1/procedures/{id}/versions/{version}/verifications", a.listVerifications)
 	a.mux.HandleFunc("POST /v1/bindings", a.createBinding)
 	a.mux.HandleFunc("GET /v1/bindings", a.listBindings)
 	a.mux.HandleFunc("GET /v1/bindings/{id}", a.getBinding)
@@ -53,6 +54,7 @@ func NewHandler(svc *memory.Service, logger *slog.Logger) http.Handler {
 	a.mux.HandleFunc("POST /v1/executions", a.recordExecution)
 	a.mux.HandleFunc("GET /v1/executions", a.listExecutions)
 	a.mux.HandleFunc("GET /v1/executions/{id}", a.getExecution)
+	a.mux.HandleFunc("GET /v1/executions/{id}/verification", a.getVerification)
 
 	csrf := http.NewCrossOriginProtection()
 	csrf.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

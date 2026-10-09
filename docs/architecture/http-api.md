@@ -18,6 +18,7 @@ This page is the contract of the API that `polaroidd` serves. It covers only wha
 | `GET /v1/procedures/by-key/{canonical_key}` | `200` history | The same history, looked up by canonical key. |
 | `GET /v1/procedures/{id}/versions/{n}` | `200` version | One version. |
 | `GET /v1/procedures/{id}/versions/{n}/graph` | `200` graph node | The version's composition graph, with the exact version each reference selects. |
+| `GET /v1/procedures/{id}/versions/{n}/verifications[?repository=…][&commit=…][&environment=…]` | `200 {"verifications":[...]}` | The version's execution combinations and whether each is verified. Not paginated. |
 | `POST /v1/procedures/{id}/versions` | `201` version, with a `Location` header | Append a version derived from `base_version`. |
 | `POST /v1/bindings` | `201` binding history, with a `Location` header | Create a binding and its revision 1. |
 | `GET /v1/bindings?repository={repository}` | `200 {"bindings":[...]}` | List one repository's bindings, ordered by name. Not paginated. |
@@ -27,6 +28,7 @@ This page is the contract of the API that `polaroidd` serves. It covers only wha
 | `POST /v1/executions` | `201` execution, with a `Location` header | Record one finished run. |
 | `GET /v1/executions?procedure_id={id}[&version={n}][&repository={repository}]` | `200 {"executions":[...]}` | List a procedure's executions, oldest first, without `inputs` and `evidence`. Not paginated. |
 | `GET /v1/executions/{id}` | `200` execution | One execution, in full. |
+| `GET /v1/executions/{id}/verification` | `200` verification | Whether one execution is verified, and its combination. |
 
 `HEAD` is accepted wherever `GET` is.
 
@@ -204,6 +206,35 @@ A parent execution adds `"children": [{"reference": "pinned-child", "execution_i
 - Any other parameter is rejected with `400`.
 - List items have every execution field except `inputs`, `evidence` and `children`.
 
+### Verification
+
+Verification is derived from stored executions on every read; nothing is stored ([ADR-0012](decisions/0012-derived-verification.md), [records.md](records.md#verification-implemented)). Both endpoints are read-only and read one consistent snapshot.
+
+`GET /v1/executions/{id}/verification` judges one execution:
+
+```json
+{"execution_id":"…parent","procedure_id":"…","version":1,"verified":false,
+ "problems":[{"code":"missing_child","reference":"pinned-child"},{"code":"child_not_verified","reference":"latest-child","execution_id":"…child"}],
+ "combination":{"repository":"github.com/ashuangiras/polaroid","commit":"0123456789abcdef0123456789abcdef01234567",
+   "environment":{"name":"ci.ubuntu-latest"},"inputs":{"module":"modernc.org/sqlite"},
+   "children":[{"reference":"latest-child","version":3}]}}
+```
+
+- `verified` is true when the execution succeeded and every reference of its version has a linked child that is itself verified.
+- `problems` is absent when `verified` is true. Otherwise it lists the direct reasons in this order: `outcome_failed`, then one per reference in version order, either `missing_child` (with `reference`) or `child_not_verified` (with `reference` and the child's `execution_id`). A child's own problems are read from the child.
+- `combination` has `repository`, `commit`, `environment.name`, the canonical `inputs`, and `children`. `children` lists each linked child's `reference`, `version` and own `children`, in the version's reference order, and is absent when there are none.
+- An unknown execution is `404`.
+
+`GET /v1/procedures/{id}/versions/{n}/verifications` lists the version's combinations, ordered by their first execution:
+
+```json
+{"verifications":[{"combination":{…},"verified":true,"latest_execution_id":"…c","execution_ids":["…a","…b","…c"]}]}
+```
+
+- `verified` is the verification of `latest_execution_id`, the newest execution in the combination. `execution_ids` lists all of them, oldest first.
+- `repository`, `commit` (full hash) and `environment` (name) optionally filter the executions. Each may appear once, must be valid, and any other parameter is rejected with `400`.
+- An unknown procedure or version is `404`. A version without executions gets `{"verifications":[]}`.
+
 ## Errors
 
 Every error is a JSON object of this form:
@@ -216,7 +247,7 @@ Every error is a JSON object of this form:
 
 | Status | `code` | When |
 | --- | --- | --- |
-| 400 | `invalid_request` | Malformed JSON, unknown or duplicate members, wrong JSON types, or a field that fails validation (listed in `fields`). Also a version or revision path segment that is not a positive integer, a pinned version the procedure does not have, a reference to an unknown procedure, an execution that does not match its version or binding, and a missing, repeated, invalid or unknown query parameter when listing bindings or executions. |
+| 400 | `invalid_request` | Malformed JSON, unknown or duplicate members, wrong JSON types, or a field that fails validation (listed in `fields`). Also a version or revision path segment that is not a positive integer, a pinned version the procedure does not have, a reference to an unknown procedure, an execution that does not match its version or binding, and a missing, repeated, invalid or unknown query parameter when listing bindings, executions or verifications. |
 | 403 | `forbidden` | The `Host` header does not name a loopback address while the daemon listens on loopback, or a browser sent an unsafe cross-origin request. |
 | 404 | `not_found` | Unknown procedure (also as a binding's or execution's `procedure_id`), canonical key, version, binding (also as an execution's `binding_id`), binding revision, execution or endpoint. |
 | 405 | `method_not_allowed` | The endpoint exists, but not for this method. The `Allow` header lists the methods it accepts. |
@@ -261,6 +292,8 @@ Example `invalid_request` response:
 | `polaroid record [FILE]` | `POST /v1/executions` |
 | `polaroid get-execution ID` | `GET /v1/executions/{id}` |
 | `polaroid executions PROCEDURE_ID [REPOSITORY]` | `GET /v1/executions?procedure_id={id}[&repository={repository}]` |
+| `polaroid verification ID` | `GET /v1/executions/{id}/verification` |
+| `polaroid verifications ID N [REPO [COMMIT [ENV]]]` | `GET /v1/procedures/{id}/versions/{n}/verifications[?repository=…][&commit=…][&environment=…]` |
 
 `FILE` defaults to stdin, and so does `-`. The server is `-server URL`, else `$POLAROID_URL`, else `http://127.0.0.1:7417`.
 
