@@ -179,7 +179,7 @@ check "list_procedures shows it at latest_version 2" json_has '. == [{"canonical
 section "Composition and the graph" \
 	"A version can reference other procedures (pinned or contextual). \`get_graph\` returns the tree with the exact version each reference selects and how it was selected (\`selected_by\`)." \
 	"Call \`create_procedure\` with \`references\`, then \`get_graph\`."
-step create_procedure "{\"canonical_key\":\"demo.parent\",\"philosophy\":\"p\",\"method\":\"m\",\"contract\":{},\"instructions\":{},\"references\":[{\"name\":\"pinned\",\"procedure_id\":\"$LEAF\",\"version_policy\":{\"pin\":1},\"inputs\":{}},{\"name\":\"latest\",\"procedure_id\":\"$LEAF\",\"version_policy\":{\"contextual\":{}},\"inputs\":{}}],\"revision_reason\":\"Composes demo.leaf.\"}" '{id, references: [.versions[0].references[].name]}'
+step create_procedure "{\"canonical_key\":\"demo.parent\",\"philosophy\":\"p\",\"method\":\"m\",\"contract\":{},\"instructions\":{},\"references\":[{\"name\":\"pinned\",\"procedure_id\":\"$LEAF\",\"version_policy\":{\"pin\":1},\"inputs\":{\"module\":{\"input\":\"module\"}}},{\"name\":\"latest\",\"procedure_id\":\"$LEAF\",\"version_policy\":{\"contextual\":{}},\"inputs\":{\"module\":{\"input\":\"module\"}}}],\"revision_reason\":\"Composes demo.leaf.\"}" '{id, references: [.versions[0].references[].name]}'
 check "created with two references" json_has '.references == ["pinned","latest"]'
 PARENT="$(ids)"
 step get_graph "{\"procedure_id\":\"$PARENT\",\"version\":1}" '[.references[] | {name, selected_by, version: .node.version}]'
@@ -206,7 +206,7 @@ check "get_binding returns the full history" json_has '.latest_revision == 2 and
 
 ########################################################################
 section "Executions and verification" \
-	"Agents record what ran: the exact version, repository, full commit, a named environment, inputs, outcome and evidence. Children are recorded first, then the parent links them. An execution is verified when it succeeded and every reference has a verified child." \
+	"Agents record what ran: the exact version, repository, full commit, a named environment, inputs, outcome and evidence. Children are recorded first, then the parent links them; a child must have run with the inputs its reference maps from the parent's (ADR-0024). An execution is verified when it succeeded and every reference has a verified child." \
 	"Call \`record_execution\` for each child, then for the parent with \`children\`; then \`get_verification\`."
 run_args() { # run_args PROCEDURE VERSION OUTCOME [CHILDREN]
 	printf '{"procedure_id":"%s","version":%s,"repository":"github.com/example/service","commit":"%s","environment":{"name":"ci.linux","attributes":{"os":"linux"}},"inputs":{"module":"m"},"outcome":"%s","evidence":{"log":"go test ./... ok"}%s}' \
@@ -217,6 +217,10 @@ C1="$(ids)"
 check "child run of leaf@1 recorded" json_has '.version == 1 and .outcome == "succeeded"'
 step record_execution "$(run_args "$LEAF" 2 succeeded)" '{id, version}'
 C2="$(ids)"
+step record_execution "$(run_args "$LEAF" 1 succeeded | sed 's/"module":"m"/"module":"other"/; s/"ci.linux"/"ci.other"/')" '{id, inputs}'
+COTHER="$(ids)"
+step record_execution "$(run_args "$PARENT" 1 succeeded "[{\"reference\":\"pinned\",\"execution_id\":\"$COTHER\"}]")" '.error.fields'
+check "a child that ran with other inputs than its reference maps is refused, naming it (ADR-0024)" json_has '.[0].field == "children[0].execution_id" and (.[0].message | contains("maps the parent'"'"'s inputs to {\"module\":\"m\"}"))'
 step record_execution "$(run_args "$PARENT" 1 succeeded "[{\"reference\":\"pinned\",\"execution_id\":\"$C1\"},{\"reference\":\"latest\",\"execution_id\":\"$C2\"}]")" '{id, children}'
 P1="$(ids)"
 check "parent recorded with both children linked" json_has '(.children | length) == 2'

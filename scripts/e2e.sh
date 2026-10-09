@@ -471,15 +471,19 @@ check "raw SQL cannot change an execution" test "$RC" -ne 0
 
 ########################################################################
 section "Link child executions to a parent execution" \
-	"A child execution is an ordinary execution that fulfilled one of the parent version's references (ADR-0011). Children are recorded first; the parent lists them in \`children: [{reference, execution_id}]\`. A child must have run the reference's target (exactly the pin, if pinned; any version if contextual) in the parent's repository and commit. Each reference has at most one child, each execution at most one parent, none is required, and links never change. List summaries omit \`children\`." \
+	"A child execution is an ordinary execution that fulfilled one of the parent version's references (ADR-0011). Children are recorded first; the parent lists them in \`children: [{reference, execution_id}]\`. A child must have run the reference's target (exactly the pin, if pinned; any version if contextual) in the parent's repository and commit, with exactly the inputs the reference maps from the parent's (ADR-0024). Each reference has at most one child, each execution at most one parent, none is required, and links never change. List summaries omit \`children\`." \
 	"Record the children with \`bin/polaroid record\`, then record the parent with their IDs in \`children\` (example below)."
-run_req() { # run_req PROCEDURE_ID VERSION [COMMIT] [CHILDREN_JSON]
-	jq -cn --arg id "$1" --argjson v "$2" --arg c "${3:-$COMMIT}" --argjson ch "${4:-[]}" \
+PARENT_IN='{"driver":"modernc.org/sqlite"}'               # the parent's inputs
+PINNED_IN='{"module":"modernc.org/sqlite","strict":true}' # what pinned-child maps them to; latest-child maps them to {}
+run_req() { # run_req PROCEDURE_ID VERSION [COMMIT] [CHILDREN_JSON] [INPUTS]; INPUTS default to PARENT_IN for the parent, else {}
+	local in="${5:-}"
+	[[ -n $in ]] || { [[ $1 == "$PARENT" ]] && in=$PARENT_IN || in='{}'; }
+	jq -cn --arg id "$1" --argjson v "$2" --arg c "${3:-$COMMIT}" --argjson ch "${4:-[]}" --argjson in "$in" \
 		'{procedure_id: $id, version: $v, repository: "github.com/example/service-a", commit: $c,
-		  environment: {name: "manual.laptop", attributes: {}}, inputs: {}, outcome: "succeeded", evidence: {log: "ok"}}
+		  environment: {name: "manual.laptop", attributes: {}}, inputs: $in, outcome: "succeeded", evidence: {log: "ok"}}
 		 | if ($ch | length) > 0 then .children = $ch else . end'
 }
-show 'run_req "$ID" 2 | bin/polaroid record | jq -c "{id, procedure: .procedure_id, version}"'
+show 'run_req "$ID" 2 "$COMMIT" "[]" "$PINNED_IN" | bin/polaroid record | jq -c "{id, procedure: .procedure_id, version, inputs}"'
 C2="$(head -n1 <<<"$LAST" | jq -r .id)"
 show 'run_req "$ID" 3 | bin/polaroid record | jq -c "{id, procedure: .procedure_id, version}"'
 C3="$(head -n1 <<<"$LAST" | jq -r .id)"
@@ -503,6 +507,10 @@ show 'run_req "$ID" 2 fedcba9876543210fedcba9876543210fedcba98 | bin/polaroid re
 COTHER="$(head -n1 <<<"$LAST" | jq -r .id)"
 show 'run_req "$PARENT" 1 "$COMMIT" "$(jq -cn --arg a "$COTHER" "[{reference: \"pinned-child\", execution_id: \$a}]")" | bin/polaroid record 2>/dev/null | jq -c .error.fields'
 check "a child at another commit: 400 naming children[0].execution_id" json_has '.[0].field == "children[0].execution_id" and (.[0].message | test("not the parent'"'"'s"))'
+show 'run_req "$ID" 2 | bin/polaroid record | jq -c "{id, inputs}"'
+CWRONG="$(head -n1 <<<"$LAST" | jq -r .id)"
+show 'run_req "$PARENT" 1 "$COMMIT" "$(jq -cn --arg a "$CWRONG" "[{reference: \"pinned-child\", execution_id: \$a}]")" | bin/polaroid record 2>/dev/null | jq -c .error.fields'
+check "a child that ran with other inputs than the reference maps: 400 naming both (ADR-0024)" json_has '.[0].field == "children[0].execution_id" and (.[0].message | test("ran with inputs [{][}], but reference \"pinned-child\" maps the parent.s inputs to [{]\"module\":\"modernc.org/sqlite\",\"strict\":true[}]"))'
 show 'run_req "$PARENT" 1 "$COMMIT" "$(jq -cn --arg a "$C2" "[{reference: \"pinned-child\", execution_id: \$a}]")" | bin/polaroid record 2>/dev/null | jq -c .error.fields'
 check "a child that already has a parent: 400 naming its parent" json_has --arg p "$PEXEC" '.[0].field == "children[0].execution_id" and (.[0].message | contains($p))'
 show 'run_req "$PARENT" 1 "$COMMIT" "$(jq -cn --arg a "$C2" "[{reference: \"pinned-child\", execution_id: \$a}, {reference: \"pinned-child\", execution_id: \$a}]")" | bin/polaroid record 2>/dev/null | jq -c "[.error.fields[].field]"'
@@ -516,28 +524,29 @@ check "raw SQL cannot add a link to a recorded parent" test "$RC" -ne 0
 
 ########################################################################
 section "Verify executions in context" \
-	"Verification is derived from executions on every read; nothing is stored (ADR-0012). An execution is verified when it succeeded and every reference of its version has a linked child that is itself verified, recursively; otherwise it lists its direct problems (\`outcome_failed\`, \`missing_child\`, \`child_not_verified\`). Each execution belongs to a combination: repository, commit, environment name, canonical inputs and the child-version tree. A combination's status is that of its latest execution." \
+	"Verification is derived from executions on every read; nothing is stored (ADR-0012). An execution is verified when it succeeded and every reference of its version has a linked child that is itself verified, recursively; otherwise it lists its direct problems (\`outcome_failed\`, \`missing_child\`, \`child_inputs_mismatch\`, \`child_not_verified\`). Each execution belongs to a combination: repository, commit, environment name, canonical inputs and the child-version tree. A combination's status is that of its latest execution." \
 	"\`bin/polaroid verification EXECUTION_ID\`; \`bin/polaroid verifications PROCEDURE_ID N [REPO [COMMIT [ENV]]]\`."
 show 'bin/polaroid verification "$PEXEC"'
 check "the parent with verified children for both references is verified" json_has '.verified == true and (has("problems") | not)'
 check "its combination has the child-version tree in reference order" json_has '.combination.children == [{"reference":"pinned-child","version":2},{"reference":"latest-child","version":3}] and .combination.environment == {"name":"manual.laptop"}'
 show 'bin/polaroid verifications "$PARENT" 1 | jq -c "[.verifications[] | {verified, executions: (.execution_ids | length)}]"'
 check "one combination, verified, with one execution" json_has '. == [{"verified":true,"executions":1}]'
-child() { run_req "$ID" "$1" | jq -c ".outcome = \"${2:-succeeded}\"" | bin/polaroid record | jq -r .id; }
+child() { run_req "$ID" "$1" "$COMMIT" "[]" "${3:-}" | jq -c ".outcome = \"${2:-succeeded}\"" | bin/polaroid record | jq -r .id; } # child VERSION [OUTCOME] [INPUTS]
+pinkid() { child 2 succeeded "$PINNED_IN"; }
 pair() { jq -cn --arg a "$1" --arg b "$2" '[{reference: "pinned-child", execution_id: $a}, {reference: "latest-child", execution_id: $b}]'; }
 BADKID="$(child 3 failed)"
-show 'run_req "$PARENT" 1 "$COMMIT" "$(pair "$(child 2)" "$BADKID")" | bin/polaroid record | jq -r .id'
+show 'run_req "$PARENT" 1 "$COMMIT" "$(pair "$(pinkid)" "$BADKID")" | bin/polaroid record | jq -r .id'
 PBAD="$LAST"
 show 'bin/polaroid verification "$PBAD" | jq -c "{verified, problems}"'
 check "a parent whose child failed: child_not_verified naming the child" json_has --arg c "$BADKID" '.verified == false and .problems == [{"code":"child_not_verified","reference":"latest-child","execution_id":$c}]'
 show 'bin/polaroid verifications "$PARENT" 1 | jq -c "[.verifications[] | {verified, executions: (.execution_ids | length)}]"'
 check "same combination, now judged by its latest execution: unverified" json_has '. == [{"verified":false,"executions":2}]'
-show 'run_req "$PARENT" 1 "$COMMIT" "$(pair "$(child 2)" "$(child 3)")" | bin/polaroid record | jq -r .id; bin/polaroid verifications "$PARENT" 1 | jq -c "[.verifications[] | {verified, executions: (.execution_ids | length)}]"'
+show 'run_req "$PARENT" 1 "$COMMIT" "$(pair "$(pinkid)" "$(child 3)")" | bin/polaroid record | jq -r .id; bin/polaroid verifications "$PARENT" 1 | jq -c "[.verifications[] | {verified, executions: (.execution_ids | length)}]"'
 check "a newer success verifies it again; all three executions stay in its history" out_has '[{"verified":true,"executions":3}]'
-show 'run_req "$PARENT" 1 "$COMMIT" "$(jq -cn --arg a "$(child 2)" "[{reference: \"pinned-child\", execution_id: \$a}]")" | bin/polaroid record | jq -r .id'
+show 'run_req "$PARENT" 1 "$COMMIT" "$(jq -cn --arg a "$(pinkid)" "[{reference: \"pinned-child\", execution_id: \$a}]")" | bin/polaroid record | jq -r .id'
 show 'bin/polaroid verification "$LAST" | jq -c "{verified, problems}"'
 check "a parent without a child for every reference: missing_child" json_has '.verified == false and .problems == [{"code":"missing_child","reference":"latest-child"}]'
-show 'run_req "$PARENT" 1 "$COMMIT" "$(pair "$(child 2)" "$(child 2)")" | bin/polaroid record >/dev/null; bin/polaroid verifications "$PARENT" 1 | jq -c "[.verifications[] | {tree: [.combination.children[]? | \"\(.reference)@\(.version)\"], verified, executions: (.execution_ids | length)}]"'
+show 'run_req "$PARENT" 1 "$COMMIT" "$(pair "$(pinkid)" "$(child 2)")" | bin/polaroid record >/dev/null; bin/polaroid verifications "$PARENT" 1 | jq -c "[.verifications[] | {tree: [.combination.children[]? | \"\(.reference)@\(.version)\"], verified, executions: (.execution_ids | length)}]"'
 check "a different child version, or a missing child, is a separate combination" json_has '. == [{"tree":["pinned-child@2","latest-child@3"],"verified":true,"executions":3},{"tree":["pinned-child@2"],"verified":false,"executions":1},{"tree":["pinned-child@2","latest-child@2"],"verified":true,"executions":1}]'
 canon() { run_req "$ID" 1 | jq -c --argjson i "$1" --argjson a "$2" '.inputs = $i | .environment = {name: "manual.canon", attributes: $a}' | bin/polaroid record | jq -r .id; }
 show 'canon "{\"b\": 1.0, \"a\": [1e2]}" "{\"os\": \"darwin\"}"; canon "{\"a\": [100], \"b\": 1}" "{\"os\": \"darwin\", \"arch\": \"arm64\"}"; bin/polaroid verifications "$ID" 1 github.com/example/service-a "$COMMIT" manual.canon | jq -c "[.verifications[] | {inputs: .combination.inputs, executions: (.execution_ids | length)}]"'

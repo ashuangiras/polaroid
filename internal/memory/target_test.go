@@ -62,7 +62,7 @@ const (
 func targetWorld() fakeWorld {
 	w := newFakeWorld(fakeGraph{
 		"leaf": {1: nil, 2: nil},
-		"root": {1: {mapped(latest("leaf", "leaf"), `{"module":{"input":"module"},"strict":{"value":true}}`), pin("old", "leaf", 1)}},
+		"root": {1: {mapped(latest("leaf", "leaf"), `{"module":{"input":"module"},"strict":{"value":true}}`), mapped(pin("old", "leaf", 1), `{}`)}},
 	})
 	w.add("leaf2-a", "leaf", 2, OutcomeSucceeded, at(commitA, leafInputs))
 	w.add("old1-a", "leaf", 1, OutcomeSucceeded, at(commitA, oldInputs))

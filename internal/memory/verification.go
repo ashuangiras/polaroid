@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"bytes"
 	"context"
 	"encoding/json/jsontext"
 	"fmt"
@@ -15,8 +16,15 @@ type VerificationReader interface {
 	Run(ctx context.Context, id string) (Execution, error)
 	// RunIDs returns the IDs of the executions f selects, oldest first.
 	RunIDs(ctx context.Context, f VerificationFilter) ([]string, error)
-	// ReferenceNames returns the names of a version's references in order.
-	ReferenceNames(ctx context.Context, procedureID string, version int) ([]string, error)
+	// ReferenceMappings returns a version's references, in order, with their
+	// input mappings.
+	ReferenceMappings(ctx context.Context, procedureID string, version int) ([]ReferenceMapping, error)
+}
+
+// ReferenceMapping is a reference's name and its input mapping (ADR-0008).
+type ReferenceMapping struct {
+	Name   string
+	Inputs jsontext.Value
 }
 
 // VerificationFilter selects the executions of one procedure version,
@@ -34,9 +42,10 @@ type VerificationFilter struct {
 type ProblemCode string
 
 const (
-	ProblemOutcomeFailed    ProblemCode = "outcome_failed"
-	ProblemMissingChild     ProblemCode = "missing_child"
-	ProblemChildNotVerified ProblemCode = "child_not_verified"
+	ProblemOutcomeFailed       ProblemCode = "outcome_failed"
+	ProblemMissingChild        ProblemCode = "missing_child"
+	ProblemChildInputsMismatch ProblemCode = "child_inputs_mismatch"
+	ProblemChildNotVerified    ProblemCode = "child_not_verified"
 )
 
 // VerificationProblem is one direct reason an execution is not verified.
@@ -134,11 +143,11 @@ func ListCombinations(ctx context.Context, r VerificationReader, f VerificationF
 type verifier struct {
 	r    VerificationReader
 	done map[string]Verification
-	refs map[string][]string
+	refs map[string][]ReferenceMapping
 }
 
 func newVerifier(r VerificationReader) *verifier {
-	return &verifier{r: r, done: map[string]Verification{}, refs: map[string][]string{}}
+	return &verifier{r: r, done: map[string]Verification{}, refs: map[string][]ReferenceMapping{}}
 }
 
 // verify needs no depth or cycle guard: each execution has at most one
@@ -152,12 +161,12 @@ func (v *verifier) verify(ctx context.Context, id string) (Verification, error) 
 	if err != nil {
 		return Verification{}, err
 	}
-	names, err := v.referenceNames(ctx, e.ProcedureID, e.Version)
+	refs, err := v.referenceMappings(ctx, e.ProcedureID, e.Version)
 	if err != nil {
 		return Verification{}, err
 	}
-	inputs := e.Inputs.Clone()
-	if err := inputs.Canonicalize(jsontext.CanonicalizeRawInts(false)); err != nil {
+	inputs, err := canonicalInputs(e.Inputs)
+	if err != nil {
 		return Verification{}, fmt.Errorf("canonicalize inputs of execution %q: %w", id, err)
 	}
 	repository, repositoryID := combinationRepository(e.Repository, e.Identity)
@@ -174,7 +183,8 @@ func (v *verifier) verify(ctx context.Context, id string) (Verification, error) 
 	for _, c := range e.Children {
 		children[c.Reference] = c.ExecutionID
 	}
-	for _, name := range names {
+	for _, ref := range refs {
+		name := ref.Name
 		childID, ok := children[name]
 		if !ok {
 			out.Problems = append(out.Problems, VerificationProblem{Code: ProblemMissingChild, Reference: name})
@@ -186,6 +196,13 @@ func (v *verifier) verify(ctx context.Context, id string) (Verification, error) 
 		}
 		out.Combination.Children = append(out.Combination.Children,
 			ChildVersion{Reference: name, Version: child.Version, Children: child.Combination.Children})
+		want, err := mappedInputs(ref.Inputs, e.Inputs)
+		if err != nil {
+			return Verification{}, fmt.Errorf("map inputs of reference %q of execution %q: %w", name, id, err)
+		}
+		if !bytes.Equal(want, child.Combination.Inputs) {
+			out.Problems = append(out.Problems, VerificationProblem{Code: ProblemChildInputsMismatch, Reference: name, ExecutionID: childID})
+		}
 		if !child.Verified {
 			out.Problems = append(out.Problems, VerificationProblem{Code: ProblemChildNotVerified, Reference: name, ExecutionID: childID})
 		}
@@ -195,17 +212,39 @@ func (v *verifier) verify(ctx context.Context, id string) (Verification, error) 
 	return out, nil
 }
 
-func (v *verifier) referenceNames(ctx context.Context, procedureID string, version int) ([]string, error) {
+func (v *verifier) referenceMappings(ctx context.Context, procedureID string, version int) ([]ReferenceMapping, error) {
 	key := procedureID + "@" + strconv.Itoa(version)
-	if names, ok := v.refs[key]; ok {
-		return names, nil
+	if refs, ok := v.refs[key]; ok {
+		return refs, nil
 	}
-	names, err := v.r.ReferenceNames(ctx, procedureID, version)
+	refs, err := v.r.ReferenceMappings(ctx, procedureID, version)
 	if err != nil {
 		return nil, err
 	}
-	v.refs[key] = names
-	return names, nil
+	v.refs[key] = refs
+	return refs, nil
+}
+
+// canonicalInputs returns inputs in the canonical form combinations compare
+// (ADR-0012): members sorted, RFC 8785 strings and non-integer numbers,
+// integers exact.
+func canonicalInputs(inputs jsontext.Value) (jsontext.Value, error) {
+	c := inputs.Clone()
+	if err := c.Canonicalize(jsontext.CanonicalizeRawInts(false)); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// mappedInputs returns, in canonical form, the inputs a child fulfilling a
+// reference with mapping must have run with when its parent's effective
+// inputs are parent (ADR-0024).
+func mappedInputs(mapping, parent jsontext.Value) (jsontext.Value, error) {
+	m, err := mapInputs(mapping, parent)
+	if err != nil {
+		return nil, err
+	}
+	return canonicalInputs(m)
 }
 
 // key identifies c. A registered identity is keyed by its ID, behind a byte

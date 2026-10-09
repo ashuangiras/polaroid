@@ -44,9 +44,18 @@ func (f *fakeRuns) RunIDs(_ context.Context, flt VerificationFilter) ([]string, 
 	return ids, nil
 }
 
-func (f *fakeRuns) ReferenceNames(_ context.Context, procedureID string, version int) ([]string, error) {
-	return f.refs[fmt.Sprintf("%s@%d", procedureID, version)], nil
+// ReferenceMappings maps every reference as passMapping: fake executions all
+// run with {"module":"m"} unless edited.
+func (f *fakeRuns) ReferenceMappings(_ context.Context, procedureID string, version int) ([]ReferenceMapping, error) {
+	var refs []ReferenceMapping
+	for _, name := range f.refs[fmt.Sprintf("%s@%d", procedureID, version)] {
+		refs = append(refs, ReferenceMapping{Name: name, Inputs: jsontext.Value(passMapping)})
+	}
+	return refs, nil
 }
+
+// passMapping gives a child its parent's module.
+const passMapping = `{"module":{"input":"module"}}`
 
 // add records an execution of procedure@version; edit adjusts its defaults.
 func (f *fakeRuns) add(id, procedure string, version int, outcome Outcome, edit func(*Execution), children ...ChildExecution) {

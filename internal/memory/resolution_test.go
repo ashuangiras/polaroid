@@ -18,12 +18,12 @@ func newFakeWorld(g fakeGraph) fakeWorld {
 	return fakeWorld{fakeGraph: g, fakeRuns: newFakeRuns(nil)}
 }
 
-func (w fakeWorld) ReferenceNames(_ context.Context, procedureID string, version int) ([]string, error) {
-	var names []string
+func (w fakeWorld) ReferenceMappings(_ context.Context, procedureID string, version int) ([]ReferenceMapping, error) {
+	var refs []ReferenceMapping
 	for _, r := range w.fakeGraph[procedureID][version] {
-		names = append(names, r.Name)
+		refs = append(refs, ReferenceMapping{Name: r.Name, Inputs: r.Inputs})
 	}
-	return names, nil
+	return refs, nil
 }
 
 func (w fakeWorld) LatestRuns(_ context.Context, procedureID string, c ResolutionContext) ([]VersionRun, error) {

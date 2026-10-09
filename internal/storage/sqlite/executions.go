@@ -208,9 +208,25 @@ func (r txRuns) RunIDs(ctx context.Context, f memory.VerificationFilter) ([]stri
 		f.ProcedureID, f.Version, f.Repository, f.Repository, f.Repository, f.Commit, f.Commit, f.Environment, f.Environment)
 }
 
-func (r txRuns) ReferenceNames(ctx context.Context, procedureID string, version int) ([]string, error) {
-	return queryStrings(ctx, r.tx, `SELECT name FROM procedure_version_references
+func (r txRuns) ReferenceMappings(ctx context.Context, procedureID string, version int) ([]memory.ReferenceMapping, error) {
+	rows, err := r.tx.QueryContext(ctx, `SELECT name, inputs FROM procedure_version_references
 		WHERE procedure_id = ? AND version = ? ORDER BY position`, procedureID, version)
+	if err != nil {
+		return nil, fmt.Errorf("query reference mappings: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var refs []memory.ReferenceMapping
+	for rows.Next() {
+		var name, inputs string
+		if err := rows.Scan(&name, &inputs); err != nil {
+			return nil, fmt.Errorf("scan reference mappings: %w", err)
+		}
+		refs = append(refs, memory.ReferenceMapping{Name: name, Inputs: jsontext.Value(inputs)})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read reference mappings: %w", err)
+	}
+	return refs, nil
 }
 
 func (r txRuns) LatestRuns(ctx context.Context, procedureID string, c memory.ResolutionContext) ([]memory.VersionRun, error) {

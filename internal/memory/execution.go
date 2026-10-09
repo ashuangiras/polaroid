@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"bytes"
 	"context"
 	"encoding/json/jsontext"
 	"errors"
@@ -249,6 +250,17 @@ func (s *Service) checkChildLinks(ctx context.Context, r ExecutionRecord, v Vers
 			}
 			if !v.Applicability.Admits(cv.Applicability) {
 				p.add(field+".execution_id", fmt.Sprintf("ran version %d, which is %s; a %s version cannot compose it", child.Version, cv.Applicability.describe(), v.Applicability.describe()))
+			}
+			want, err := mappedInputs(ref.Inputs, r.Inputs)
+			if err != nil {
+				return fmt.Errorf("map inputs of reference %q: %w", ref.Name, err)
+			}
+			got, err := canonicalInputs(child.Inputs)
+			if err != nil {
+				return fmt.Errorf("canonicalize inputs of child %q: %w", c.ExecutionID, err)
+			}
+			if !bytes.Equal(want, got) {
+				p.add(field+".execution_id", fmt.Sprintf("ran with inputs %s, but reference %q maps the parent's inputs to %s (ADR-0024)", got, ref.Name, want))
 			}
 		}
 	}

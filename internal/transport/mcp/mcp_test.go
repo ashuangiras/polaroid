@@ -297,6 +297,38 @@ func TestAgentWorkflowThroughTools(t *testing.T) {
 	}
 }
 
+// TestChildInputsThroughTools: record_execution refuses a child that ran
+// with inputs other than its reference maps (ADR-0024), and get_verification
+// reports a stored mismatch without verifying the parent.
+func TestChildInputsThroughTools(t *testing.T) {
+	h := newHarness(t)
+	leaf := field(t, h.ok(t, "create_procedure", `{"canonical_key":"demo.leaf","philosophy":"p","method":"m","contract":{},"instructions":{},"revision_reason":"r"}`), "id")
+	parent := field(t, h.ok(t, "create_procedure", `{"canonical_key":"demo.parent","philosophy":"p","method":"m","contract":{},"instructions":{},`+
+		`"references":[{"name":"leaf","procedure_id":"`+leaf+`","version_policy":{"contextual":{}},"inputs":{"mode":{"value":"strict"}}}],"revision_reason":"r"}`), "id")
+	wrong := field(t, h.ok(t, "record_execution", run(leaf, 1, "succeeded", "")), "id")
+
+	e := h.fail(t, "record_execution", run(parent, 1, "succeeded", `[{"reference":"leaf","execution_id":"`+wrong+`"}]`), "invalid_request")
+	if got := e.fields(); !slices.Equal(got, []string{"children[0].execution_id"}) || !strings.Contains(e.Fields[0].Message, `maps the parent's inputs to {"mode":"strict"}`) {
+		t.Fatalf("mismatched child: %+v", e)
+	}
+
+	// A link stored before the rule reads back and never verifies.
+	historical := memory.Execution{ID: "historical", ExecutionRecord: memory.ExecutionRecord{
+		ProcedureID: parent, Version: 1, Repository: "github.com/o/r", Commit: commit,
+		Environment: memory.Environment{Name: "ci.linux", Attributes: jsontext.Value(`{}`)},
+		Inputs:      jsontext.Value(`{}`), Outcome: memory.OutcomeSucceeded, Evidence: jsontext.Value(`{"log":"ok"}`),
+		Children: []memory.ChildExecution{{Reference: "leaf", ExecutionID: wrong}},
+	}}
+	if err := h.store.CreateExecution(context.Background(), &historical); err != nil {
+		t.Fatal(err)
+	}
+	h.ok(t, "get_execution", `{"id":"historical"}`)
+	if v := h.ok(t, "get_verification", `{"execution_id":"historical"}`); !strings.Contains(v,
+		`"verified":false,"problems":[{"code":"child_inputs_mismatch","reference":"leaf","execution_id":"`+wrong+`"}]`) {
+		t.Fatalf("historical verification: %s", v)
+	}
+}
+
 func TestToolArgumentsAreStrict(t *testing.T) {
 	h := newHarness(t)
 	valid := `"philosophy":"p","method":"m","contract":{},"instructions":{},"revision_reason":"r"`

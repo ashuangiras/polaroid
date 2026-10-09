@@ -31,12 +31,16 @@ func mustPut(t *testing.T, s *sqlite.Store, id string, n int, refs ...memory.Ref
 	}
 }
 
+// passModule gives a child its parent's module; every test execution runs
+// with the same module, so linked children match their references.
+const passModule = `{"module":{"input":"module"}}`
+
 func pinTo(name, target string, n int) memory.Reference {
-	return reference(name, target, memory.VersionPolicy{Kind: memory.PolicyPin, Pin: n}, `{}`)
+	return reference(name, target, memory.VersionPolicy{Kind: memory.PolicyPin, Pin: n}, passModule)
 }
 
 func latestOf(name, target string) memory.Reference {
-	return reference(name, target, contextual, `{}`)
+	return reference(name, target, contextual, passModule)
 }
 
 // compositionGraph reads a version's graph without a resolution context.

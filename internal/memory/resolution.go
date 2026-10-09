@@ -184,8 +184,8 @@ func (e *evidence) annotate(ctx context.Context, node *GraphNode, inputs jsontex
 // target: its latest execution there decides, as for any combination
 // (ADR-0012). With no execution it is unverified.
 func (e *evidence) targetStatus(ctx context.Context, node *GraphNode, inputs jsontext.Value) (CombinationStatus, error) {
-	canonical := inputs.Clone()
-	if err := canonical.Canonicalize(jsontext.CanonicalizeRawInts(false)); err != nil {
+	canonical, err := canonicalInputs(inputs)
+	if err != nil {
 		return CombinationStatus{}, fmt.Errorf("canonicalize target inputs: %w", err)
 	}
 	identity, err := e.r.Identity(ctx, e.c.Repository)
