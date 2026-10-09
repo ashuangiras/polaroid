@@ -1,6 +1,6 @@
 # HTTP API (v1)
 
-This page is the contract of the API that `polaroidd` serves. It covers only what is implemented: procedure identity and immutable versions with subprocedure references, repository bindings with immutable revisions, execution records, and feedback reports about Polaroid itself. Field rules are defined in [records.md](records.md). The same operations are available to MCP clients at `/mcp`; see [mcp.md](mcp.md).
+This page is the contract of the API that `polaroidd` serves. It covers only what is implemented: procedure identity and immutable versions with subprocedure references and applicability, the repository registry, repository bindings with immutable revisions, execution records, and feedback reports. Field rules are defined in [records.md](records.md). The same operations are available to MCP clients at `/mcp`; see [mcp.md](mcp.md).
 
 - **Base URL:** `http://127.0.0.1:7417` by default (`polaroidd -addr`).
 - **Bodies:** every request and response body is UTF-8 JSON. Requests with a body must send `Content-Type: application/json` and stay under 1 MiB.
@@ -12,26 +12,32 @@ This page is the contract of the API that `polaroidd` serves. It covers only wha
 | Method and path | Success | Purpose |
 | --- | --- | --- |
 | `GET /healthz` | `200 {"status":"ok"}` | The daemon and its database are reachable. |
-| `POST /v1/procedures` | `201` history, with a `Location` header | Create a procedure and its version 1. |
-| `GET /v1/procedures` | `200 {"procedures":[...]}` | List all procedures, ordered by canonical key. Not paginated. |
+| `POST /v1/procedures` | `201` history, with a `Location` header | Create a procedure and its version 1, with an optional `origin`. |
+| `GET /v1/procedures[?repository=…][&scope=…][&q=…][&limit=…&after=…]` | `200 {"procedures":[...]}` | List procedures, ordered by canonical key, optionally [filtered and paged](#discovery-filters-and-pages). |
 | `GET /v1/procedures/{id}` | `200` history | A procedure and all of its versions, oldest first. |
 | `GET /v1/procedures/by-key/{canonical_key}` | `200` history | The same history, looked up by canonical key. |
+| `POST /v1/procedures/{id}/origin` | `201` history | Record where and why the procedure was first created, once. |
 | `GET /v1/procedures/{id}/versions/{n}` | `200` version | One version. |
 | `GET /v1/procedures/{id}/versions/{n}/graph` | `200` graph node | The version's composition graph, with the exact version each reference selects. |
 | `GET /v1/procedures/{id}/versions/{n}/verifications[?repository=…][&commit=…][&environment=…]` | `200 {"verifications":[...]}` | The version's execution combinations and whether each is verified. Not paginated. |
 | `POST /v1/procedures/{id}/versions` | `201` version, with a `Location` header | Append a version derived from `base_version`. |
 | `POST /v1/bindings` | `201` binding history, with a `Location` header | Create a binding and its revision 1. |
-| `GET /v1/bindings?repository={repository}` | `200 {"bindings":[...]}` | List one repository's bindings, ordered by name. Not paginated. |
+| `GET /v1/bindings?repository={repository}[&limit=…&after=…]` | `200 {"bindings":[...]}` | List one repository's bindings, ordered by name; a registered identifier covers every identifier of its repository. |
 | `GET /v1/bindings/{id}` | `200` binding history | A binding and all of its revisions, oldest first. |
 | `GET /v1/bindings/{id}/revisions/{n}` | `200` binding revision | One revision. |
 | `POST /v1/bindings/{id}/revisions` | `201` binding revision, with a `Location` header | Append a revision derived from `base_revision`. |
 | `POST /v1/executions` | `201` execution, with a `Location` header | Record one finished run. |
-| `GET /v1/executions?procedure_id={id}[&version={n}][&repository={repository}]` | `200 {"executions":[...]}` | List a procedure's executions, oldest first, without `inputs` and `evidence`. Not paginated. |
+| `GET /v1/executions[?procedure_id=…[&version=…]][&repository=…][&commit=…][&limit=…&after=…]` | `200 {"executions":[...]}` | List executions, oldest first, without `inputs` and `evidence`. |
 | `GET /v1/executions/{id}` | `200` execution | One execution, in full. |
 | `GET /v1/executions/{id}/verification` | `200` verification | Whether one execution is verified, and its combination. |
-| `POST /v1/feedback` | `201` feedback report, with a `Location` header | Report a problem with Polaroid, or suggest an improvement. |
-| `GET /v1/feedback[?kind={kind}]` | `200 {"feedback":[...]}` | List feedback reports, oldest first, in full. Not paginated. |
+| `POST /v1/feedback` | `201` feedback report, with a `Location` header | Report a problem or a suggestion, optionally naming its subject. |
+| `GET /v1/feedback[?kind=…][&subject_type=…[&subject_id=…[&subject_version=…]]][&repository=…][&limit=…&after=…]` | `200 {"feedback":[...]}` | List feedback reports, oldest first, in full. |
 | `GET /v1/feedback/{id}` | `200` feedback report | One feedback report. |
+| `POST /v1/repositories` | `201` repository, with a `Location` header | Register a repository under its canonical identifier. |
+| `GET /v1/repositories[?limit=…&after=…]` | `200 {"repositories":[...]}` | List registered repositories, oldest first. |
+| `GET /v1/repositories/{id}` | `200` repository | One repository with its aliases. |
+| `GET /v1/repositories/by-identifier/{identifier}` | `200` repository | The repository an identifier, canonical or alias, is registered to. |
+| `POST /v1/repositories/{id}/aliases` | `201` repository | Register another identifier of the same repository. |
 
 `HEAD` is accepted wherever `GET` is.
 
@@ -62,7 +68,9 @@ Location: /v1/procedures/01a11de2-5b69-705a-a457-278000c106be
    "contract":{"inputs":{}},"instructions":{"steps":["a"]},"revision_reason":"Initial version.","created_at":"2026-10-08T23:38:56.233022Z"}]}
 ```
 
-A **history** has the fields `id`, `canonical_key`, `created_at`, `latest_version` and `versions`. A list item has the same fields without `versions`. A **version** has the fields `procedure_id`, `version`, `philosophy`, `method`, `contract`, `instructions`, `references` (only when the version has references), `revision_reason` and `created_at`. `contract` and `instructions` are returned with insignificant whitespace removed. Otherwise they are exactly as submitted.
+A **history** has the fields `id`, `canonical_key`, `created_at`, `latest_version`, `scope`, `goal`, `applicability` and `origin` (the last three only when present) and `versions`. A list item has the same fields without `versions`. `scope` is the latest version's applicability: `shared`, `local` or `unspecified`. A **version** has the fields `procedure_id`, `version`, `philosophy`, `method`, `goal` and `applicability` (only when given), `contract`, `instructions`, `references` (only when the version has references), `revision_reason` and `created_at`. `contract` and `instructions` are returned with insignificant whitespace removed. Otherwise they are exactly as submitted.
+
+A create request may add `"origin": {"repository_id": …, "reason": …}`, and a version may add `"goal"` and `"applicability": {"shared": {}}` or `{"repository": "<repository id>"}` ([records.md](records.md#applicability-and-origin-implemented)). `POST /v1/procedures/{id}/origin` with `{"repository_id", "reason"}` records an origin later, once: a second one is `409 origin_exists`, and an unregistered repository is `400` naming `origin.repository_id`.
 
 ### References
 
@@ -174,7 +182,41 @@ An unknown `procedure_id` gets `404 not_found`. A pinned version the procedure d
 
 ### List a repository's bindings
 
-`GET /v1/bindings?repository=github.com/ashuangiras/polaroid`. The `repository` parameter is required, must appear once and must be a valid repository identifier. Any other query parameter is rejected with `400`, so a filter this server does not support is never silently ignored. A repository without bindings gets `{"bindings":[]}`.
+`GET /v1/bindings?repository=github.com/ashuangiras/polaroid`. The `repository` parameter is required, must appear once and must be a valid repository identifier. If it is registered, the list covers every identifier of its repository; each binding keeps the `repository` it was created with. `limit` and `after` [page](#discovery-filters-and-pages) the list. Any other query parameter is rejected with `400`, so a filter this server does not support is never silently ignored. A repository without bindings gets `{"bindings":[]}`.
+
+A binding of a version local to another repository is `400` naming `procedure_id` (contextual policy) or `revision.version_policy.pin`; so is a binding revision, naming `revision.version_policy` or its `pin` ([records.md](records.md#applicability-and-origin-implemented)).
+
+### Repositories
+
+```http
+POST /v1/repositories
+Content-Type: application/json
+
+{"identifier": "github.com/ashuangiras/polaroid", "name": "Polaroid"}
+```
+
+The response is `201` with the repository and `Location: /v1/repositories/{id}`:
+
+```json
+{"id":"01a1…","name":"Polaroid","identifier":"github.com/ashuangiras/polaroid","aliases":[],"created_at":"2026-10-09T19:00:00Z"}
+```
+
+`POST /v1/repositories/{id}/aliases` with `{"identifier", "reason"}` adds an alias and returns the repository (`201`). An identifier that is already registered, either way, is `409 repository_identifier_exists`. An alias whose bindings would give the repository two bindings of one name is `409 binding_exists`. `GET /v1/repositories/by-identifier/github.com/ashuangiras/polaroid` finds a repository by its canonical identifier or any alias; an unregistered identifier is `404`. Nothing is registered by any read.
+
+### Discovery, filters and pages
+
+`GET /v1/procedures` accepts optional filters, which combine:
+
+- `repository`: only procedures whose latest version applies there: shared, unspecified, or local to that repository (by identity);
+- `scope`: `shared`, `local` or `unspecified`;
+- `q`: the canonical key or the latest goal contains this text, ignoring ASCII case.
+
+The procedure, repository, binding, execution and feedback lists take **opt-in pagination** ([ADR-0021](decisions/0021-targeted-feedback-and-bounded-lists.md)):
+
+- `limit` (1 to 500) returns at most that many items. If more remain, the body adds `"next"`, an opaque cursor; pass it back as `after`, with a `limit`, to continue. The last page has no `next`.
+- Without `limit` the list is complete, as before, and has no `next`. `after` without `limit` is `400`, and so is an `after` that is not a cursor.
+- Order is stable and unique: procedures by canonical key, bindings by name, and repositories, executions and feedback by `created_at` then `id`. Those three assign `created_at` inside the write transaction, strictly after every stored one, so a record committed while you page always sorts after your cursor: continuing never skips or repeats one. In the key-ordered lists, a record created while you page is seen only if it sorts after the cursor; none is repeated.
+- A filter given but empty is `400`.
 
 ### Append a binding revision
 
@@ -223,9 +265,8 @@ A parent execution adds `"children": [{"reference": "pinned-child", "execution_i
 
 ### List executions
 
-`GET /v1/executions?procedure_id=…` lists one procedure's executions, oldest first, optionally filtered by `version` and `repository`.
+`GET /v1/executions` lists executions, oldest first, optionally filtered by `procedure_id`, `version` (which needs `procedure_id`), `repository` (by identity: every identifier of a registered repository) and `commit`, and paged with `limit` and `after`. Without filters it lists every execution; `procedure_id` used to be required, and still works as before.
 
-- `procedure_id` is required.
 - Each parameter may appear once.
 - Any other parameter is rejected with `400`.
 - List items have every execution field except `inputs`, `evidence` and `children`.
@@ -279,6 +320,15 @@ Content-Type: application/json
 - An unknown `kind`, a blank or multi-line `summary`, blank `details`, an invalid `reporter` and a `context` that is not an object are each `400`, naming the field.
 - `GET /v1/feedback` lists every report, oldest first, with every field. `kind=problem` or `kind=suggestion` filters the list. `kind` may appear once and must be valid. Any other parameter is `400`. Without reports, the body is `{"feedback":[]}`.
 
+A report may also name its `subject`, the `repository` it was made in, and a related `execution_id` ([records.md](records.md#feedback-report-implemented)):
+
+```json
+{"kind": "problem", "summary": "…", "details": "…", "reporter": "copilot.vscode",
+ "subject": {"type": "procedure", "procedure_id": "…", "version": 2}, "repository": "github.com/ashuangiras/polaroid", "execution_id": "…"}
+```
+
+An unknown subject record or execution, a subject member of another type, and a repository or execution that disagrees with the subject are `400` naming the field. The list adds the filters `subject_type`, `subject_id` (needs `subject_type`), `subject_version` (needs a procedure or binding `subject_id`) and `repository` (the report's repository, or a repository subject, by identity), plus `limit` and `after`. `subject_type=service` includes reports without a subject. For example, reports about version 2 of a procedure in one repository: `GET /v1/feedback?subject_type=procedure&subject_id=…&subject_version=2&repository=github.com/ashuangiras/polaroid`.
+
 Reports are never changed or deleted, and Polaroid tracks no triage state ([records.md](records.md#feedback-report-implemented)).
 
 ## Errors
@@ -299,7 +349,9 @@ Every error is a JSON object of this form:
 | 405 | `method_not_allowed` | The endpoint exists, but not for this method. The `Allow` header lists the methods it accepts. |
 | 409 | `canonical_key_exists` | Another procedure already uses the canonical key. |
 | 409 | `version_conflict` | `base_version` is not the latest version. `latest_version` is included. |
-| 409 | `binding_exists` | The repository already has a binding with this `name`. |
+| 409 | `binding_exists` | The repository already has a binding with this `name`, under this or another of its identifiers, or an alias would give it two. |
+| 409 | `repository_identifier_exists` | The identifier is already registered, as a canonical identifier or an alias. |
+| 409 | `origin_exists` | The procedure's origin is already recorded. |
 | 409 | `revision_conflict` | `base_revision` is not the latest revision. `latest_revision` is included. |
 | 409 | `reference_cycle` | The version's references would form a cycle, or a stored graph contains one. `cycle` is included. |
 | 413 | `request_too_large` | The body exceeds 1 MiB. |
@@ -323,14 +375,15 @@ Example `invalid_request` response:
 | CLI | Request |
 | --- | --- |
 | `polaroid health` | `GET /healthz` |
-| `polaroid list` | `GET /v1/procedures` |
+| `polaroid list [NAME=VALUE...]` | `GET /v1/procedures[?…]` |
 | `polaroid create [FILE]` | `POST /v1/procedures` |
 | `polaroid get ID` | `GET /v1/procedures/{id}` |
 | `polaroid get-by-key KEY` | `GET /v1/procedures/by-key/{key}` |
+| `polaroid origin ID [FILE]` | `POST /v1/procedures/{id}/origin` |
 | `polaroid get-version ID N` | `GET /v1/procedures/{id}/versions/{n}` |
 | `polaroid graph ID N [REPO ENV [COMMIT INPUTS]]` | `GET /v1/procedures/{id}/versions/{n}/graph[?repository=…&environment=…[&commit=…&inputs=…]]` |
 | `polaroid revise ID [FILE]` | `POST /v1/procedures/{id}/versions` |
-| `polaroid bindings REPOSITORY` | `GET /v1/bindings?repository={repository}` |
+| `polaroid bindings REPOSITORY [NAME=VALUE...]` | `GET /v1/bindings?repository={repository}[&…]` |
 | `polaroid bind [FILE]` | `POST /v1/bindings` |
 | `polaroid get-binding ID` | `GET /v1/bindings/{id}` |
 | `polaroid get-binding-revision ID N` | `GET /v1/bindings/{id}/revisions/{n}` |
@@ -338,17 +391,28 @@ Example `invalid_request` response:
 | `polaroid resolve BINDING_ID ENV [COMMIT INPUTS]` | `GET /v1/bindings/{id}/resolution?environment={env}[&commit=…&inputs=…]` |
 | `polaroid record [FILE]` | `POST /v1/executions` |
 | `polaroid get-execution ID` | `GET /v1/executions/{id}` |
-| `polaroid executions PROCEDURE_ID [REPOSITORY]` | `GET /v1/executions?procedure_id={id}[&repository={repository}]` |
+| `polaroid executions [PROCEDURE_ID [REPOSITORY]] [NAME=VALUE...]` | `GET /v1/executions[?procedure_id={id}][&repository={repository}][&…]` |
 | `polaroid verification ID` | `GET /v1/executions/{id}/verification` |
 | `polaroid verifications ID N [REPO [COMMIT [ENV]]]` | `GET /v1/procedures/{id}/versions/{n}/verifications[?repository=…][&commit=…][&environment=…]` |
 | `polaroid feedback [FILE]` | `POST /v1/feedback` |
-| `polaroid feedbacks [KIND]` | `GET /v1/feedback[?kind={kind}]` |
+| `polaroid feedbacks [KIND] [NAME=VALUE...]` | `GET /v1/feedback[?kind={kind}][&…]` |
 | `polaroid get-feedback ID` | `GET /v1/feedback/{id}` |
+| `polaroid register [FILE]` | `POST /v1/repositories` |
+| `polaroid alias ID [FILE]` | `POST /v1/repositories/{id}/aliases` |
+| `polaroid repository ID` | `GET /v1/repositories/{id}` |
+| `polaroid repository-by-identifier IDENTIFIER` | `GET /v1/repositories/by-identifier/{identifier}` |
+| `polaroid repositories [NAME=VALUE...]` | `GET /v1/repositories[?…]` |
 
-`FILE` defaults to stdin, and so does `-`. The server is `-server URL`, else `$POLAROID_URL`, else `http://127.0.0.1:7417`.
+`FILE` defaults to stdin, and so does `-`. Trailing `NAME=VALUE` arguments of the list commands become query parameters, for example `polaroid list repository=github.com/ashuangiras/polaroid scope=shared limit=20`. The server is `-server URL`, else `$POLAROID_URL`, else `http://127.0.0.1:7417`.
 
 ## Compatibility
 
 Within `/v1`, changes are additive only: new endpoints, or new optional response fields. Clients must ignore response fields they do not know. Requests stay strict, so a client sending a field the server does not yet support gets `400`, not silent data loss. A breaking change needs a new version prefix and an ADR.
 
-Listing is unbounded today. Pagination, if added, will be opt-in through new query parameters, so existing clients keep receiving complete lists. Until then, the list endpoints for bindings, executions and feedback reject any query parameter they do not document.
+Pagination is opt-in through `limit` and `after`, so a client that sends neither keeps receiving complete lists ([ADR-0021](decisions/0021-targeted-feedback-and-bounded-lists.md)). The list endpoints still reject any query parameter they do not document.
+
+Changes for [#35](https://github.com/ashuangiras/polaroid/issues/35), all additive for existing clients:
+
+- New endpoints for repositories and origins; new optional request fields `origin`, `goal`, `applicability`, `subject`, `repository` and `execution_id`; new optional query parameters; the new response field `scope` on procedures, and `next` on paged lists only.
+- `GET /v1/executions` without `procedure_id`, which used to be `400`, now lists every execution. `limit` on a list, which used to be an unknown parameter (`400`), now pages.
+- Writes that a declared applicability forbids are `400`. No stored version declares one, so no existing binding, execution or reference is affected.

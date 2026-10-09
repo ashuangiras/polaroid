@@ -1,0 +1,10 @@
+{
+  "repository": "example.com/fixtures/service-a",
+  "name": "test",
+  "procedure_id": "go.test.run",
+  "revision": {
+    "inputs": { "packages": ["./..."] },
+    "version_policy": { "contextual": {} },
+    "revision_reason": "Fixture: service A tests every package."
+  }
+}

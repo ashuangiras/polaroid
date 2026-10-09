@@ -52,9 +52,9 @@ func seedExecutions(t *testing.T, s *sqlite.Store) []memory.Execution {
 	e3 := execution("e3", 3, "scratch")
 	e3.Version = 1
 	all := []memory.Execution{e1, e2, e3}
-	for _, e := range all {
-		if err := s.CreateExecution(context.Background(), e); err != nil {
-			t.Fatalf("CreateExecution(%s): %v", e.ID, err)
+	for i := range all {
+		if err := s.CreateExecution(context.Background(), &all[i]); err != nil {
+			t.Fatalf("CreateExecution(%s): %v", all[i].ID, err)
 		}
 	}
 	return all
@@ -76,9 +76,13 @@ func TestExecutionsRoundTripAndList(t *testing.T) {
 		want   []memory.Execution
 	}{
 		{memory.ExecutionFilter{ProcedureID: "p1"}, all},
+		{memory.ExecutionFilter{}, all},
 		{memory.ExecutionFilter{ProcedureID: "p1", Version: 2}, all[:2]},
-		{memory.ExecutionFilter{ProcedureID: "p1", Repository: "scratch"}, all[2:]},
-		{memory.ExecutionFilter{ProcedureID: "p1", Version: 2, Repository: "scratch"}, nil},
+		{memory.ExecutionFilter{ProcedureID: "p1", Repositories: []string{"scratch"}}, all[2:]},
+		{memory.ExecutionFilter{Repositories: []string{"scratch", "github.com/ashuangiras/polaroid"}}, all},
+		{memory.ExecutionFilter{ProcedureID: "p1", Version: 2, Repositories: []string{"scratch"}}, nil},
+		{memory.ExecutionFilter{Commit: commitA, Page: memory.Page{Limit: 1}}, all[:2]},
+		{memory.ExecutionFilter{ProcedureID: "p1", Page: memory.Page{Limit: 5}, After: &memory.Position{At: all[0].CreatedAt, ID: all[0].ID}}, all[1:]},
 		{memory.ExecutionFilter{ProcedureID: "nope"}, nil},
 	}
 	for _, tc := range cases {

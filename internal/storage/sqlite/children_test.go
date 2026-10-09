@@ -24,7 +24,7 @@ func runOf(id, procedure string, version, n int, children ...memory.ChildExecuti
 
 func mustRecord(t *testing.T, s *sqlite.Store, e memory.Execution) {
 	t.Helper()
-	if err := s.CreateExecution(context.Background(), e); err != nil {
+	if err := s.CreateExecution(context.Background(), &e); err != nil {
 		t.Fatalf("CreateExecution(%s): %v", e.ID, err)
 	}
 }
@@ -70,9 +70,10 @@ func TestAChildHasAtMostOneParent(t *testing.T) {
 	seedComposed(t, s)
 	mustRecord(t, s, runOf("p1", "par", 1, 3, memory.ChildExecution{Reference: "pinned", ExecutionID: "ch1"}))
 
-	err := s.CreateExecution(context.Background(), runOf("p2", "par", 1, 4,
+	second := runOf("p2", "par", 1, 4,
 		memory.ChildExecution{Reference: "latest", ExecutionID: "ch2"},
-		memory.ChildExecution{Reference: "pinned", ExecutionID: "ch1"}))
+		memory.ChildExecution{Reference: "pinned", ExecutionID: "ch1"})
+	err := s.CreateExecution(context.Background(), &second)
 	var linked *memory.LinkedChildError
 	if !errors.As(err, &linked) || linked.Index != 1 || linked.ParentID != "p1" {
 		t.Fatalf("second parent: err = %v, want child 1 linked to p1", err)
@@ -95,8 +96,8 @@ func TestConcurrentParentsClaimAChildOnce(t *testing.T) {
 	for i := range parents {
 		wg.Go(func() {
 			<-start
-			errs[i] = s.CreateExecution(context.Background(),
-				runOf(fmt.Sprint("p", i), "par", 1, 3+i, memory.ChildExecution{Reference: "pinned", ExecutionID: "ch1"}))
+			parent := runOf(fmt.Sprint("p", i), "par", 1, 3+i, memory.ChildExecution{Reference: "pinned", ExecutionID: "ch1"})
+			errs[i] = s.CreateExecution(context.Background(), &parent)
 		})
 	}
 	close(start)

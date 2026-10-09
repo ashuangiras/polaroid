@@ -43,6 +43,7 @@ func NewHandler(svc *memory.Service, logger *slog.Logger) http.Handler {
 	a.mux.HandleFunc("GET /v1/procedures/by-key/{key}", a.getProcedureByKey)
 	a.mux.HandleFunc("GET /v1/procedures/{id}", a.getProcedure)
 	a.mux.HandleFunc("POST /v1/procedures/{id}/versions", a.reviseProcedure)
+	a.mux.HandleFunc("POST /v1/procedures/{id}/origin", a.recordOrigin)
 	a.mux.HandleFunc("GET /v1/procedures/{id}/versions/{version}", a.getVersion)
 	a.mux.HandleFunc("GET /v1/procedures/{id}/versions/{version}/graph", a.getGraph)
 	a.mux.HandleFunc("GET /v1/procedures/{id}/versions/{version}/verifications", a.listVerifications)
@@ -59,6 +60,11 @@ func NewHandler(svc *memory.Service, logger *slog.Logger) http.Handler {
 	a.mux.HandleFunc("POST /v1/feedback", a.reportFeedback)
 	a.mux.HandleFunc("GET /v1/feedback", a.listFeedback)
 	a.mux.HandleFunc("GET /v1/feedback/{id}", a.getFeedback)
+	a.mux.HandleFunc("POST /v1/repositories", a.registerRepository)
+	a.mux.HandleFunc("GET /v1/repositories", a.listRepositories)
+	a.mux.HandleFunc("GET /v1/repositories/by-identifier/{identifier...}", a.getRepositoryByIdentifier)
+	a.mux.HandleFunc("GET /v1/repositories/{id}", a.getRepository)
+	a.mux.HandleFunc("POST /v1/repositories/{id}/aliases", a.addRepositoryAlias)
 
 	csrf := http.NewCrossOriginProtection()
 	csrf.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -110,8 +116,14 @@ func (a *api) createProcedure(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
+	var origin *memory.Origin
+	if body.Origin != nil {
+		o := body.Origin.Domain()
+		origin = &o
+	}
 	h, err := a.svc.CreateProcedure(r.Context(), memory.NewProcedure{
 		CanonicalKey: body.CanonicalKey,
+		Origin:       origin,
 		Definition:   body.Version.Domain(),
 	})
 	if err != nil {
@@ -122,13 +134,39 @@ func (a *api) createProcedure(w http.ResponseWriter, r *http.Request) {
 	a.respond(w, r, http.StatusCreated, wire.NewHistory(h))
 }
 
-func (a *api) listProcedures(w http.ResponseWriter, r *http.Request) {
-	procedures, err := a.svc.ListProcedures(r.Context())
+func (a *api) recordOrigin(w http.ResponseWriter, r *http.Request) {
+	var body wire.NewOrigin
+	if !decode(w, r, &body) {
+		return
+	}
+	h, err := a.svc.RecordOrigin(r.Context(), r.PathValue("id"), body.Domain())
 	if err != nil {
 		a.fail(w, r, err)
 		return
 	}
-	a.respond(w, r, http.StatusOK, wire.NewProcedureList(procedures))
+	a.respond(w, r, http.StatusCreated, wire.NewHistory(h))
+}
+
+func (a *api) listProcedures(w http.ResponseWriter, r *http.Request) {
+	query, ok := strictQuery(w, r, "repository", "scope", "q", "limit", "after")
+	if !ok {
+		return
+	}
+	page, ok := pageQuery(w, query)
+	if !ok {
+		return
+	}
+	if !nonEmpty(w, query, "repository", "scope", "q") {
+		return
+	}
+	procedures, next, err := a.svc.ListProcedures(r.Context(), memory.ProcedureFilter{
+		Repository: query.Get("repository"), Scope: query.Get("scope"), Query: query.Get("q"), Page: page,
+	})
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	a.respond(w, r, http.StatusOK, wire.NewProcedureList(procedures, next))
 }
 
 func (a *api) getProcedure(w http.ResponseWriter, r *http.Request) {

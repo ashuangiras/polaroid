@@ -23,7 +23,7 @@ Run the gates and keep their real output:
 | --- | --- | --- |
 | Offline checks | `make check` | fmt-check, vet, golangci-lint 2.14.0, build, test, race, deps-check. |
 | Vulnerabilities | `make vuln` | Needs network. |
-| Live demonstration | `make demo` | Needs `jq`. Runs real binaries. Its last steps replay the procedural-memory loop with scripted outcomes. |
+| Live demonstration | `make demo` | Needs `jq` and `sqlite3`. Runs real binaries. Its last steps replay the procedural-memory loop and the multi-repository fixtures with scripted outcomes, and upgrade a schema-6 database. |
 | End-to-end scripts | `make e2e`, `make e2e-mcp` | Need bash 4+, `curl`, `jq` and `sqlite3`. Reports go to `bin/e2e/`. `e2e-mcp` also runs independent MCP clients from npm and inspects a local VS Code; `E2E_INTEROP=0` skips them. |
 | CI | the `ci` workflow | Runs `make ci`, which is all of the above with `E2E_INTEROP=0`, on `ubuntu-latest`. |
 

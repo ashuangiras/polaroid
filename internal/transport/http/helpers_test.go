@@ -119,6 +119,8 @@ type versionJSON struct {
 	Version        int            `json:"version"`
 	Philosophy     string         `json:"philosophy"`
 	Method         string         `json:"method"`
+	Goal           string         `json:"goal"`
+	Applicability  jsontext.Value `json:"applicability"`
 	Contract       jsontext.Value `json:"contract"`
 	Instructions   jsontext.Value `json:"instructions"`
 	References     jsontext.Value `json:"references"`
@@ -127,10 +129,14 @@ type versionJSON struct {
 }
 
 type procedureJSON struct {
-	ID            string    `json:"id"`
-	CanonicalKey  string    `json:"canonical_key"`
-	CreatedAt     time.Time `json:"created_at"`
-	LatestVersion int       `json:"latest_version"`
+	ID            string         `json:"id"`
+	CanonicalKey  string         `json:"canonical_key"`
+	CreatedAt     time.Time      `json:"created_at"`
+	LatestVersion int            `json:"latest_version"`
+	Scope         string         `json:"scope"`
+	Goal          string         `json:"goal"`
+	Applicability jsontext.Value `json:"applicability"`
+	Origin        jsontext.Value `json:"origin"`
 }
 
 type historyJSON struct {
@@ -138,6 +144,10 @@ type historyJSON struct {
 	CanonicalKey  string           `json:"canonical_key"`
 	CreatedAt     time.Time        `json:"created_at"`
 	LatestVersion int              `json:"latest_version"`
+	Scope         string           `json:"scope"`
+	Goal          string           `json:"goal"`
+	Applicability jsontext.Value   `json:"applicability"`
+	Origin        jsontext.Value   `json:"origin"`
 	Versions      []jsontext.Value `json:"versions"`
 }
 

@@ -98,7 +98,7 @@ func TestCreateAndReadBack(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(v1, want.Versions[0]) {
 		t.Fatalf("Version(1) = %+v, %v", v1, err)
 	}
-	list, err := s.ListProcedures(ctx)
+	list, err := s.ListProcedures(ctx, memory.ProcedureFilter{})
 	if err != nil || !reflect.DeepEqual(list, []memory.Procedure{want.Procedure}) {
 		t.Fatalf("ListProcedures = %+v, %v", list, err)
 	}
@@ -111,7 +111,7 @@ func TestListIsOrderedByCanonicalKeyWithLatestVersion(t *testing.T) {
 	if err := s.CreateProcedure(ctx, procedure("p2", "a.first"), version("p2", 1, `{}`)); err != nil {
 		t.Fatal(err)
 	}
-	list, err := s.ListProcedures(ctx)
+	list, err := s.ListProcedures(ctx, memory.ProcedureFilter{})
 	if err != nil {
 		t.Fatal(err)
 	}

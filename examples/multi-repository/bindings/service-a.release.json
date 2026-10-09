@@ -1,0 +1,10 @@
+{
+  "repository": "example.com/fixtures/service-a",
+  "name": "release",
+  "procedure_id": "service-a.release",
+  "revision": {
+    "inputs": { "packages": ["./..."], "tag": "v1.0.0" },
+    "version_policy": { "contextual": {} },
+    "revision_reason": "Fixture: service A releases with its local wrapper."
+  }
+}

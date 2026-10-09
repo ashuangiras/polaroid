@@ -12,10 +12,13 @@ import (
 // The zero value means no context: contextual references select the latest
 // version. Target, if set, asks for each selected combination's status at
 // an exact commit and inputs (ADR-0018); it never changes the selection.
+// RepositoryID is the ID Repository is registered to, "" if it is not; the
+// root must be applicable there (ADR-0020).
 type ResolutionContext struct {
-	Repository  string
-	Environment string
-	Target      *Target
+	Repository   string
+	Environment  string
+	Target       *Target
+	RepositoryID string
 }
 
 // Target is what a resolution is checked against, in its context's
@@ -108,19 +111,21 @@ type BindingResolution struct {
 // does. It returns the graph errors of ExpandGraph, never a partial graph.
 func ResolveGraph(ctx context.Context, r ResolutionReader, procedureID string, policy VersionPolicy, c ResolutionContext) (Resolution, error) {
 	w := &walker{r: r, nodes: 1, onPath: map[string]bool{procedureID: true}}
+	admit := func(Applicability) bool { return true }
 	if c != (ResolutionContext{}) {
 		w.ev = &evidence{r: r, c: c, v: newVerifier(r), runs: map[string][]VersionRun{}}
+		admit = func(a Applicability) bool { return a.ApplicableIn(c.RepositoryID) }
 	}
-	version, by, verifiedBy, err := w.choose(ctx, Reference{ProcedureID: procedureID, VersionPolicy: policy}, nil)
+	version, by, verifiedBy, err := w.choose(ctx, Reference{ProcedureID: procedureID, VersionPolicy: policy}, nil, admit)
 	if err != nil {
 		return Resolution{}, err
 	}
-	key, refs, err := r.VersionNode(ctx, procedureID, version)
+	node, err := r.VersionNode(ctx, procedureID, version)
 	if err != nil {
 		return Resolution{}, err
 	}
-	root := GraphNode{ProcedureID: procedureID, CanonicalKey: key, Version: version, VerifiedBy: verifiedBy}
-	if err := w.expand(ctx, &root, refs, 0); err != nil {
+	root := GraphNode{ProcedureID: procedureID, CanonicalKey: node.CanonicalKey, Version: version, Applicability: node.Applicability, VerifiedBy: verifiedBy}
+	if err := w.expand(ctx, &root, node.References, 0); err != nil {
 		return Resolution{}, err
 	}
 	if w.ev != nil {
@@ -296,14 +301,21 @@ func (e *evidence) of(ctx context.Context, procedureID string, version int) (str
 	return "", nil
 }
 
-// highest returns the highest version of procedureID verified in the
-// context and its evidence, or an empty ID if none is.
-func (e *evidence) highest(ctx context.Context, procedureID string) (int, string, error) {
+// highest returns the highest version of procedureID that admitted accepts
+// and that is verified in the context, and its evidence, or an empty ID if
+// none is.
+func (e *evidence) highest(ctx context.Context, procedureID string, admitted func(int) (bool, error)) (int, string, error) {
 	runs, err := e.latestRuns(ctx, procedureID)
 	if err != nil {
 		return 0, "", err
 	}
 	for _, run := range runs {
+		if ok, err := admitted(run.Version); err != nil || !ok {
+			if err != nil {
+				return 0, "", err
+			}
+			continue
+		}
 		id, err := e.verified(ctx, run.ExecutionID)
 		if err != nil || id != "" {
 			return run.Version, id, err
@@ -351,7 +363,11 @@ func (s *Service) ResolveBinding(ctx context.Context, bindingID, environment str
 		return BindingResolution{}, describeLookup(err, fmt.Sprintf("binding %q", bindingID))
 	}
 	rev := h.Revisions[len(h.Revisions)-1]
-	c := ResolutionContext{Repository: h.Binding.Repository, Environment: environment, Target: target}
+	repositoryID, err := s.identityID(ctx, h.Binding.Repository)
+	if err != nil {
+		return BindingResolution{}, err
+	}
+	c := ResolutionContext{Repository: h.Binding.Repository, Environment: environment, Target: target, RepositoryID: repositoryID}
 	res, err := s.store.Resolve(ctx, h.Binding.ProcedureID, rev.VersionPolicy, c)
 	if err != nil {
 		if gerr := graphError(err); gerr != nil {

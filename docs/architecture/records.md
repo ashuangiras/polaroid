@@ -2,7 +2,7 @@
 
 This page defines Polaroid's records, how they are identified and how they are versioned. Each section is marked as **implemented** or **planned**. The [HTTP API](http-api.md) serves the implemented records with exactly these field names.
 
-Summary: a **procedure** is a shared identity with immutable **versions**. A version may **reference** other procedures it composes. A **binding** lets one repository use a procedure under a local name, with immutable **binding revisions** that hold the repository's inputs and version policy. An **execution** records one finished run of an exact version, and may link the **child executions** that fulfilled its references. **Verification** is derived from executions per combination of context and child versions.
+Summary: a **procedure** is a shared identity with immutable **versions**. A version may **reference** other procedures it composes, and declares where it **applies**. A **repository** is a registered identity with a canonical identifier and aliases. A **binding** lets one repository use a procedure under a local name, with immutable **binding revisions** that hold the repository's inputs and version policy. An **execution** records one finished run of an exact version, and may link the **child executions** that fulfilled its references. **Verification** is derived from executions per combination of context and child versions. A **feedback report** may name its subject. All of them live in one shared catalog; repository scope organizes records and is not access control.
 
 ## Implemented records
 
@@ -16,10 +16,13 @@ A procedure is a stable identity. It does not belong to any repository, so many 
 | `canonical_key` | string | client, at creation | 1–128 bytes, matching `^[a-z0-9]+([._-][a-z0-9]+)*$`, for example `go.dependency.add`. Unique across all procedures. Never changes. |
 | `created_at` | RFC 3339 timestamp, UTC | server | |
 | `latest_version` | integer ≥ 1 | derived | The highest version number. |
+| `scope` | string | derived | The latest version's [applicability](#applicability-and-origin-implemented): `shared`, `local` or `unspecified`. |
+| `goal`, `applicability` | string, JSON object | derived | The latest version's, omitted when it has none. |
+| `origin` | `{repository_id, reason, created_at}` | client, once | Where and why the procedure was first created. Omitted until recorded. |
 
-The canonical key has exactly one accepted spelling: lowercase, with single separators. So exact-match uniqueness also rules out duplicates that differ only by case or separator. The storage layer enforces uniqueness, and a duplicate gets `409 canonical_key_exists`.
+The canonical key has exactly one accepted spelling: lowercase, with single separators. So exact-match uniqueness also rules out duplicates that differ only by case or separator. The storage layer enforces uniqueness, and a duplicate gets `409 canonical_key_exists`. Canonical keys stay unique across the whole catalog, not per repository.
 
-Semantic duplicate detection, aliases and identity merging are **not implemented**. They are later work.
+Semantic duplicate detection and procedure identity merging are **not implemented**. They are later work.
 
 ### Procedure version (implemented)
 
@@ -31,6 +34,8 @@ A version is one immutable definition of a procedure.
 | `version` | integer ≥ 1 | server | 1 at creation. Each revision gets the latest version plus 1. |
 | `philosophy` | string | client | Required and not blank. Why the procedure works the way it does. |
 | `method` | string | client | Required and not blank. The approach in brief. |
+| `goal` | string | client | Optional, single-line and not blank when given. What the procedure achieves; searched by discovery. Omitted from responses when absent. |
+| `applicability` | JSON object | client | Optional: `{"shared": {}}`, or `{"repository": "<repository id>"}` for a version local to one registered repository. Absent means *unspecified*, and is omitted from responses. See [applicability and origin](#applicability-and-origin-implemented). |
 | `contract` | JSON object | client | Required. For example inputs, outputs, preconditions and postconditions. The members are free-form. |
 | `instructions` | JSON object | client | Required. The members are free-form, for example `steps`. |
 | `references` | list of [references](#subprocedure-reference-implemented) | client | Optional. The procedures this version composes, in the order given. Omitted from responses when there are none; `[]` and `null` mean none. |
@@ -73,6 +78,36 @@ A version's references, their targets' references, and so on, form its compositi
 4. Versions are never modified or deleted, and their numbers have no gaps. The database rejects violations with triggers, even for clients that bypass `polaroidd`.
 5. The intended agent loop is: read the latest version, edit it, and submit it with `base_version` set to that version. On a conflict, re-read, re-apply the change and submit again.
 
+### Repository (implemented)
+
+A repository is a registered identity ([ADR-0019](decisions/0019-repository-registry.md)). Nothing registers one implicitly: not a read, a binding, an execution or a migration.
+
+| Field | Type | Set by | Rules |
+| --- | --- | --- | --- |
+| `id` | string | server | A UUIDv7. Never changes. |
+| `name` | string | client, at registration | The display name: single-line and not blank. Never changes. |
+| `identifier` | string | client, at registration | The canonical identifier, in the [repository identifier format](#repository-binding-implemented). Never changes. |
+| `aliases` | list of `{identifier, reason, created_at}` | client, appended | Other identifiers of the same repository, oldest first, each with the reason it is the same repository. Always present, `[]` when there are none. |
+| `created_at` | RFC 3339 timestamp, UTC | server | |
+
+- **Identifiers are unique and permanent.** An identifier belongs to at most one repository, as its canonical identifier or as an alias, and is never moved or removed. Registering a taken identifier, either way, is `409 repository_identifier_exists`; of two racing registrations, exactly one succeeds.
+- **Normalization is not identity.** Polaroid validates the one accepted spelling and never rewrites it. It never decides that two identifiers are the same repository: a fork, a rename or a mirror is a different repository until someone adds its identifier as an alias.
+- **Association is derived.** Bindings, executions and feedback keep the identifier they were written with. Which repository they belong to is read through the registry, so a later registration or alias associates earlier records without changing them. Unregistered identifiers stay valid wherever they were valid.
+- **Where identity counts:** repository filters on lists (bindings, executions, feedback, and procedure discovery) cover every identifier of the registered repository; applicability compares repository IDs; and a binding's local name is unique across the repository's identifiers, so an alias that would bring a second binding of a name is refused with `409 binding_exists`. Verification combinations and resolution evidence still compare identifier strings exactly, so an alias never merges or changes evidence. Record runs with the canonical identifier.
+
+### Applicability and origin (implemented)
+
+[ADR-0020](decisions/0020-procedure-origin-and-applicability.md) separates where a procedure came from and where its contract is meant to hold.
+
+- **Origin** is provenance on the procedure identity: `{repository_id, reason}`, given at creation or recorded later with `POST /v1/procedures/{id}/origin`, at most once (`409 origin_exists`). The repository must be registered. Origin never limits where a procedure applies.
+- **Applicability** is declared per version, so changing it is a new version with a `revision_reason`, and earlier versions keep their declaration. Promotion from local to shared, and narrowing, are such versions. Applicability is a declaration, not evidence: verification stays per recorded target, and promotion transfers none.
+- **Applicable in a repository:** an unspecified or shared version is applicable everywhere; a local version only under an identifier registered to its repository.
+- **Composition:** a local version admits children that are unspecified, shared, or local to its own repository; a shared or unspecified version admits no local child. On write, a pinned reference's version must be admitted, and a contextual target must have at least one admitted version; otherwise `400` on `version.references[i].procedure_id`. On read, contextual selection only considers admitted versions, and ignores evidence links to versions it does not admit.
+- **Bindings:** a new binding, or a new binding revision, is refused (`400`) if a pinned version is not applicable in the binding's repository, or, for a contextual policy, if the procedure's latest version is not. Existing bindings are never invalidated: after a narrowing version, a contextual binding elsewhere keeps resolving to the newest version still applicable to it.
+- **Resolution:** a binding's contextual policy selects among applicable versions. The graph endpoint with a repository refuses a version that is not applicable there (`400` on `repository`).
+- **Executions:** the version must be applicable in the execution's repository, and each linked child must be admitted by the parent's version (`400`). Executions recorded earlier are unchanged.
+- **Existing versions** are unspecified. Nothing is classified by migration; a version that declares applicability is appended by someone who has read the contract and its bindings.
+
 ### Repository binding (implemented)
 
 A binding records that a repository uses a shared procedure under a repository-local name. It refers to the procedure by ID and never copies its content, so the procedure's history is the same for every repository that binds it. Identity rules are in [ADR-0007](decisions/0007-repository-identity-for-bindings.md).
@@ -86,7 +121,7 @@ A binding records that a repository uses a shared procedure under a repository-l
 | `created_at` | RFC 3339 timestamp, UTC | server | |
 | `latest_revision` | integer ≥ 1 | derived | The highest revision number. |
 
-For a repository with a remote, clients derive `repository` from the remote: host and path, lowercase, without scheme, user, port or `.git`. Polaroid validates the format and never rewrites it. A duplicate `(repository, name)` gets `409 binding_exists`. The same procedure may be bound under several names in one repository. Polaroid has no repository records: a repository is the identifier its bindings share.
+For a repository with a remote, clients derive `repository` from the remote: host and path, lowercase, without scheme, user, port or `.git`. Polaroid validates the format and never rewrites it. A duplicate `(repository, name)` gets `409 binding_exists`, and so does a name that another identifier of the same [registered repository](#repository-implemented) already uses. The same procedure may be bound under several names in one repository. A binding needs no registered repository unless its procedure is local to one.
 
 ### Binding revision (implemented)
 
@@ -128,7 +163,7 @@ An execution is an immutable record of one finished run, written once after the 
 
 `environment.attributes`, `inputs` and `evidence` are stored like `contract`: compacted, but otherwise exactly as submitted.
 
-An unknown procedure or binding is `404`. A missing version or binding revision, and every mismatch, is `400` naming the field. The database enforces the same rules with foreign keys and triggers, and it rejects `UPDATE` and `DELETE`. Recording an execution changes no other record.
+An unknown procedure or binding is `404`. A missing version or binding revision, a version that is not [applicable](#applicability-and-origin-implemented) in `repository`, and every mismatch, is `400` naming the field. The database enforces the same rules with foreign keys and triggers, and it rejects `UPDATE` and `DELETE`. Recording an execution changes no other record. `created_at` is assigned in the write transaction, strictly after every stored execution's, so it is commit order ([ADR-0021](decisions/0021-targeted-feedback-and-bounded-lists.md)).
 
 ### Subprocedure execution (implemented)
 
@@ -186,7 +221,7 @@ Resolution answers two different questions, and reports them separately ([ADR-00
 
 ### Feedback report (implemented)
 
-A feedback report tells Polaroid's maintainers about a problem with Polaroid itself, or suggests an improvement. It is written once and never changed or deleted. It has no triage state ([ADR-0015](decisions/0015-feedback-reports.md)).
+A feedback report tells Polaroid's maintainers about a problem with Polaroid or with a record it holds, or suggests an improvement. It is written once and never changed or deleted. It has no triage state ([ADR-0015](decisions/0015-feedback-reports.md), [ADR-0021](decisions/0021-targeted-feedback-and-bounded-lists.md)).
 
 | Field | Type | Set by | Rules |
 | --- | --- | --- | --- |
@@ -196,15 +231,23 @@ A feedback report tells Polaroid's maintainers about a problem with Polaroid its
 | `details` | string | client | Required, non-blank, valid UTF-8. May span lines. |
 | `reporter` | string | client | The agent or person reporting, in the canonical-key format, for example `copilot.vscode`. Not authenticated. |
 | `context` | JSON object | client | Optional and free-form, for example the tool or endpoint involved, or record IDs. Stored like `contract` and never interpreted. IDs in it are not checked. Absent is stored and returned as `{}`. |
+| `subject` | JSON object | client | Optional. What the report is about: `{"type": "service"}`, `{"type": "repository", "repository_id"}`, `{"type": "procedure", "procedure_id"[, "version"]}`, `{"type": "binding", "binding_id"[, "revision"]}` or `{"type": "execution", "execution_id"}`. The record must exist; a member of another type is `400`. Omitted when absent. |
+| `repository` | string | client | Optional. The repository identifier the report was made in, registered or not. Omitted when absent. |
+| `execution_id` | string | client | Optional. A related execution, which must exist. Omitted when absent. |
 | `created_at` | RFC 3339 timestamp, UTC | server | |
 
-Reporting feedback reads and changes no other record. The database enforces the field rules with `CHECK` constraints, and it rejects `UPDATE` and `DELETE`.
+`subject` says what the report is about; `repository` and `execution_id` say where it was made. They must agree: the execution ran in that repository (by identity); for a procedure subject, it ran that procedure and version; for a binding subject, it used that binding and revision; for an execution subject, it is that execution; and the repository of a repository, binding or execution subject is the report's repository. A disagreement is `400` naming the field.
+
+A report without `subject`, including every report stored before subjects existed, keeps the meaning ADR-0015 gave it: it is about the Polaroid service, and the `subject_type=service` filter includes it. Its stored fields are never changed. A later alias makes an older report's identifier match its repository in filters, and a later applicability change does not affect reports at all.
+
+Reporting feedback changes no other record. The database enforces the field rules with `CHECK` constraints, checks that a subject exists with a trigger, and rejects `UPDATE` and `DELETE`.
 
 ## Planned records (not implemented)
 
-No records are planned in the current increments. Later work (discovery, aliases, access control, the PoC import) is listed in the [roadmap](../development/roadmap.md), and its records are designed when it is refined into issues.
+No records are planned in the current increments. Later work (semantic discovery, access control, the PoC import) is listed in the [roadmap](../development/roadmap.md), and its records are designed when it is refined into issues.
 
 ## Compatibility
 
 - Field names and rules on this page are part of the `/v1` API contract. Adding an optional field is backward-compatible. Renaming or removing a field, or tightening a rule, needs a new API version and an ADR.
 - Schema changes are new migrations, and they never rewrite stored records. A column added later must give existing rows a value that means "absent", not an invented one.
+- Migration 7 ([#35](https://github.com/ashuangiras/polaroid/issues/35)) adds the repository registry, origins, `goal` and `applicability`, and the feedback subject columns. Existing versions read back unspecified, existing reports without a subject, and nothing is registered. Responses gain `scope` on procedures, and omit every absent new field, so existing versions, bindings, executions and reports are served as before. Requests that do not use the new fields behave as before, except that recording an execution, creating or revising a binding, or writing a version is refused where a declared applicability forbids it, which no stored version could declare before.

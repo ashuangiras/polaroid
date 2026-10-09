@@ -30,16 +30,20 @@ func (a *api) createBinding(w http.ResponseWriter, r *http.Request) {
 // listBindings requires the repository query parameter and rejects any
 // other, so a filter this server does not support is never silently ignored.
 func (a *api) listBindings(w http.ResponseWriter, r *http.Request) {
-	query, ok := strictQuery(w, r, "repository")
+	query, ok := strictQuery(w, r, "repository", "limit", "after")
 	if !ok {
 		return
 	}
-	bindings, err := a.svc.ListBindings(r.Context(), query.Get("repository"))
+	page, ok := pageQuery(w, query)
+	if !ok {
+		return
+	}
+	bindings, next, err := a.svc.ListBindings(r.Context(), query.Get("repository"), page)
 	if err != nil {
 		a.fail(w, r, err)
 		return
 	}
-	a.respond(w, r, http.StatusOK, wire.NewBindingList(bindings))
+	a.respond(w, r, http.StatusOK, wire.NewBindingList(bindings, next))
 }
 
 func (a *api) getBinding(w http.ResponseWriter, r *http.Request) {

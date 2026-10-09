@@ -144,12 +144,12 @@ note "The raw request behind \`post server/discover\`:" '```http' \
 
 ########################################################################
 section "Tool catalogue" \
-	"20 tools mirror the HTTP API one-to-one. 14 only read and are annotated \`readOnlyHint\`; 6 write (create/revise procedure, create/revise binding, record execution, report feedback) and are annotated non-destructive (they only append). Every tool advertises a JSON Schema generated from its argument type: flat arguments named after record fields, optional ones not required." \
+	"25 tools mirror the HTTP API one-to-one. 16 only read and are annotated \`readOnlyHint\`; 9 write (create/revise procedure, record procedure origin, register repository, add repository alias, create/revise binding, record execution, report feedback) and are annotated non-destructive (they only append). Every tool advertises a JSON Schema generated from its argument type: flat arguments named after record fields, optional ones not required." \
 	"An MCP client lists tools automatically. By hand: \`post tools/list \"\" \"\"\`."
 show 'post tools/list "" "" | jq -c "[.result.tools[] | {name, readOnly: .annotations.readOnlyHint, destructive: .annotations.destructiveHint, required: .inputSchema.required}]" | jq -c ".[]"'
-check "20 tools" equal "$(wc -l <<<"$LAST" | tr -d ' ')" 20
-check "14 read-only tools" equal "$(grep -c '"readOnly":true' <<<"$LAST")" 14
-check "the 6 write tools are marked non-destructive" equal "$(grep -c '"readOnly":false,"destructive":false' <<<"$LAST")" 6
+check "25 tools" equal "$(wc -l <<<"$LAST" | tr -d ' ')" 25
+check "16 read-only tools" equal "$(grep -c '"readOnly":true' <<<"$LAST")" 16
+check "the 9 write tools are marked non-destructive" equal "$(grep -c '"readOnly":false,"destructive":false' <<<"$LAST")" 9
 show 'post tools/list "" "" | jq ".result.tools[] | select(.name == \"get_graph\") | .inputSchema"'
 check "get_graph requires procedure_id and version; repository and environment are optional" out_has '"required": ['
 
@@ -316,6 +316,29 @@ check "unknown report: not_found" json_has '. == "not_found"'
 check "reporting feedback changed no procedure" equal "$(tool get_procedure "{\"id\":\"$LEAF\"}" | text)" "$PROC_BEFORE"
 
 ########################################################################
+section "Repositories, scope and pages" \
+	"An agent registers its repository once and finds it by any identifier (ADR-0019); procedures declare where they apply (ADR-0020); reports name their subject, and lists page with limit and next (ADR-0021)." \
+	"Ask your agent to register this repository, then to list the procedures that apply here."
+step register_repository '{"identifier":"github.com/example/service","name":"Example service"}' '{identifier, aliases}'
+check "registered with no aliases" json_has '. == {"identifier":"github.com/example/service","aliases":[]}'
+REPO="$(tool get_repository '{"identifier":"github.com/example/service"}' | text | jq -r .id)"
+step add_repository_alias "{\"repository_id\":\"$REPO\",\"identifier\":\"mirror.example/service\",\"reason\":\"The mirror.\"}" '[.aliases[].identifier]'
+check "the alias is added" json_has '. == ["mirror.example/service"]'
+step get_repository '{"identifier":"mirror.example/service"}' '.id'
+check "the alias finds the same repository" equal "$LAST" "\"$REPO\""
+step create_procedure "{\"canonical_key\":\"service.deploy\",\"philosophy\":\"p\",\"method\":\"m\",\"goal\":\"Deploy the service.\",\"applicability\":{\"repository\":\"$REPO\"},\"contract\":{},\"instructions\":{},\"revision_reason\":\"Local.\"}" '{scope, goal}'
+check "a local procedure with a goal" json_has '. == {"scope":"local","goal":"Deploy the service."}'
+step list_procedures '{"repository":"mirror.example/service","scope":"local"}' '[.procedures[].canonical_key]'
+check "discovered through the alias" json_has '. == ["service.deploy"]'
+step list_procedures '{"repository":"github.com/example/other","scope":"local"}' '.procedures'
+check "not discovered in another repository" json_has '. == []'
+step list_feedback '{"limit":1}' '{n: (.feedback | length), next: (.next != null)}'
+check "one report per page, with a next cursor" json_has '. == {"n":1,"next":true}'
+NEXT="$(tool list_feedback '{"limit":1}' | text | jq -r .next)"
+step list_feedback "{\"limit\":5,\"after\":\"$NEXT\"}" '{n: (.feedback | length), next: has("next")}'
+check "the rest after the cursor, without a cursor at the end" json_has '. == {"n":1,"next":false}'
+
+########################################################################
 section "Same documents as the HTTP API" \
 	"MCP and HTTP share one set of record shapes (\`internal/transport/wire\`). A tool's text result is byte-identical to the HTTP response body." \
 	"Compare a tool result with the matching \`curl\`."
@@ -328,7 +351,9 @@ for pair in "get_procedure|{\"id\":\"$LEAF\"}|/v1/procedures/$LEAF" \
 	"get_verification|{\"execution_id\":\"$P1\"}|/v1/executions/$P1/verification" \
 	"list_verifications|{\"procedure_id\":\"$PARENT\",\"version\":1}|/v1/procedures/$PARENT/versions/1/verifications" \
 	"get_feedback|{\"id\":\"$FB\"}|/v1/feedback/$FB" \
-	"list_feedback|{\"kind\":\"problem\"}|/v1/feedback?kind=problem"; do
+	"list_feedback|{\"kind\":\"problem\"}|/v1/feedback?kind=problem" \
+	"get_repository|{\"identifier\":\"mirror.example/service\"}|/v1/repositories/by-identifier/mirror.example/service" \
+	"list_procedures|{\"repository\":\"github.com/example/service\",\"limit\":2}|/v1/procedures?repository=github.com/example/service&limit=2"; do
 	IFS='|' read -r name args path <<<"$pair"
 	A="$(tool "$name" "$args" | text | shasum -a 256 | cut -c1-16)"
 	B="$(curl -sS "$URL$path" | shasum -a 256 | cut -c1-16)" # both end in exactly one newline
@@ -404,10 +429,10 @@ await client.close().catch(() => {});
 EOF
 show '(cd "$TSDIR" && node probe.mjs "$URL/mcp")'
 check "TypeScript SDK 1.32.1 connects at 2025-11-25, without a session" out_has "negotiated: 2025-11-25 session: none"
-check "...lists all 20 tools" out_has "connected; tools: 20"
+check "...lists all 25 tools" out_has "connected; tools: 25"
 check "...and records feedback" out_has "report_feedback: ts.sdk"
 show '(cd "$TSDIR" && npx --no-install mcp-inspector --cli "$URL/mcp" --transport http --method tools/list 2>/dev/null | jq -c "[.tools[].name] | length")'
-check "MCP Inspector 2.10.1 lists the 20 tools" equal "$LAST" 20
+check "MCP Inspector 2.10.1 lists the 25 tools" equal "$LAST" 25
 fi
 VSCODE_GITHUB="/Applications/Visual Studio Code.app/Contents/Resources/app/node_modules.asar.unpacked/@github"
 if [[ "${E2E_INTEROP:-1}" == 0 ]]; then

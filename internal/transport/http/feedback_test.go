@@ -175,7 +175,7 @@ func TestListFeedbackQuery(t *testing.T) {
 		"?kind=":                        "kind",
 		"?kind=problem&kind=suggestion": "kind",
 		"?reporter=copilot.vscode":      "",
-		"?kind=problem&limit=1":         "",
+		"?kind=problem&limit=501":       "limit",
 		"?%zz":                          "",
 	} {
 		resp := s.call(t, http.MethodGet, "/v1/feedback"+query, "")

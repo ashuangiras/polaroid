@@ -172,7 +172,7 @@ func TestVersionsFromBeforeReferencesReadBackUnchanged(t *testing.T) {
 	if got := s.call(t, http.MethodGet, "/v1/procedures/p1/versions/1", ""); string(got.body) != v1+"\n" {
 		t.Fatalf("version 1 =\n %s\nwant\n %s", got.body, v1)
 	}
-	const history = `{"id":"p1","canonical_key":"go.dependency.add","created_at":"2026-10-09T12:00:00.123456789Z","latest_version":1,"versions":[` + v1 + `]}`
+	const history = `{"id":"p1","canonical_key":"go.dependency.add","created_at":"2026-10-09T12:00:00.123456789Z","latest_version":1,"scope":"unspecified","versions":[` + v1 + `]}`
 	if got := s.call(t, http.MethodGet, "/v1/procedures/p1", ""); string(got.body) != history+"\n" {
 		t.Fatalf("history =\n %s\nwant\n %s", got.body, history)
 	}

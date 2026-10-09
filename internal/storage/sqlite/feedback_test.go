@@ -29,7 +29,7 @@ func feedback(id string, n int, kind memory.FeedbackKind) memory.Feedback {
 	}
 }
 
-// seedFeedback stores f2 before f1, so that order must come from created_at.
+// seedFeedback stores three reports, oldest first.
 func seedFeedback(t *testing.T, s *sqlite.Store) []memory.Feedback {
 	t.Helper()
 	all := []memory.Feedback{
@@ -37,8 +37,8 @@ func seedFeedback(t *testing.T, s *sqlite.Store) []memory.Feedback {
 		feedback("f2", 2, memory.FeedbackSuggestion),
 		feedback("f3", 3, memory.FeedbackProblem),
 	}
-	for _, i := range []int{1, 0, 2} {
-		if err := s.CreateFeedback(context.Background(), all[i]); err != nil {
+	for i := range all {
+		if err := s.CreateFeedback(context.Background(), &all[i]); err != nil {
 			t.Fatalf("CreateFeedback(%s): %v", all[i].ID, err)
 		}
 	}
@@ -60,7 +60,7 @@ func TestFeedbackRoundTripAndList(t *testing.T) {
 		memory.FeedbackProblem:    {all[0], all[2]},
 		memory.FeedbackSuggestion: {all[1]},
 	} {
-		if got, err := s.ListFeedback(ctx, kind); err != nil || !reflect.DeepEqual(got, want) {
+		if got, err := s.ListFeedback(ctx, memory.FeedbackFilter{Kind: kind}); err != nil || !reflect.DeepEqual(got, want) {
 			t.Fatalf("ListFeedback(%q) = %+v, %v\nwant %+v", kind, got, err, want)
 		}
 	}
@@ -70,7 +70,7 @@ func TestFeedbackRoundTripAndList(t *testing.T) {
 }
 
 func TestEmptyFeedbackListIsNotNil(t *testing.T) {
-	got, err := openStore(t, dbPath(t)).ListFeedback(context.Background(), "")
+	got, err := openStore(t, dbPath(t)).ListFeedback(context.Background(), memory.FeedbackFilter{})
 	if err != nil || got == nil || len(got) != 0 {
 		t.Fatalf("ListFeedback = %#v, %v; want an empty list", got, err)
 	}
@@ -83,7 +83,7 @@ func TestReopenPreservesFeedback(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	got, err := openStore(t, path).ListFeedback(context.Background(), "")
+	got, err := openStore(t, path).ListFeedback(context.Background(), memory.FeedbackFilter{})
 	if err != nil || !reflect.DeepEqual(got, all) {
 		t.Fatalf("after reopen = %+v, %v", got, err)
 	}

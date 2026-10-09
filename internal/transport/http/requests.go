@@ -8,6 +8,7 @@ import "github.com/ashuangiras/polaroid/internal/transport/wire"
 
 type createProcedureBody struct {
 	CanonicalKey string          `json:"canonical_key"`
+	Origin       *wire.NewOrigin `json:"origin,omitzero"`
 	Version      wire.Definition `json:"version"`
 }
 

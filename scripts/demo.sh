@@ -18,13 +18,18 @@
 # Then the loader appends dev.change.verify version 2 (#33), which teaches
 # target verification, and a scripted run at a new commit shows children-only
 # success leaving the parent unverified there until the parent is recorded.
-# Finally it restarts the daemon and confirms every record is unchanged.
+# Fixtures A and B (examples/multi-repository) then show the repository
+# registry, shared and local procedures, applicability, separate evidence,
+# targeted feedback and pagination (#35), all with scripted outcomes.
+# Finally it restarts the daemon and confirms every record is unchanged, and
+# upgrades a database written at schema version 6.
 #
-# Usage: scripts/demo.sh   (run `make build` first, or use `make demo`)
+# Usage: scripts/demo.sh   (run `make build` first, or use `make demo`; needs jq and sqlite3)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 command -v jq >/dev/null 2>&1 || { echo "demo: jq is required" >&2; exit 1; }
+command -v sqlite3 >/dev/null 2>&1 || { echo "demo: sqlite3 is required" >&2; exit 1; }
 [[ -x bin/polaroidd && -x bin/polaroid ]] || { echo "demo: run 'make build' first" >&2; exit 1; }
 
 example=examples/procedures/go-dependency-add
@@ -232,8 +237,29 @@ expect_combinations() {
 	echo "combinations: $got"
 }
 
+# stage NAME DIR:N...: a copy of $dev as it was at an earlier change, with
+# only the listed procedures, each up to version N, and the bindings, but no
+# repositories or origins, which came later (#35).
+stage() {
+	local out="$work/development-$1" spec name n f v
+	shift
+	mkdir -p "$out/procedures"
+	cp -R "$dev/bindings" "$out/bindings"
+	for spec in "$@"; do
+		name=${spec%:*} n=${spec#*:}
+		mkdir -p "$out/procedures/$name"
+		for f in "$dev/procedures/$name"/v*.json; do
+			v="$(basename "$f")" && v=${v#v} && v=${v%%.*}
+			if ((v <= n)); then cp "$f" "$out/procedures/$name/"; fi
+		done
+	done
+	echo "$out"
+}
+dev28="$(stage 28 dev-change-verify:1 go-module-build:1 go-module-checks:2)"
+dev33="$(stage 33 dev-change-verify:2 go-module-build:1 go-module-checks:2)"
+
 step "9. Load Polaroid's development procedures from $dev as first seeded (version 1 only)"
-loaded="$(scripts/load-fixtures.sh -n 1 "$dev" 2>/dev/null)"
+loaded="$(scripts/load-fixtures.sh -n 1 "$dev28" 2>/dev/null)"
 verify_id="$(jq -r '.procedures["dev.change.verify"]' <<<"$loaded")"
 build_id="$(jq -r '.procedures["go.module.build"]' <<<"$loaded")"
 checks_id="$(jq -r '.procedures["go.module.checks"]' <<<"$loaded")"
@@ -246,7 +272,7 @@ for binding in "$dev_binding" "$fixture_binding"; do
 		fail "binding $binding does not reference dev.change.verify by ID alone"
 done
 store="$(bin/polaroid list)"
-[[ "$(scripts/load-fixtures.sh -n 1 "$dev" 2>/dev/null)" == "$loaded" && "$(bin/polaroid list)" == "$store" ]] || fail "loading the fixtures again changed the store"
+[[ "$(scripts/load-fixtures.sh -n 1 "$dev28" 2>/dev/null)" == "$loaded" && "$(bin/polaroid list)" == "$store" ]] || fail "loading the fixtures again changed the store"
 jq -c '.procedures' <<<"$loaded"
 echo "$dev_repo and $fixture_repo bind procedure $verify_id without copying it; a second load changed nothing"
 
@@ -275,10 +301,7 @@ jq -e --arg c "$checks1" '.verified == false and [.problems[] | [.code, .referen
 jq -c '{verified, problems}' <<<"$verification"
 
 step "12. Append the correction (exported fixture v2.revise.json, replayed by the loader); a stale base is refused over MCP"
-# The fixtures as they were for #28: without dev.change.verify version 2, which step 18 loads.
-dev28="$work/development-28"
-cp -R "$dev" "$dev28"
-rm "$dev28/procedures/dev-change-verify/v2.revise.json"
+# The fixtures as they were for #28; later versions load in steps 18 and 20.
 scripts/load-fixtures.sh "$dev28" >/dev/null 2>&1 || fail "the loader did not append version 2"
 jq -e '.latest_version == 2' <<<"$(bin/polaroid get "$checks_id")" >/dev/null || fail "go.module.checks has no version 2"
 [[ "$(bin/polaroid get-version "$checks_id" 1)" == "$checks_v1" ]] || fail "version 1 changed"
@@ -365,7 +388,7 @@ echo "target A, still verified by its own run: $got"
 
 step "18. The loader appends dev.change.verify version 2 (#33); a new commit is verified only by its own parent run"
 verify_v1="$(bin/polaroid get-version "$verify_id" 1)"
-appended="$(scripts/load-fixtures.sh "$dev" 2>&1 >/dev/null)" || fail "the loader did not append dev.change.verify version 2: $appended"
+appended="$(scripts/load-fixtures.sh "$dev33" 2>&1 >/dev/null)" || fail "the loader did not append dev.change.verify version 2: $appended"
 grep -q 'dev.change.verify: appended version 2' <<<"$appended" || fail "the loader did not report appending version 2: $appended"
 [[ "$(bin/polaroid get-version "$verify_id" 1)" == "$verify_v1" ]] || fail "dev.change.verify version 1 changed"
 verify_v2="$(bin/polaroid get-version "$verify_id" 2)"
@@ -375,10 +398,10 @@ jq -e '[.instructions.steps[] | select(.id == "resolve") | .action | contains("`
 	fail "dev.change.verify version 2 does not teach target verification"
 jq -e --argjson r "$(jq -c .references <<<"$verify_v1")" '.references == $r' <<<"$verify_v2" >/dev/null || fail "version 2 changed the references"
 store="$(bin/polaroid get "$verify_id")"
-scripts/load-fixtures.sh "$dev" >/dev/null 2>&1 || fail "a second load failed"
+scripts/load-fixtures.sh "$dev33" >/dev/null 2>&1 || fail "a second load failed"
 [[ "$(bin/polaroid get "$verify_id")" == "$store" ]] || fail "loading the fixtures again changed dev.change.verify"
 conflicting="$work/development-conflict"
-cp -R "$dev" "$conflicting"
+cp -R "$dev33" "$conflicting"
 jq '.version.method += " Edited."' "$dev/procedures/dev-change-verify/v2.revise.json" >"$conflicting/procedures/dev-change-verify/v2.revise.json"
 if refused="$(scripts/load-fixtures.sh "$conflicting" 2>&1 >/dev/null)"; then fail "a fixture that differs from stored version 2 was loaded"; fi
 grep -q 'version 2 in the store differs' <<<"$refused" || fail "unexpected refusal: $refused"
@@ -418,16 +441,113 @@ expect_dev_target dddddddddddddddddddddddddddddddddddddddd "root@2 false -
 build@1 false -
 checks@2 false -"
 
+step "19. Repositories A and B share one catalog: registry and alias, shared and local procedures, bindings, evidence, feedback, pages (#35; scripted regression evidence)"
+multi=examples/multi-repository
+repo_fa=example.com/fixtures/service-a
+repo_fb=example.com/fixtures/service-b
+mirror_fa=mirror.example.com/fixtures/service-a
+loaded_ab="$(scripts/load-fixtures.sh "$multi" 2>/dev/null)" || fail "the loader did not load $multi"
+[[ "$(scripts/load-fixtures.sh "$multi" 2>/dev/null)" == "$loaded_ab" ]] || fail "loading $multi again changed something"
+fa_id="$(jq -r --arg r "$repo_fa" '.repositories[$r]' <<<"$loaded_ab")"
+fb_id="$(jq -r --arg r "$repo_fb" '.repositories[$r]' <<<"$loaded_ab")"
+test_id="$(jq -r '.procedures["go.test.run"]' <<<"$loaded_ab")"
+release_id="$(jq -r '.procedures["service-a.release"]' <<<"$loaded_ab")"
+ab_binding() { jq -r --arg r "$1" --arg n "$2" '.bindings[] | select(.repository == $r and .name == $n) | .id' <<<"$loaded_ab"; }
+fa_test="$(ab_binding "$repo_fa" test)" fb_test="$(ab_binding "$repo_fb" test)" fa_release="$(ab_binding "$repo_fa" release)"
+[[ "$fa_id" != "$fb_id" ]] || fail "A and B are one repository"
+echo "1. registered A $fa_id and B $fb_id"
+
+[[ "$(bin/polaroid repository-by-identifier "$mirror_fa" | jq -r .id)" == "$fa_id" ]] || fail "the alias does not find A"
+[[ "$(bin/polaroid repositories | jq '.repositories | length')" == 2 ]] || fail "the alias created another repository"
+echo "2. $mirror_fa finds A ($fa_id); still 2 repositories"
+
+jq -e '.scope == "shared" and .goal == "Run a Go module'\''s tests for a chosen set of packages."' <<<"$(bin/polaroid get "$test_id")" >/dev/null || fail "go.test.run is not shared"
+jq -e --arg a "$fa_id" '.scope == "local" and .applicability.repository == $a and .origin.repository_id == $a' <<<"$(bin/polaroid get "$release_id")" >/dev/null ||
+	fail "service-a.release is not local to A with its origin"
+listed() { bin/polaroid list "$@" | jq -c '[.procedures[] | .canonical_key + ":" + .scope]'; }
+[[ "$(listed repository="$mirror_fa" q=service-a)" == '["service-a.release:local"]' ]] || fail "A does not discover its local procedure"
+[[ "$(listed repository="$repo_fb" scope=shared)" == '["go.test.run:shared"]' ]] || fail "B does not discover the shared procedure"
+[[ "$(listed repository="$repo_fb" scope=local)" == '[]' ]] || fail "B discovers A's local procedure"
+echo "3. go.test.run is shared; service-a.release is local to A, with its origin; B discovers only the shared one"
+
+for b in "$fa_test" "$fb_test"; do
+	jq -e --arg p "$test_id" '.procedure_id == $p' <<<"$(bin/polaroid get-binding "$b")" >/dev/null || fail "binding $b does not bind go.test.run"
+done
+fa_inputs="$(bin/polaroid get-binding-revision "$fa_test" 1 | jq -c .inputs)"
+fb_inputs="$(bin/polaroid get-binding-revision "$fb_test" 1 | jq -c .inputs)"
+[[ "$fa_inputs" != "$fb_inputs" ]] || fail "A and B bind go.test.run with the same inputs"
+echo "4. A and B bind procedure $test_id with $fa_inputs and $fb_inputs"
+
+jq -e --arg t "$test_id" '.applicability.repository != null and .references[0].node.procedure_id == $t and .references[0].node.applicability == {shared: {}}' \
+	<<<"$(bin/polaroid graph "$release_id" 1 "$repo_fa" demo.ci)" >/dev/null || fail "the A-local wrapper does not compose the shared procedure"
+echo "5. service-a.release (local to A) composes go.test.run (shared)"
+
+adopt="$(jq -cn --arg r "$repo_fb" --arg p "$release_id" '{repository: $r, name: "release", procedure_id: $p,
+	revision: {inputs: {}, version_policy: {contextual: {}}, revision_reason: "Try to adopt A'\''s release."}}')"
+if refused="$(bin/polaroid bind <<<"$adopt" 2>/dev/null)"; then fail "B adopted A's local procedure"; fi
+jq -e '.error.code == "invalid_request" and .error.fields[0].field == "procedure_id"' <<<"$refused" >/dev/null || fail "unexpected refusal: $refused"
+refused_mcp="$(mcp_tool create_binding "$(jq -c '{repository, name, procedure_id} + .revision' <<<"$adopt")")"
+jq -e '.error.fields[0].field == "procedure_id"' <<<"$refused_mcp" >/dev/null || fail "MCP let B adopt A's local procedure: $refused_mcp"
+echo "6. B binding service-a.release is refused over HTTP and MCP: $(jq -r '.error.fields[0].message' <<<"$refused")"
+
+ab_commit=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+record_ab() { # record_ab BINDING REPOSITORY INPUTS: a scripted success of go.test.run v1
+	jq -n --arg p "$test_id" --arg b "$1" --arg r "$2" --arg c "$ab_commit" --argjson in "$3" --arg s "$scripted" \
+		'{procedure_id: $p, version: 1, binding_id: $b, binding_revision: 1, repository: $r, commit: $c,
+		  environment: {name: "demo.ci", attributes: {}}, inputs: $in, outcome: "succeeded", evidence: {scripted: $s}}' |
+		bin/polaroid record | jq -r .id
+}
+at_ab() { bin/polaroid resolve "$1" demo.ci "$ab_commit" "$2" | jq -r '"\(.selected_by) verified=\(.graph.target_verification.verified) evidence=\(.graph.selection_evidence.repository // "-")"'; }
+run_fa="$(record_ab "$fa_test" "$repo_fa" "$fa_inputs")"
+[[ "$(at_ab "$fa_test" "$fa_inputs")" == "evidence verified=true evidence=$repo_fa" ]] || fail "A's run does not verify A: $(at_ab "$fa_test" "$fa_inputs")"
+[[ "$(at_ab "$fb_test" "$fb_inputs")" == "latest verified=false evidence=-" ]] || fail "A's run verifies or selects for B: $(at_ab "$fb_test" "$fb_inputs")"
+run_fb="$(record_ab "$fb_test" "$repo_fb" "$fb_inputs")"
+[[ "$(at_ab "$fb_test" "$fb_inputs")" == "evidence verified=true evidence=$repo_fb" ]] || fail "B's own run does not verify B"
+echo "7. at ${ab_commit:0:7}, A's run $run_fa verifies A only; B is verified by its own run $run_fb"
+
+feedback_ab() { bin/polaroid feedback <<<"$(jq -cn --arg s "$scripted" --argjson extra "$1" '{kind: "suggestion", summary: "Scripted report (make demo)", details: $s, reporter: "scripts.demo"} + $extra')" | jq -r .id; }
+fb_service="$(feedback_ab '{"subject":{"type":"service"}}')"
+fb_version="$(feedback_ab "$(jq -cn --arg p "$test_id" --arg e "$run_fa" --arg r "$mirror_fa" '{subject: {type: "procedure", procedure_id: $p, version: 1}, repository: $r, execution_id: $e}')")"
+fb_run="$(mcp_tool report_feedback "$(jq -cn --arg e "$run_fb" --arg s "$scripted" '{kind: "problem", summary: "Scripted report (make demo)", details: $s, reporter: "scripts.demo", subject: {type: "execution", execution_id: $e}}')" | jq -r .id)"
+wrong="$(feedback_ab "$(jq -cn --arg p "$test_id" --arg e "$run_fa" --arg r "$repo_fb" '{subject: {type: "procedure", procedure_id: $p, version: 1}, repository: $r, execution_id: $e}')" 2>/dev/null || true)"
+[[ "$wrong" == null ]] || fail "a report claiming A's execution ran in B was accepted"
+about() { bin/polaroid feedbacks "$@" | jq -c '[.feedback[].id]'; }
+[[ "$(about subject_type=procedure subject_id="$test_id" subject_version=1 repository="$repo_fa")" == "[\"$fb_version\"]" ]] || fail "feedback about go.test.run v1 in A is not found"
+[[ "$(about subject_type=execution subject_id="$run_fb")" == "[\"$fb_run\"]" ]] || fail "feedback about B's run is not found"
+echo "8. reports about the service ($fb_service), go.test.run v1 in A ($fb_version) and B's run ($fb_run); an inconsistent report is refused"
+
+paged() { # paged COMMAND ARGS...: every item ID, one page of one at a time
+	local after="" out
+	while :; do
+		out="$(bin/polaroid "$@" limit=1 ${after:+after=$after})"
+		jq -r '(to_entries[] | select(.value | type == "array") | .value[].id)' <<<"$out"
+		after="$(jq -r '.next // empty' <<<"$out")"
+		[[ -n "$after" ]] || break
+	done
+}
+for list in "feedbacks" "executions $test_id" "repositories"; do
+	# shellcheck disable=SC2086 # list is a command and its arguments
+	all="$(bin/polaroid $list | jq -r '(to_entries[] | select(.value | type == "array") | .value[].id)')"
+	# shellcheck disable=SC2086
+	[[ "$(paged $list)" == "$all" ]] || fail "paging $list skipped or repeated an item"
+	echo "9. $list: $(wc -l <<<"$all" | tr -d ' ') items, one per page, none skipped or repeated"
+done
+
 dev_snapshot() {
 	bin/polaroid get "$verify_id"
 	bin/polaroid get "$checks_id"
 	bin/polaroid executions "$verify_id"
 	bin/polaroid verifications "$verify_id" 1
 	bin/polaroid get-binding "$dev_binding"
+	bin/polaroid repositories
+	bin/polaroid list
+	bin/polaroid bindings "$mirror_fa"
+	bin/polaroid executions
+	bin/polaroid feedbacks
 }
 dev_before="$(dev_snapshot)"
 
-step "19. Restart polaroidd and confirm every record persisted"
+step "20. Restart polaroidd and confirm every record persisted"
 stop_daemon
 start_daemon
 [[ "$(bin/polaroid get-by-key "$key")" == "$history" ]] || fail "history differs after restart"
@@ -437,5 +557,39 @@ start_daemon
 [[ "$(dev_snapshot)" == "$dev_before" ]] || fail "the development procedures, executions or verifications differ after restart"
 echo "every history, binding, execution and verification is byte-for-byte identical after restart"
 stop_daemon
+
+step "21. Upgrade a database written at schema version 6 (#35): history reads back, and registration associates it without rewriting it"
+legacy="$work/schema-6.db"
+for f in internal/storage/sqlite/migrations/000[1-6]_*.sql; do sqlite3 "$legacy" <"$f"; done
+sqlite3 "$legacy" <<'SQL'
+PRAGMA user_version = 6;
+INSERT INTO procedures VALUES ('legacy-p', 'legacy.build', '2026-10-01T12:00:00.000000000Z');
+INSERT INTO procedure_versions VALUES ('legacy-p', 1, 'p', 'm', '{}', '{"steps":["build"]}', 'Written before #35.', '2026-10-01T12:00:00.000000000Z');
+INSERT INTO bindings VALUES ('legacy-b', 'example.com/legacy/service', 'build', 'legacy-p', '2026-10-01T12:00:00.000000000Z');
+INSERT INTO binding_revisions VALUES ('legacy-b', 1, '{"cmd":"make"}', 'contextual', NULL, 'r', '2026-10-01T12:00:00.000000000Z');
+INSERT INTO executions VALUES ('legacy-e', 'legacy-p', 1, 'legacy-b', 1, 'example.com/legacy/service', 'ffffffffffffffffffffffffffffffffffffffff', 'demo.ci', '{}', '{"cmd":"make"}', 'succeeded', '{"exit":0}', '2026-10-01T12:00:01.000000000Z');
+INSERT INTO feedback VALUES ('legacy-f', 'problem', 'Written before subjects existed', 'd', 'scripts.demo', '{}', '2026-10-01T12:00:02.000000000Z');
+SQL
+demo_db=$db
+db=$legacy
+start_daemon
+legacy_procedure='{"id":"legacy-p","canonical_key":"legacy.build","created_at":"2026-10-01T12:00:00Z","latest_version":1,"scope":"unspecified","versions":[{"procedure_id":"legacy-p","version":1,"philosophy":"p","method":"m","contract":{},"instructions":{"steps":["build"]},"revision_reason":"Written before #35.","created_at":"2026-10-01T12:00:00Z"}]}'
+[[ "$(bin/polaroid get legacy-p)" == "$legacy_procedure" ]] || fail "the legacy procedure reads back differently: $(bin/polaroid get legacy-p)"
+legacy_run="$(bin/polaroid get-execution legacy-e)"
+jq -e '.evidence == {exit: 0} and .binding_id == "legacy-b" and .repository == "example.com/legacy/service"' <<<"$legacy_run" >/dev/null || fail "the legacy execution changed: $legacy_run"
+jq -e '.verified and .combination.repository == "example.com/legacy/service"' <<<"$(bin/polaroid verification legacy-e)" >/dev/null || fail "the legacy execution is no longer verified"
+jq -e '.feedback == [.feedback[0]] and (.feedback[0] | has("subject") | not)' <<<"$(bin/polaroid feedbacks subject_type=service)" >/dev/null || fail "the legacy report is not about the service"
+[[ "$(bin/polaroid bindings example.com/legacy/service | jq -r '.bindings[0].id')" == legacy-b ]] || fail "the legacy identifier no longer lists its binding"
+legacy_repo="$(bin/polaroid register <<<'{"identifier":"example.com/legacy/service-renamed","name":"Legacy service"}' | jq -r .id)"
+bin/polaroid alias "$legacy_repo" <<<'{"identifier":"example.com/legacy/service","reason":"The repository was renamed; this is its old identifier."}' >/dev/null || fail "the old identifier could not be added as an alias"
+[[ "$(bin/polaroid bindings example.com/legacy/service-renamed | jq -r '.bindings[] | .id + " " + .repository')" == "legacy-b example.com/legacy/service" ]] ||
+	fail "the renamed repository does not list the legacy binding under its original identifier"
+[[ "$(bin/polaroid get-execution legacy-e)" == "$legacy_run" ]] || fail "registration rewrote the legacy execution"
+stop_daemon
+start_daemon
+[[ "$(bin/polaroid get legacy-p)" == "$legacy_procedure" && "$(bin/polaroid get-execution legacy-e)" == "$legacy_run" ]] || fail "the upgraded database differs after a restart"
+stop_daemon
+db=$demo_db
+echo "a schema-6 store upgraded: its procedure, execution, verification and report read back; registering a new identifier with the old one as alias lists the binding without rewriting it"
 
 printf '\ndemo: PASS\n'

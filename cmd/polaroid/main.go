@@ -36,11 +36,16 @@ type command struct {
 	run      func(c *client, args []string) error
 }
 
+// queryCommands take trailing NAME=VALUE query parameters, such as filters,
+// limit and after (ADR-0021); run receives them in client.query, and min
+// and max count only the other arguments.
+var queryCommands = map[string]bool{"list": true, "bindings": true, "executions": true, "feedbacks": true, "repositories": true}
+
 var commands = []command{
 	{"health", "", "check that the daemon and its storage are available", 0, 0,
 		func(c *client, _ []string) error { return c.do(http.MethodGet, "/healthz", nil) }},
-	{"list", "", "list procedures", 0, 0,
-		func(c *client, _ []string) error { return c.do(http.MethodGet, "/v1/procedures", nil) }},
+	{"list", "[NAME=VALUE...]", "list procedures; NAME is repository, scope, q, limit or after", 0, 0,
+		func(c *client, _ []string) error { return c.do(http.MethodGet, c.path("/v1/procedures", nil), nil) }},
 	{"create", "[FILE]", "create a procedure from request JSON in FILE or stdin", 0, 1,
 		func(c *client, args []string) error { return c.send(http.MethodPost, "/v1/procedures", args) }},
 	{"get", "ID", "show a procedure and its full version history", 1, 1,
@@ -48,6 +53,10 @@ var commands = []command{
 	{"get-by-key", "KEY", "show a procedure, looked up by canonical key", 1, 1,
 		func(c *client, args []string) error {
 			return c.do(http.MethodGet, "/v1/procedures/by-key/"+url.PathEscape(args[0]), nil)
+		}},
+	{"origin", "ID [FILE]", "record a procedure's origin, once, from request JSON in FILE or stdin", 1, 2,
+		func(c *client, args []string) error {
+			return c.send(http.MethodPost, procedurePath(args[0])+"/origin", args[1:])
 		}},
 	{"get-version", "ID N", "show version N of a procedure", 2, 2,
 		func(c *client, args []string) error {
@@ -72,9 +81,9 @@ var commands = []command{
 		func(c *client, args []string) error {
 			return c.send(http.MethodPost, procedurePath(args[0])+"/versions", args[1:])
 		}},
-	{"bindings", "REPOSITORY", "list the bindings of a repository", 1, 1,
+	{"bindings", "REPOSITORY [NAME=VALUE...]", "list the bindings of a repository; NAME is limit or after", 1, 1,
 		func(c *client, args []string) error {
-			return c.do(http.MethodGet, "/v1/bindings?"+url.Values{"repository": {args[0]}}.Encode(), nil)
+			return c.do(http.MethodGet, c.path("/v1/bindings", url.Values{"repository": {args[0]}}), nil)
 		}},
 	{"bind", "[FILE]", "create a binding from request JSON in FILE or stdin", 0, 1,
 		func(c *client, args []string) error { return c.send(http.MethodPost, "/v1/bindings", args) }},
@@ -106,13 +115,15 @@ var commands = []command{
 		func(c *client, args []string) error {
 			return c.do(http.MethodGet, "/v1/executions/"+url.PathEscape(args[0]), nil)
 		}},
-	{"executions", "PROCEDURE_ID [REPOSITORY]", "list a procedure's executions, optionally in one repository", 1, 2,
+	{"executions", "[PROCEDURE_ID [REPOSITORY]] [NAME=VALUE...]", "list executions, optionally of a procedure and in a repository; NAME is version, repository, commit, limit or after", 0, 2,
 		func(c *client, args []string) error {
-			query := url.Values{"procedure_id": {args[0]}}
-			if len(args) == 2 {
-				query.Set("repository", args[1])
+			query := url.Values{}
+			for i, name := range []string{"procedure_id", "repository"} {
+				if len(args) > i {
+					query.Set(name, args[i])
+				}
 			}
-			return c.do(http.MethodGet, "/v1/executions?"+query.Encode(), nil)
+			return c.do(http.MethodGet, c.path("/v1/executions", query), nil)
 		}},
 	{"verification", "ID", "show whether an execution is verified, and its combination", 1, 1,
 		func(c *client, args []string) error {
@@ -134,18 +145,34 @@ var commands = []command{
 		}},
 	{"feedback", "[FILE]", "report a problem with Polaroid, or a suggestion, from request JSON in FILE or stdin", 0, 1,
 		func(c *client, args []string) error { return c.send(http.MethodPost, "/v1/feedback", args) }},
-	{"feedbacks", "[KIND]", "list feedback reports, optionally only KIND (problem or suggestion)", 0, 1,
+	{"feedbacks", "[KIND] [NAME=VALUE...]", "list feedback reports, optionally only KIND (problem or suggestion); NAME is subject_type, subject_id, subject_version, repository, limit or after", 0, 1,
 		func(c *client, args []string) error {
-			path := "/v1/feedback"
+			query := url.Values{}
 			if len(args) == 1 {
-				path += "?" + url.Values{"kind": {args[0]}}.Encode()
+				query.Set("kind", args[0])
 			}
-			return c.do(http.MethodGet, path, nil)
+			return c.do(http.MethodGet, c.path("/v1/feedback", query), nil)
 		}},
 	{"get-feedback", "ID", "show one feedback report", 1, 1,
 		func(c *client, args []string) error {
 			return c.do(http.MethodGet, "/v1/feedback/"+url.PathEscape(args[0]), nil)
 		}},
+	{"register", "[FILE]", "register a repository from request JSON in FILE or stdin", 0, 1,
+		func(c *client, args []string) error { return c.send(http.MethodPost, "/v1/repositories", args) }},
+	{"alias", "ID [FILE]", "add an alias to a repository from request JSON in FILE or stdin", 1, 2,
+		func(c *client, args []string) error {
+			return c.send(http.MethodPost, "/v1/repositories/"+url.PathEscape(args[0])+"/aliases", args[1:])
+		}},
+	{"repository", "ID", "show a registered repository", 1, 1,
+		func(c *client, args []string) error {
+			return c.do(http.MethodGet, "/v1/repositories/"+url.PathEscape(args[0]), nil)
+		}},
+	{"repository-by-identifier", "IDENTIFIER", "show the repository an identifier, canonical or alias, is registered to", 1, 1,
+		func(c *client, args []string) error {
+			return c.do(http.MethodGet, "/v1/repositories/by-identifier/"+args[0], nil)
+		}},
+	{"repositories", "[NAME=VALUE...]", "list registered repositories; NAME is limit or after", 0, 0,
+		func(c *client, _ []string) error { return c.do(http.MethodGet, c.path("/v1/repositories", nil), nil) }},
 }
 
 func usage() string {
@@ -171,6 +198,43 @@ type client struct {
 	http   *http.Client
 	stdin  io.Reader
 	stdout io.Writer
+	query  url.Values
+}
+
+// path returns path with the command's own parameters and the NAME=VALUE
+// parameters given on the command line.
+func (c *client) path(path string, query url.Values) string {
+	all := url.Values{}
+	for _, q := range []url.Values{query, c.query} {
+		for name, values := range q {
+			all[name] = append(all[name], values...)
+		}
+	}
+	if len(all) == 0 {
+		return path
+	}
+	return path + "?" + all.Encode()
+}
+
+// splitQuery separates trailing NAME=VALUE arguments from the others.
+func splitQuery(args []string) ([]string, url.Values, error) {
+	query := url.Values{}
+	var rest []string
+	for _, a := range args {
+		name, value, ok := strings.Cut(a, "=")
+		switch {
+		case !ok:
+			if len(query) > 0 {
+				return nil, nil, usageError(fmt.Sprintf("argument %q follows a NAME=VALUE parameter", a))
+			}
+			rest = append(rest, a)
+		case name == "":
+			return nil, nil, usageError(fmt.Sprintf("parameter %q has no name", a))
+		default:
+			query.Add(name, value)
+		}
+	}
+	return rest, query, nil
 }
 
 func main() {
@@ -225,10 +289,17 @@ func dispatch(server string, timeout time.Duration, name string, args []string, 
 		if cmd.name != name {
 			continue
 		}
+		var query url.Values
+		if queryCommands[name] {
+			var err error
+			if args, query, err = splitQuery(args); err != nil {
+				return err
+			}
+		}
 		if len(args) < cmd.min || len(args) > cmd.max {
 			return usageError(strings.TrimSpace("usage: polaroid " + cmd.name + " " + cmd.args))
 		}
-		c := &client{base: strings.TrimRight(server, "/"), http: &http.Client{Timeout: timeout}, stdin: stdin, stdout: stdout}
+		c := &client{base: strings.TrimRight(server, "/"), http: &http.Client{Timeout: timeout}, stdin: stdin, stdout: stdout, query: query}
 		return cmd.run(c, args)
 	}
 	return usageError(fmt.Sprintf("unknown command %q", name))

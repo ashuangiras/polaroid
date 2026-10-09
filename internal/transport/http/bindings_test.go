@@ -317,13 +317,15 @@ func TestListBindingsQuery(t *testing.T) {
 	}
 
 	for query, field := range map[string]string{
-		"":                                 "repository",
-		"?repository=":                     "repository",
-		"?repository=Scratch":              "repository",
-		"?repository=scratch&repository=x": "repository",
-		"?repo=scratch":                    "",
-		"?repository=scratch&limit=1":      "",
-		"?repository=%zz":                  "",
+		"":                                    "repository",
+		"?repository=":                        "repository",
+		"?repository=Scratch":                 "repository",
+		"?repository=scratch&repository=x":    "repository",
+		"?repo=scratch":                       "",
+		"?repository=scratch&limit=0":         "limit",
+		"?repository=scratch&after=x":         "after",
+		"?repository=scratch&limit=1&after=x": "after",
+		"?repository=%zz":                     "",
 	} {
 		t.Run(query, func(t *testing.T) {
 			resp := s.call(t, http.MethodGet, "/v1/bindings"+query, "")

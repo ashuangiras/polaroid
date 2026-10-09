@@ -18,24 +18,33 @@ type GraphReader interface {
 	// LatestVersion returns the latest version of a procedure, or an error
 	// wrapping ErrNotFound.
 	LatestVersion(ctx context.Context, procedureID string) (int, error)
-	// VersionNode returns a version's canonical key and references, or an
-	// error wrapping ErrNotFound.
-	VersionNode(ctx context.Context, procedureID string, version int) (canonicalKey string, refs []Reference, err error)
+	// VersionNode returns what a walk needs of one version, or an error
+	// wrapping ErrNotFound.
+	VersionNode(ctx context.Context, procedureID string, version int) (NodeVersion, error)
+}
+
+// NodeVersion is what a graph walk reads of one version.
+type NodeVersion struct {
+	CanonicalKey  string
+	Applicability Applicability
+	References    []Reference
 }
 
 // GraphNode is one procedure version in a composition graph, with the exact
 // version selected for it. VerifiedBy is the execution that selected it in
 // the resolution context, if any (ADR-0013), and Evidence says where that
 // execution ran. Target is the status of the node's selected combination at
-// a requested target (ADR-0018); nil without one.
+// a requested target (ADR-0018); nil without one. Applicability is the
+// version's declared scope (ADR-0020).
 type GraphNode struct {
-	ProcedureID  string
-	CanonicalKey string
-	Version      int
-	VerifiedBy   string
-	Evidence     *SelectionEvidence
-	Target       *CombinationStatus
-	Edges        []GraphEdge
+	ProcedureID   string
+	CanonicalKey  string
+	Version       int
+	Applicability Applicability
+	VerifiedBy    string
+	Evidence      *SelectionEvidence
+	Target        *CombinationStatus
+	Edges         []GraphEdge
 }
 
 // Selection says how a version was selected.
@@ -94,18 +103,33 @@ func (e *GraphLimitError) Error() string {
 	return fmt.Sprintf("composition graph has more than %d nodes", e.Max)
 }
 
+// NotApplicableError reports that no version of a procedure that the walk
+// may select is applicable where it is selected (ADR-0020).
+type NotApplicableError struct {
+	ProcedureID string
+	Version     int // the pinned version, or 0 for a contextual selection
+}
+
+func (e *NotApplicableError) Error() string {
+	if e.Version > 0 {
+		return fmt.Sprintf("version %d of procedure %q is not applicable here", e.Version, e.ProcedureID)
+	}
+	return fmt.Sprintf("no version of procedure %q is applicable here", e.ProcedureID)
+}
+
 // ExpandGraph walks the references of a stored version (ADR-0009): pinned
 // references select their pinned version and contextual ones the target's
-// latest version. It returns a *ReferenceCycleError if a path reaches a
-// procedure already on it, or a *GraphLimitError, never a partial graph.
+// latest version that the parent admits (ADR-0020). It returns a
+// *ReferenceCycleError if a path reaches a procedure already on it, or a
+// *GraphLimitError, never a partial graph.
 func ExpandGraph(ctx context.Context, r GraphReader, procedureID string, version int) (GraphNode, error) {
-	key, refs, err := r.VersionNode(ctx, procedureID, version)
+	node, err := r.VersionNode(ctx, procedureID, version)
 	if err != nil {
 		return GraphNode{}, err
 	}
-	root := GraphNode{ProcedureID: procedureID, CanonicalKey: key, Version: version}
+	root := GraphNode{ProcedureID: procedureID, CanonicalKey: node.CanonicalKey, Version: version, Applicability: node.Applicability}
 	w := &walker{r: r, nodes: 1, onPath: map[string]bool{procedureID: true}}
-	if err := w.expand(ctx, &root, refs, 0); err != nil {
+	if err := w.expand(ctx, &root, node.References, 0); err != nil {
 		return GraphNode{}, err
 	}
 	return root, nil
@@ -128,7 +152,7 @@ func (w *walker) expand(ctx context.Context, node *GraphNode, refs []Reference, 
 		}
 	}
 	for _, ref := range refs {
-		version, by, verifiedBy, err := w.choose(ctx, ref, links)
+		version, by, verifiedBy, err := w.choose(ctx, ref, links, node.Applicability.Admits)
 		if err != nil {
 			return fmt.Errorf("resolve reference %q: %w", ref.Name, err)
 		}
@@ -142,13 +166,13 @@ func (w *walker) expand(ctx context.Context, node *GraphNode, refs []Reference, 
 		if w.nodes++; w.nodes > MaxGraphNodes {
 			return &GraphLimitError{Limit: "nodes", Max: MaxGraphNodes}
 		}
-		key, childRefs, err := w.r.VersionNode(ctx, ref.ProcedureID, version)
+		next, err := w.r.VersionNode(ctx, ref.ProcedureID, version)
 		if err != nil {
 			return fmt.Errorf("read reference %q target: %w", ref.Name, err)
 		}
-		child := GraphNode{ProcedureID: ref.ProcedureID, CanonicalKey: key, Version: version, VerifiedBy: verifiedBy}
+		child := GraphNode{ProcedureID: ref.ProcedureID, CanonicalKey: next.CanonicalKey, Version: version, Applicability: next.Applicability, VerifiedBy: verifiedBy}
 		w.onPath[ref.ProcedureID] = true
-		if err := w.expand(ctx, &child, childRefs, depth+1); err != nil {
+		if err := w.expand(ctx, &child, next.References, depth+1); err != nil {
 			return err
 		}
 		w.onPath[ref.ProcedureID] = false
@@ -158,9 +182,18 @@ func (w *walker) expand(ctx context.Context, node *GraphNode, refs []Reference, 
 	return nil
 }
 
-// choose selects the version for ref (ADR-0013). links maps the parent's
-// reference names to the child executions of its evidence, if it has any.
-func (w *walker) choose(ctx context.Context, ref Reference, links map[string]string) (int, Selection, string, error) {
+// choose selects the version for ref (ADR-0013) among the versions admit
+// accepts (ADR-0020). links maps the parent's reference names to the child
+// executions of its evidence, if it has any; a link to a version admit
+// rejects is ignored.
+func (w *walker) choose(ctx context.Context, ref Reference, links map[string]string, admit func(Applicability) bool) (int, Selection, string, error) {
+	admitted := func(version int) (bool, error) {
+		node, err := w.r.VersionNode(ctx, ref.ProcedureID, version)
+		if err != nil {
+			return false, err
+		}
+		return admit(node.Applicability), nil
+	}
 	by := SelectedByPin
 	if ref.VersionPolicy.Kind == PolicyContextual {
 		by = SelectedByEvidence
@@ -170,9 +203,17 @@ func (w *walker) choose(ctx context.Context, ref Reference, links map[string]str
 		if err != nil {
 			return 0, "", "", err
 		}
-		return run.Version, by, id, nil
+		if ok, err := admitted(run.Version); err != nil || ok {
+			return run.Version, by, id, err
+		}
 	}
 	if ref.VersionPolicy.Kind == PolicyPin {
+		if ok, err := admitted(ref.VersionPolicy.Pin); err != nil || !ok {
+			if err == nil {
+				err = &NotApplicableError{ProcedureID: ref.ProcedureID, Version: ref.VersionPolicy.Pin}
+			}
+			return 0, "", "", err
+		}
 		if w.ev == nil {
 			return ref.VersionPolicy.Pin, by, "", nil
 		}
@@ -180,12 +221,15 @@ func (w *walker) choose(ctx context.Context, ref Reference, links map[string]str
 		return ref.VersionPolicy.Pin, by, id, err
 	}
 	if w.ev != nil {
-		version, id, err := w.ev.highest(ctx, ref.ProcedureID)
+		version, id, err := w.ev.highest(ctx, ref.ProcedureID, admitted)
 		if err != nil || id != "" {
 			return version, by, id, err
 		}
 	}
-	latest, err := w.r.LatestVersion(ctx, ref.ProcedureID)
+	latest, err := latestAdmitted(ctx, w.r, ref.ProcedureID, admit)
+	if err == nil && latest == 0 {
+		err = &NotApplicableError{ProcedureID: ref.ProcedureID}
+	}
 	return latest, SelectedByLatest, "", err
 }
 
@@ -204,7 +248,8 @@ func (w *walker) cycleTo(procedureID string, version int) []CycleStep {
 }
 
 // CompositionGraph returns the composition graph of one version, resolved in
-// c when c is not empty.
+// c when c is not empty. With a context, the version must be applicable in
+// its repository (ADR-0020).
 func (s *Service) CompositionGraph(ctx context.Context, procedureID string, version int, c ResolutionContext) (GraphNode, error) {
 	var p problems
 	if version < 1 {
@@ -215,12 +260,24 @@ func (s *Service) CompositionGraph(ctx context.Context, procedureID string, vers
 	if err := p.err(); err != nil {
 		return GraphNode{}, err
 	}
+	if c.Repository != "" {
+		id, err := s.identityID(ctx, c.Repository)
+		if err != nil {
+			return GraphNode{}, err
+		}
+		c.RepositoryID = id
+	}
 	res, err := s.store.Resolve(ctx, procedureID, VersionPolicy{Kind: PolicyPin, Pin: version}, c)
 	if err == nil {
 		return res.Graph, nil
 	}
 	if gerr := graphError(err); gerr != nil {
 		return GraphNode{}, gerr
+	}
+	var na *NotApplicableError
+	if errors.As(err, &na) && na.ProcedureID == procedureID && na.Version == version {
+		return GraphNode{}, &ValidationError{Problems: []FieldProblem{{Field: "repository",
+			Message: fmt.Sprintf("version %d of procedure %q does not apply in repository %q", version, procedureID, c.Repository)}}}
 	}
 	return GraphNode{}, describeLookup(err, fmt.Sprintf("procedure %q version %d", procedureID, version))
 }
