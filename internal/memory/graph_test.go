@@ -33,11 +33,11 @@ func (g fakeGraph) VersionNode(_ context.Context, id string, version int) (NodeV
 }
 
 func pin(name, target string, n int) Reference {
-	return Reference{Name: name, ProcedureID: target, VersionPolicy: VersionPolicy{Kind: PolicyPin, Pin: n}, Inputs: jsontext.Value(`{}`)}
+	return Reference{Name: name, ProcedureID: target, VersionPolicy: VersionPolicy{Kind: PolicyPin, Pin: n}, Inputs: jsontext.Value(passMapping)}
 }
 
 func latest(name, target string) Reference {
-	return Reference{Name: name, ProcedureID: target, VersionPolicy: VersionPolicy{Kind: PolicyContextual}, Inputs: jsontext.Value(`{}`)}
+	return Reference{Name: name, ProcedureID: target, VersionPolicy: VersionPolicy{Kind: PolicyContextual}, Inputs: jsontext.Value(passMapping)}
 }
 
 // shape renders a graph as nested "procedure@version" strings.

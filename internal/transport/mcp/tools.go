@@ -275,7 +275,7 @@ func (t *tools) register(s *sdk.Server) {
 			r, err := t.svc.ReviseBinding(ctx, in.BindingID, memory.BindingRevise{BaseRevision: in.BaseRevision, Config: in.Domain()})
 			return wire.NewBindingRevision(r), flatten(err, "revision.")
 		})
-	add(s, t, "record_execution", "Record one finished run of an exact version. Record children first, then the parent listing them in children.", write,
+	add(s, t, "record_execution", "Record one finished run of an exact version. Record children first, each with exactly the inputs its reference maps from the parent's inputs, then the parent listing them in children.", write,
 		func(ctx context.Context, in wire.ExecutionRecord) (any, error) {
 			e, err := t.svc.RecordExecution(ctx, in.Domain())
 			return wire.NewExecution(e), err

@@ -16,12 +16,16 @@ func (s *testServer) createWith(t *testing.T, key, refs string) string {
 	return decodeStrict[historyJSON](t, resp.body).ID
 }
 
+// passModule is the mapping the shared test references use: it gives the
+// child the parent's module, which every default test execution runs with.
+const passModule = `{"module":{"input":"module"}}`
+
 func pinRef(name, id string, n int) string {
-	return fmt.Sprintf(`{"name": %q, "procedure_id": %q, "version_policy": {"pin": %d}, "inputs": {}}`, name, id, n)
+	return fmt.Sprintf(`{"name": %q, "procedure_id": %q, "version_policy": {"pin": %d}, "inputs": %s}`, name, id, n, passModule)
 }
 
 func latestRef(name, id string) string {
-	return fmt.Sprintf(`{"name": %q, "procedure_id": %q, "version_policy": {"contextual": {}}, "inputs": {}}`, name, id)
+	return fmt.Sprintf(`{"name": %q, "procedure_id": %q, "version_policy": {"contextual": {}}, "inputs": %s}`, name, id, passModule)
 }
 
 func TestCompositionGraphEndpoint(t *testing.T) {
@@ -38,10 +42,10 @@ func TestCompositionGraphEndpoint(t *testing.T) {
 		return fmt.Sprintf(`{"procedure_id":%q,"canonical_key":"go.dependency.add","version":%d,"scope":"unspecified","references":[]}`, leaf, n)
 	}
 	want := fmt.Sprintf(`{"procedure_id":%q,"canonical_key":"compose.root","version":1,"scope":"unspecified","references":[`+
-		`{"name":"old-leaf","version_policy":{"pin":1},"selected_by":"pin","inputs":{},"node":%s},`+
+		`{"name":"old-leaf","version_policy":{"pin":1},"selected_by":"pin","inputs":`+passModule+`,"node":%s},`+
 		`{"name":"mid","version_policy":{"contextual":{}},"selected_by":"latest","inputs":{"module":{"input":"driver"}},"node":`+
 		`{"procedure_id":%q,"canonical_key":"compose.mid","version":1,"scope":"unspecified","references":[`+
-		`{"name":"leaf","version_policy":{"contextual":{}},"selected_by":"latest","inputs":{},"node":%s}]}}]}`,
+		`{"name":"leaf","version_policy":{"contextual":{}},"selected_by":"latest","inputs":`+passModule+`,"node":%s}]}}]}`,
 		root, leafNode(1), mid, leafNode(2))
 	if got := strings.TrimSpace(string(resp.body)); got != want {
 		t.Fatalf("graph =\n %s\nwant\n %s", got, want)

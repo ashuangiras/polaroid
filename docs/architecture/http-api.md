@@ -270,7 +270,7 @@ Content-Type: application/json
   - an abbreviated commit;
   - empty `evidence`.
 
-A parent execution adds `"children": [{"reference": "pinned-child", "execution_id": "…"}, …]`, listing child executions recorded earlier. They are returned in the same order, and the field is absent when there are none. A link to an unknown reference or execution is `400` naming `children[i].reference` or `children[i].execution_id`. So is a child that ran another procedure, a version other than the pin, another repository or commit, or a child already linked to another parent. See [records.md](records.md#subprocedure-execution-implemented).
+A parent execution adds `"children": [{"reference": "pinned-child", "execution_id": "…"}, …]`, listing child executions recorded earlier. They are returned in the same order, and the field is absent when there are none. A link to an unknown reference or execution is `400` naming `children[i].reference` or `children[i].execution_id`. So is a child that ran another procedure, a version other than the pin, another repository or commit, or a child already linked to another parent. So is a child whose `inputs` differ from those the reference maps from the parent's `inputs`, compared canonically; the message gives both ([ADR-0024](decisions/0024-child-inputs-follow-the-reference-mapping.md)), for example `ran with inputs {"service":"b"}, but reference "build" maps the parent's inputs to {"service":"a"} (ADR-0024)`. See [records.md](records.md#subprocedure-execution-implemented).
 
 ### List executions
 
@@ -294,8 +294,8 @@ Verification is derived from stored executions on every read; nothing is stored 
    "children":[{"reference":"latest-child","version":3}]}}
 ```
 
-- `verified` is true when the execution succeeded and every reference of its version has a linked child that is itself verified.
-- `problems` is absent when `verified` is true. Otherwise it lists the direct reasons in this order: `outcome_failed`, then one per reference in version order, either `missing_child` (with `reference`) or `child_not_verified` (with `reference` and the child's `execution_id`). A child's own problems are read from the child.
+- `verified` is true when the execution succeeded and every reference of its version has a linked child that ran with the inputs the reference maps and is itself verified.
+- `problems` is absent when `verified` is true. Otherwise it lists the direct reasons in this order: `outcome_failed`, then per reference in version order, either `missing_child` (with `reference`), or `child_inputs_mismatch` and `child_not_verified`, each with `reference` and the child's `execution_id`, when they apply. `child_inputs_mismatch` reports a stored link whose child ran with other inputs than the reference maps; recording one is refused now, but links stored before the rule, or with direct SQL, are served as stored. A child's own problems are read from the child.
 - `combination` has `repository`, `commit`, `environment.name`, the canonical `inputs`, and `children`. `children` lists each linked child's `reference`, `version` and own `children`, in the version's reference order, and is absent when there are none.
 - An unknown execution is `404`.
 
@@ -432,3 +432,8 @@ Changes for [#37](https://github.com/ashuangiras/polaroid/issues/37) ([ADR-0022]
 - New response fields: `scope` on versions and graph nodes; `repository_id` on executions, execution summaries, selection evidence and combinations of registered identifiers. New query parameter `snapshot` on the procedure and binding lists.
 - Verification, verification lists, target verification and resolution match evidence by repository identity. Unregistered identifiers, and repositories without aliases, behave as before. Executions recorded under an alias now join their repository's combinations (whose `repository` is the canonical identifier), which may change those combinations' status. No execution changes.
 - A cursor reused with another list or other parameters, which used to continue from an arbitrary position, is now `400`. Cursors issued before the change are still accepted.
+
+Changes for [#39](https://github.com/ashuangiras/polaroid/issues/39) ([ADR-0024](decisions/0024-child-inputs-follow-the-reference-mapping.md)), a correctness fix that tightens one rule within `/v1`:
+
+- `POST /v1/executions` with a child whose inputs differ from those its reference maps, which used to be accepted, is `400` naming `children[i].execution_id`.
+- Verification can report the new problem code `child_inputs_mismatch`. A parent whose stored link has such a child, previously verified, is now unverified, and so are its ancestors; verification lists, contextual resolution and target verification follow. Executions and links read back unchanged. No migration.
