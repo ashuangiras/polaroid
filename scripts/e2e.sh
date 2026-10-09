@@ -2,8 +2,8 @@
 # End-to-end test of everything implemented so far. Runs real binaries
 # against a temporary database, records every command with its real output,
 # checks each claim, and writes bin/e2e/REPORT.md.
-# Usage: make e2e (needs bash 4+, curl, jq, sqlite3, and golangci-lint 2.14.0 as
-# GOLANGCI_LINT or on PATH). Exits non-zero if any check fails.
+# Usage: make e2e (needs bash 4+, curl, jq and sqlite3). Exits non-zero if any
+# check fails. It does not rerun `make check`; `make ci` runs both.
 # Variables are read inside the single-quoted commands that show() evaluates.
 # shellcheck disable=SC2034
 set -uo pipefail
@@ -20,7 +20,6 @@ BODY=$OUT/.body.md
 WORK="$(mktemp -d)"
 DB="$WORK/polaroid.db"
 EX=examples/procedures/go-dependency-add
-GCL="${GOLANGCI_LINT:-golangci-lint}"
 PID="" URL="" LOG="" starts=0
 PASS=0 FAIL=0 SEC_PASS=0 SEC_FAIL=0 STEP=0
 SECTIONS=()
@@ -722,17 +721,6 @@ check "schema version is now 6" equal "$LAST" 6
 show 'cp "$DB" "$WORK/newer.db" && sqlite3 "$WORK/newer.db" "PRAGMA user_version = 99" && bin/polaroidd -addr 127.0.0.1:0 -db "$WORK/newer.db"'
 check "newer schema refused with exit 1" rc_is 1
 check "error says the schema is newer than this build supports" out_has "newer than this build supports"
-
-########################################################################
-section "Automated gates" \
-	"The same behaviour is pinned by automated tests on real SQLite files and real HTTP (no mocks, no sleeps): fmt, vet, golangci-lint 2.14.0, build, tests, race tests and the dependency/license gate." \
-	"\`make check\` (pass \`GOLANGCI_LINT=/path/to/golangci-lint-2.14.0\` until it is installed)."
-show "GOFLAGS=-count=1 make check GOLANGCI_LINT=$GCL 2>&1 | grep -E '^(ok|FAIL|---|deps-check|[0-9]+ issues)'"
-check "make check passes" rc_is 0
-check "tests really ran (no cached results)" test "$(grep -c '(cached)' <<<"$LAST")" -eq 0
-check "lint: 0 issues" out_has "0 issues."
-check "deps-check: PASS" out_has "deps-check: PASS"
-check "no package failed" test "$(grep -c '^FAIL' <<<"$LAST")" -eq 0
 close_section
 
 ########################################################################
@@ -752,7 +740,7 @@ close_section
 	echo
 	echo "Helpers used in the commands: \`api METHOD PATH [BODY|@FILE]\` is \`curl -i\` showing the status line, Location/Allow/Content-Type headers and the body; \`race N PATH BODY\` sends N POSTs in parallel and prints each status code; \`bind_req REPO POLICY [NAME] [PROCEDURE_ID]\` and \`rev_req BASE POLICY\` print binding request bodies with \`jq\`; \`digest PATH\` is the first 16 hex digits of the SHA-256 of a GET response. All are defined at the top of the script."
 	echo
-	echo "Not covered manually: the warning when listening on a non-loopback address (exposing an unauthenticated port was avoided; \`cmd/polaroidd\` tests cover it)."
+	echo "Not covered here: the warning when listening on a non-loopback address (exposing an unauthenticated port was avoided; \`cmd/polaroidd\` tests cover it), and the automated gates (fmt, vet, lint, tests, race, dependencies), which \`make check\` runs and \`make ci\` runs alongside this script."
 	cat "$BODY"
 } >"$REPORT"
 rm -f "$BODY"

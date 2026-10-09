@@ -7,6 +7,8 @@ BIN                   := bin
 # Keep in sync with .github/workflows/ci.yml.
 GOLANGCI_LINT_VERSION := 2.14.0
 GOVULNCHECK_VERSION   := v1.8.0
+# 0 skips e2e-mcp's independent-client checks (npm downloads, a local VS Code).
+E2E_INTEROP           ?= 1
 
 .DEFAULT_GOAL := help
 .PHONY: help fmt fmt-check vet lint build test race deps-check check vuln demo run ci e2e e2e-mcp clean
@@ -51,13 +53,14 @@ demo: build ## Demonstrate storage and versioning against a real daemon
 run: build ## Run the daemon; pass flags with ARGS="-addr ... -db ..."
 	./$(BIN)/polaroidd $(ARGS)
 
-ci: check vuln demo ## Everything CI runs
+ci: E2E_INTEROP := 0
+ci: check vuln demo e2e e2e-mcp ## Everything CI runs (end-to-end interop checks off)
 
 e2e: build ## End-to-end report of every feature against a real daemon (bin/e2e/REPORT.md)
-	GOLANGCI_LINT=$(GOLANGCI_LINT) ./scripts/e2e.sh
+	./scripts/e2e.sh
 
-e2e-mcp: build ## End-to-end report of /mcp, with independent clients if npm is available (bin/e2e/MCP-REPORT.md)
-	./scripts/e2e-mcp.sh
+e2e-mcp: build ## End-to-end report of /mcp; E2E_INTEROP=0 skips the independent clients (bin/e2e/MCP-REPORT.md)
+	E2E_INTEROP=$(E2E_INTEROP) ./scripts/e2e-mcp.sh
 
 clean: ## Remove build output
 	rm -rf $(BIN)

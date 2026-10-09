@@ -37,6 +37,7 @@ Polaroid does not run an LLM, and it does not execute instructions. Its code man
 - GNU Make.
 - For `make lint`: [golangci-lint](https://golangci-lint.run) **2.14.0**. To use a binary that is not on `PATH`, pass `make lint GOLANGCI_LINT=/path/to/golangci-lint`.
 - For `make demo`: `jq`.
+- For `make e2e` and `make e2e-mcp`: bash 4 or newer, `curl` and `jq`; `make e2e` also needs the `sqlite3` CLI. `make e2e-mcp` uses npm, when available, for its interoperability checks.
 - For `make vuln`: network access, to download govulncheck v1.8.0 and its vulnerability database.
 
 ## Quick start
@@ -78,8 +79,8 @@ The server's instructions describe the agent loop. The tools, their arguments an
 | `make vuln` | Runs govulncheck. |
 | `make demo` | Runs the live demonstration against a real daemon. |
 | `make run ARGS="..."` | Builds and runs `polaroidd`. |
-| `make ci` | Runs `check`, `vuln` and `demo`, which is exactly what GitHub Actions runs. |
-| `make e2e` / `make e2e-mcp` | Runs the end-to-end scripts against a real daemon and writes a report of every command, its output and each check to `bin/e2e/`. They need bash 4+, `curl` and `jq` (`e2e` also needs `sqlite3` and golangci-lint). `e2e-mcp` tries the TypeScript SDK and MCP Inspector when npm is available. They are not part of `make ci`. |
+| `make ci` | Runs `check`, `vuln`, `demo`, `e2e` and `e2e-mcp` with `E2E_INTEROP=0`, which is exactly what GitHub Actions runs. |
+| `make e2e` / `make e2e-mcp` | Runs the end-to-end scripts against a real daemon and writes a report of every command, its output and each check to `bin/e2e/`. `e2e-mcp` also tries the TypeScript SDK and MCP Inspector when npm is available, and inspects a local VS Code install; `E2E_INTEROP=0` skips those checks and reports them as skipped. |
 
 ## Configuration
 

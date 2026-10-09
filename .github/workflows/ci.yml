@@ -36,5 +36,5 @@ jobs:
           version: v2.14.0
           install-only: true
 
-      - name: Run checks, vulnerability scan and demo
+      - name: Run checks, vulnerability scan, demo and end-to-end scripts
         run: make ci
