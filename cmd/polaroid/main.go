@@ -57,15 +57,31 @@ var commands = []command{
 		func(c *client, args []string) error {
 			return c.send(http.MethodPost, procedurePath(args[0])+"/versions", args[1:])
 		}},
+	{"bindings", "REPOSITORY", "list the bindings of a repository", 1, 1,
+		func(c *client, args []string) error {
+			return c.do(http.MethodGet, "/v1/bindings?"+url.Values{"repository": {args[0]}}.Encode(), nil)
+		}},
+	{"bind", "[FILE]", "create a binding from request JSON in FILE or stdin", 0, 1,
+		func(c *client, args []string) error { return c.send(http.MethodPost, "/v1/bindings", args) }},
+	{"get-binding", "ID", "show a binding and its full revision history", 1, 1,
+		func(c *client, args []string) error { return c.do(http.MethodGet, bindingPath(args[0]), nil) }},
+	{"get-binding-revision", "ID N", "show revision N of a binding", 2, 2,
+		func(c *client, args []string) error {
+			return c.do(http.MethodGet, bindingPath(args[0])+"/revisions/"+url.PathEscape(args[1]), nil)
+		}},
+	{"revise-binding", "ID [FILE]", "append a binding revision from request JSON in FILE or stdin", 1, 2,
+		func(c *client, args []string) error {
+			return c.send(http.MethodPost, bindingPath(args[0])+"/revisions", args[1:])
+		}},
 }
 
 func usage() string {
 	var b strings.Builder
 	b.WriteString("Usage: polaroid [-server URL] [-timeout DURATION] COMMAND [ARGUMENTS]\n\nCommands:\n")
 	for _, cmd := range commands {
-		fmt.Fprintf(&b, "  %-22s %s\n", strings.TrimSpace(cmd.name+" "+cmd.args), cmd.summary)
+		fmt.Fprintf(&b, "  %-28s %s\n", strings.TrimSpace(cmd.name+" "+cmd.args), cmd.summary)
 	}
-	fmt.Fprintf(&b, "  %-22s %s\n", "help", "show this help")
+	fmt.Fprintf(&b, "  %-28s %s\n", "help", "show this help")
 	fmt.Fprintf(&b, "\nThe server is -server, else $POLAROID_URL, else %s.\n", defaultServer)
 	b.WriteString("Each response body is printed to stdout, also when the request fails.\n")
 	b.WriteString("Exit status: 0 success, 1 request failed, 2 usage error.\n")
@@ -224,4 +240,8 @@ func describeError(body []byte) string {
 
 func procedurePath(id string) string {
 	return "/v1/procedures/" + url.PathEscape(id)
+}
+
+func bindingPath(id string) string {
+	return "/v1/bindings/" + url.PathEscape(id)
 }

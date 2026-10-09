@@ -2,7 +2,7 @@
 
 Polaroid stores procedures that agents find, follow, and correct. It manages generic records, versions, and (later) relationships and evidence. It never runs an LLM and never executes instructions: agents do that with their own tools. Task knowledge lives in record content; adding a task never changes code.
 
-This page describes what is **implemented** (increment 1: procedure identity and immutable versions). Planned components are listed at the end and in the [roadmap](../development/roadmap.md).
+This page describes what is **implemented**: procedure identity and immutable versions (increment 1), and repository bindings with immutable revisions (increment 2, [#1](https://github.com/ashuangiras/polaroid/issues/1)). Planned components are listed at the end and in the [roadmap](../development/roadmap.md).
 
 ## Components and dependency direction
 
@@ -21,7 +21,7 @@ flowchart LR
 | Component | Contract | Depends on |
 | --- | --- | --- |
 | `internal/memory` | Record types, validation, version rules, `Service`, and the `Store` interface it needs | Standard library only (`uuid`, `encoding/json/jsontext`) |
-| `internal/storage/sqlite` | Implements `memory.Store`: atomic writes, canonical-key uniqueness, immutability, migrations | `memory`, `database/sql`, `modernc.org/sqlite` |
+| `internal/storage/sqlite` | Implements `memory.Store`: atomic writes, canonical-key and binding-name uniqueness, immutability, migrations | `memory`, `database/sql`, `modernc.org/sqlite` |
 | `internal/transport/http` | The [HTTP API](http-api.md): parsing, JSON-shape checks, error mapping, security checks | `memory`, `net/http` |
 | `cmd/polaroidd` | Configuration, wiring, listener, timeouts, graceful shutdown | all of the above |
 | `cmd/polaroid` | Generic CLI over the HTTP API | Standard library only |
@@ -41,12 +41,12 @@ There is deliberately one interface (`memory.Store`): it lets the domain stay ig
 ## Consistency and concurrency
 
 - **Writes** run in one transaction that takes SQLite's write lock at `BEGIN` (`_txlock=immediate`, `busy_timeout` 5s). Concurrent writers queue; none fails mid-transaction.
-- **Revisions** carry the base version they were derived from. The store checks "base equals latest" and inserts `latest + 1` inside that transaction, so of N concurrent revisions from one base exactly one succeeds and the rest get `409 version_conflict`. Nothing is merged or overwritten.
+- **Revisions** carry the base version they were derived from. The store checks "base equals latest" and inserts `latest + 1` inside that transaction, so of N concurrent revisions from one base exactly one succeeds and the rest get `409 version_conflict`. Nothing is merged or overwritten. Binding revisions follow the same rule with `base_revision` and `409 revision_conflict`.
 - **Reads** are single SQL statements, so a history is always one consistent snapshot (WAL mode lets reads proceed during writes).
-- **Integrity backstops in the schema**: unique canonical keys; triggers reject any `UPDATE` or `DELETE` of procedures and versions and any non-contiguous version number; `CHECK` constraints require `contract` and `instructions` to be JSON objects. These hold even for a client that bypasses `polaroidd`.
+- **Integrity backstops in the schema**: unique canonical keys and `(repository, name)` pairs; triggers reject any `UPDATE` or `DELETE` of procedures, versions, bindings and binding revisions, any non-contiguous version or revision number, and a pin to a version that does not exist; `CHECK` constraints require `contract`, `instructions` and `inputs` to be JSON objects and keep identifiers in their canonical formats. These hold even for a client that bypasses `polaroidd`.
 - **Durability**: `synchronous=FULL`. Schema migrations run in a write transaction at startup; a database newer than the binary is refused.
 
-## Security posture (increment 1)
+## Security posture
 
 There is no authentication or authorization yet ([ADR-0006](decisions/0006-local-unauthenticated-api.md)). The daemon listens on `127.0.0.1:7417` by default, and then:
 
@@ -59,4 +59,4 @@ Binding to a non-loopback address is possible (`-addr`) but logs a warning: anyo
 
 ## Planned components (not implemented)
 
-Repository bindings, subprocedure references and composition (increment 2), and execution evidence with context-specific verification and resolution (increment 3) will extend `memory` and add tables via new migrations. MCP transport would sit beside `transport/http`. See [records.md](records.md#planned-records-not-implemented) and the [roadmap](../development/roadmap.md).
+Subprocedure references and composition (the rest of increment 2), and execution evidence with context-specific verification and resolution (increment 3) will extend `memory` and add tables via new migrations. Contextual binding policies are stored today but resolved only in increment 3. MCP transport would sit beside `transport/http`. See [records.md](records.md#planned-records-not-implemented) and the [roadmap](../development/roadmap.md).

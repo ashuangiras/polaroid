@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Demonstrates procedure identity and immutable version storage against a real
-# polaroidd process: create a procedure, read version 1, append a corrected
-# version 2, confirm both versions remain, confirm a stale revision is
-# rejected, restart the daemon, and confirm the history is unchanged.
+# Demonstrates procedure identity, immutable versions and repository bindings
+# against a real polaroidd process: create a procedure, read version 1, append
+# a corrected version 2, confirm both versions remain, confirm a stale
+# revision is rejected, bind the procedure in two repositories, revise one
+# binding and reject a stale binding revision, restart the daemon, and
+# confirm every history is unchanged.
 #
-# This verifies storage and versioning only. Execution evidence and contextual
-# resolution are not implemented yet (docs/development/roadmap.md).
+# This verifies storage and versioning only. Contextual policies are stored
+# but not resolved, and execution evidence is not implemented yet
+# (docs/development/roadmap.md).
 #
 # Usage: scripts/demo.sh   (run `make build` first, or use `make demo`)
 set -euo pipefail
@@ -102,11 +105,54 @@ jq -e '.error.code == "version_conflict" and .error.latest_version == 2' <<<"$st
 [[ "$(bin/polaroid get "$id")" == "$history" ]] || fail "history changed after a rejected revision"
 echo "exit status $status: $(jq -c .error <<<"$stale")"
 
-step "6. Restart polaroidd and confirm the history persisted"
+# bind_request prints a create-binding request for this procedure.
+bind_request() {
+	jq -n --arg repository "$1" --arg procedure_id "$id" --argjson policy "$2" \
+		'{repository: $repository, name: "add-dependency", procedure_id: $procedure_id,
+		  revision: {inputs: {module: "modernc.org/sqlite"}, version_policy: $policy,
+		             revision_reason: "Use the shared dependency procedure."}}'
+}
+
+step "6. Bind the procedure in two repositories without copying it"
+repo_a=github.com/example/service-a
+repo_b=scratch
+binding_a="$(bind_request "$repo_a" '{"pin": 2}' | bin/polaroid bind)"
+binding_b="$(bind_request "$repo_b" '{"contextual": {}}' | bin/polaroid bind)"
+binding_a_id="$(jq -r .id <<<"$binding_a")"
+binding_b_id="$(jq -r .id <<<"$binding_b")"
+for binding in "$binding_a" "$binding_b"; do
+	jq -e --arg id "$id" '.procedure_id == $id and .latest_revision == 1' <<<"$binding" >/dev/null ||
+		fail "binding does not reference procedure $id: $binding"
+	jq -c '{repository, name, procedure_id, version_policy: .revisions[0].version_policy}' <<<"$binding"
+done
+[[ "$(bin/polaroid get "$id")" == "$history" ]] || fail "binding changed the procedure's history"
+jq -e --arg id "$binding_a_id" '[.bindings[].id] == [$id]' <<<"$(bin/polaroid bindings "$repo_a")" >/dev/null ||
+	fail "$repo_a does not list exactly its own binding"
+echo "both bindings reference procedure $id; its history is unchanged"
+
+step "7. Revise the $repo_a binding, then reject a stale binding revision"
+revise_binding='{"base_revision": 1, "revision": {"inputs": {"module": "modernc.org/sqlite"},
+  "version_policy": {"pin": 1}, "revision_reason": "Pin version 1 until version 2 is verified here."}}'
+revision="$(bin/polaroid revise-binding "$binding_a_id" <<<"$revise_binding")"
+jq -c '{revision, version_policy, revision_reason}' <<<"$revision"
+status=0
+stale="$(bin/polaroid revise-binding "$binding_a_id" <<<"$revise_binding" 2>/dev/null)" || status=$?
+[[ $status -eq 1 ]] || fail "stale binding revision exited $status, want 1"
+jq -e '.error.code == "revision_conflict" and .error.latest_revision == 2' <<<"$stale" >/dev/null ||
+	fail "unexpected stale binding revision response: $stale"
+binding_a_history="$(bin/polaroid get-binding "$binding_a_id")"
+binding_b_history="$(bin/polaroid get-binding "$binding_b_id")"
+jq -e '[.revisions[].revision] == [1, 2]' <<<"$binding_a_history" >/dev/null ||
+	fail "binding history does not hold revisions 1 and 2"
+echo "exit status $status: $(jq -c .error <<<"$stale")"
+
+step "8. Restart polaroidd and confirm every history persisted"
 stop_daemon
 start_daemon
 [[ "$(bin/polaroid get-by-key "$key")" == "$history" ]] || fail "history differs after restart"
-echo "history for $key is byte-for-byte identical after restart"
+[[ "$(bin/polaroid get-binding "$binding_a_id")" == "$binding_a_history" ]] || fail "$repo_a binding differs after restart"
+[[ "$(bin/polaroid get-binding "$binding_b_id")" == "$binding_b_history" ]] || fail "$repo_b binding differs after restart"
+echo "history for $key and both bindings are byte-for-byte identical after restart"
 stop_daemon
 
 printf '\ndemo: PASS\n'

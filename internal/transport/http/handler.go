@@ -44,6 +44,11 @@ func NewHandler(svc *memory.Service, logger *slog.Logger) http.Handler {
 	a.mux.HandleFunc("GET /v1/procedures/{id}", a.getProcedure)
 	a.mux.HandleFunc("POST /v1/procedures/{id}/versions", a.reviseProcedure)
 	a.mux.HandleFunc("GET /v1/procedures/{id}/versions/{version}", a.getVersion)
+	a.mux.HandleFunc("POST /v1/bindings", a.createBinding)
+	a.mux.HandleFunc("GET /v1/bindings", a.listBindings)
+	a.mux.HandleFunc("GET /v1/bindings/{id}", a.getBinding)
+	a.mux.HandleFunc("POST /v1/bindings/{id}/revisions", a.reviseBinding)
+	a.mux.HandleFunc("GET /v1/bindings/{id}/revisions/{revision}", a.getBindingRevision)
 
 	csrf := http.NewCrossOriginProtection()
 	csrf.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -178,6 +183,7 @@ func (a *api) getVersion(w http.ResponseWriter, r *http.Request) {
 func (a *api) fail(w http.ResponseWriter, r *http.Request, err error) {
 	var invalid *memory.ValidationError
 	var conflict *memory.VersionConflictError
+	var revisionConflict *memory.RevisionConflictError
 	switch {
 	case errors.As(err, &invalid):
 		detail := errorDetail{Code: "invalid_request", Message: invalid.Error()}
@@ -187,8 +193,12 @@ func (a *api) fail(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, http.StatusBadRequest, detail)
 	case errors.As(err, &conflict):
 		writeError(w, http.StatusConflict, errorDetail{Code: "version_conflict", Message: conflict.Error(), LatestVersion: conflict.LatestVersion})
+	case errors.As(err, &revisionConflict):
+		writeError(w, http.StatusConflict, errorDetail{Code: "revision_conflict", Message: revisionConflict.Error(), LatestRevision: revisionConflict.LatestRevision})
 	case errors.Is(err, memory.ErrCanonicalKeyExists):
 		writeError(w, http.StatusConflict, errorDetail{Code: "canonical_key_exists", Message: err.Error()})
+	case errors.Is(err, memory.ErrBindingExists):
+		writeError(w, http.StatusConflict, errorDetail{Code: "binding_exists", Message: err.Error()})
 	case errors.Is(err, memory.ErrNotFound):
 		writeError(w, http.StatusNotFound, errorDetail{Code: "not_found", Message: err.Error()})
 	default:
@@ -304,4 +314,12 @@ func procedurePath(id string) string {
 
 func versionPath(procedureID string, number int) string {
 	return procedurePath(procedureID) + "/versions/" + strconv.Itoa(number)
+}
+
+func bindingPath(id string) string {
+	return "/v1/bindings/" + url.PathEscape(id)
+}
+
+func revisionPath(bindingID string, number int) string {
+	return bindingPath(bindingID) + "/revisions/" + strconv.Itoa(number)
 }
