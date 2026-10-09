@@ -150,6 +150,7 @@ func TestCombinationKey(t *testing.T) {
 	f.add("reordered", "p", 1, OutcomeSucceeded, with(`{ "a" : [ 1, "\u00e9" ], "b" : 1e0 }`, `{"os":"darwin"}`))
 	f.add("big", "p", 1, OutcomeSucceeded, with(`{"n":12345678901234567891}`, `{}`))
 	f.add("big-neighbour", "p", 1, OutcomeSucceeded, with(`{"n":12345678901234567892}`, `{}`))
+	f.add("array-reversed", "p", 1, OutcomeSucceeded, with(`{"b":1,"a":["é",1.0]}`, `{"os":"linux"}`))
 
 	key := func(id string) string {
 		t.Helper()
@@ -161,6 +162,9 @@ func TestCombinationKey(t *testing.T) {
 	}
 	if key("base") != key("reordered") {
 		t.Fatal("member order, whitespace, number spelling and string escapes must not split a combination; neither may environment attributes")
+	}
+	if key("base") == key("array-reversed") {
+		t.Fatal("array element order is significant: reordered arrays are different inputs")
 	}
 	if key("big") == key("big-neighbour") {
 		t.Fatal("distinct integers above 2^53 must not be merged")
