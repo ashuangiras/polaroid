@@ -42,6 +42,7 @@ No new product capability: the loop that increments 1 to 4 built is used on real
 
 1. [#27 Run the end-to-end scripts' deterministic checks in CI](https://github.com/ashuangiras/polaroid/issues/27) — **done**
 2. [#28 Polaroid-guided development: reusable development procedures that improve through execution](https://github.com/ashuangiras/polaroid/issues/28) (depends on #27) — **done** ([ADR-0017](../architecture/decisions/0017-development-procedures-as-records.md), [procedural-loop.md](procedural-loop.md))
+3. [#31 Separate selection evidence from target verification in resolution](https://github.com/ashuangiras/polaroid/issues/31) (found while using #28) — **done** ([ADR-0018](../architecture/decisions/0018-selection-evidence-and-target-verification.md))
 
 ## Later (unordered, not yet scoped)
 

@@ -114,6 +114,25 @@ version and outcome; the parent's verification; and the resolution after.
 - **Resolution after:** the same versions, all `selected_by: evidence`, now selected by the session's three executions at `ebe54c7`. That is what the next agent's candidates rest on, at whatever commit it works.
 - **No instruction was wrong**, so the session appended no version; `go.module.checks` is still at version 2.
 
+## Selection evidence versus target verification (#31)
+
+[#31](https://github.com/ashuangiras/polaroid/issues/31) made explicit what the fresh session above relied on: evidence from one commit selects candidates, and only a run at a commit verifies that commit ([ADR-0018](../architecture/decisions/0018-selection-evidence-and-target-verification.md)). The change was verified with the same procedures, in the same store, served by a `polaroidd` built from the change itself.
+
+**Agent-session evidence** (Copilot, `darwin-arm64.local`, clean worktree at `2b2dea65f7ce039dcb60ba51b7036f154cc04649`, effective inputs = the binding's plus `working_tree: clean`). Resolutions with a target were sent as raw MCP JSON-RPC (`tools/call resolve_binding` with `commit` and `inputs`), because VS Code still had the tool schema from before the change; records were written with the `record_execution` tool.
+
+| Step | Result |
+| --- | --- |
+| Resolve, no target | All three nodes `selected_by: evidence`, `selection_evidence.commit` = `ebe54c7` (the fresh session's run). No target fields. |
+| Resolve at `2b2dea6` | Same candidates, evidence `ebe54c7`; `target_verification` at `2b2dea6`: **unverified, no executions** for the parent and both children. The children's effective inputs were derived through the mappings (build: `artifacts`, `build_command`, `working_tree`; checks: `gate_commands`, `working_tree`). |
+| `go.module.build` v1 | `01a121b7-4d81-7d99-940b-6686017880d3` succeeded. |
+| `go.module.checks` v2 | `01a121b9-13a4-7d06-8e79-93aa1b9c6680` succeeded: `go test ./...` 7 `ok`; `make check` `0 issues.`, 14 `ok`, none cached, `deps-check: PASS`; `make vuln` `No vulnerabilities found.`; `make demo` `demo: PASS`; `make e2e` `passed=192 failed=0`; `make e2e-mcp E2E_INTEROP=0` `passed=83 failed=0`. |
+| Resolve at `2b2dea6`, children only | build and checks **verified** at the target; the parent still **unverified**. |
+| `dev.change.verify` v1 | `01a121b9-9776-7f91-89ed-fa3e7d6f9fa7` succeeded, linking both. |
+| Resolve at `2b2dea6` | All three **verified** at the target, and selected by this run's evidence. |
+| Other targets | `ebe54c7` and `d306ae9` stay verified by their own runs (`01a12181-83fb…`, `01a1216f-564c…`). An unseen commit (`cccc…`) is unverified with evidence from `2b2dea6`. The same commit with `working_tree: modified:demo` is unverified. |
+
+**Automated evidence** for the same rules: `make demo` step 17 (two scripted commits), `TestTargetVerificationIsCommitSpecific`, `TestTargetVerificationNeedsTheExactScope`, `TestTargetVerificationFollowsTheSelectedCombination` (domain), `TestTargetVerificationAcrossCommits`, `TestTargetOnTheGraphEndpoint`, `TestTargetRequestsAreChecked` (real SQLite and HTTP), and the MCP and CLI tests.
+
 ## Reproduce
 
 - **Regression replay:** `make demo` (needs `jq`).
