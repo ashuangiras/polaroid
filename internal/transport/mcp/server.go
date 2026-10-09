@@ -22,8 +22,12 @@ import (
 	"github.com/ashuangiras/polaroid/internal/transport/wire"
 )
 
-// ProtocolVersion is the only MCP revision served: the sessionless one.
+// ProtocolVersion is the preferred MCP revision: the sessionless one.
 const ProtocolVersion = "2026-07-28"
+
+// HandshakeProtocolVersion is the older revision also served, through the
+// initialize handshake but still without sessions (ADR-0016).
+const HandshakeProtocolVersion = "2025-11-25"
 
 const instructions = `Polaroid stores procedures: versioned, shared instructions for tasks. Typical loop:
 1. Find a procedure with list_procedures or get_procedure (by id or canonical_key).
@@ -53,7 +57,7 @@ func newServer(svc *memory.Service, logger *slog.Logger) *sdk.Server {
 		Instructions:              instructions,
 		Logger:                    logger,
 		Capabilities:              &sdk.ServerCapabilities{},
-		SupportedProtocolVersions: []string{ProtocolVersion},
+		SupportedProtocolVersions: []string{ProtocolVersion, HandshakeProtocolVersion},
 		// Tools and records change with upgrades and writes, so clients must
 		// never serve a cached discover, list or read result (SEP-2549).
 		SetCacheable: func(_ context.Context, _ sdk.Request, c *sdk.Cacheable) { c.TTLMs = 0 },

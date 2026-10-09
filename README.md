@@ -29,7 +29,7 @@ Polaroid does not run an LLM, and it does not execute instructions. Its code man
 - Records persist in SQLite. Stored versions and binding revisions are immutable, which the database itself enforces.
 - Report on Polaroid itself: an agent or person records a `problem` or a `suggestion` with a one-line summary, details, a reporter name and an optional free-form context (`bin/polaroid feedback`, the MCP tool `report_feedback`). Reports are immutable and untriaged; `bin/polaroid feedbacks [KIND]` lists them for triage elsewhere, for example as GitHub issues.
 - `GET /healthz`, a JSON HTTP API ([contract](docs/architecture/http-api.md)) and a generic CLI.
-- An MCP server at `/mcp` ([contract](docs/architecture/mcp.md)): 20 tools with the same operations, records and error codes as the HTTP API, plus read-only resources for procedures, versions and bindings. It speaks stateless streamable HTTP, protocol revision 2026-07-28.
+- An MCP server at `/mcp` ([contract](docs/architecture/mcp.md)): 20 tools with the same operations, records and error codes as the HTTP API, plus read-only resources for procedures, versions and bindings. It speaks stateless streamable HTTP, protocol revisions 2026-07-28 and 2025-11-25.
 
 ## Prerequisites
 
@@ -57,7 +57,7 @@ Or run the scripted version, which also binds the procedure in two repositories,
 
 ## Use it from an agent (MCP)
 
-While `polaroidd` runs, point any MCP client that supports streamable HTTP and protocol 2026-07-28 at `http://127.0.0.1:7417/mcp`. In VS Code, this repository's [.vscode/mcp.json](.vscode/mcp.json) already does that: start `bin/polaroidd`, and Copilot chat lists the `polaroid` tools. For another workspace, add the same file:
+While `polaroidd` runs, point any MCP client that supports streamable HTTP and protocol 2026-07-28 or 2025-11-25 at `http://127.0.0.1:7417/mcp`. In VS Code, this repository's [.vscode/mcp.json](.vscode/mcp.json) already does that: start `bin/polaroidd`, and Copilot chat lists the `polaroid` tools. For another workspace, add the same file:
 
 ```json
 {"servers": {"polaroid": {"type": "http", "url": "http://127.0.0.1:7417/mcp"}}}

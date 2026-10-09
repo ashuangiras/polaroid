@@ -2,7 +2,7 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
-**As of 2026-10-09:** increments 1 to 4 are implemented. Increment 4 covered [#15](https://github.com/ashuangiras/polaroid/issues/15) (the MCP transport) and [#16](https://github.com/ashuangiras/polaroid/issues/16) (the feedback box). Increment 3 covered [#7](https://github.com/ashuangiras/polaroid/issues/7) (execution records), [#9](https://github.com/ashuangiras/polaroid/issues/9) (subprocedure executions), [#11](https://github.com/ashuangiras/polaroid/issues/11) (context-specific verification) and [#13](https://github.com/ashuangiras/polaroid/issues/13) (contextual resolution from evidence). Increment 2 covered [#1](https://github.com/ashuangiras/polaroid/issues/1) repository bindings, [#2](https://github.com/ashuangiras/polaroid/issues/2) named subprocedure references, and [#3](https://github.com/ashuangiras/polaroid/issues/3) reference-graph validation with bounded traversal. The repository is the private repository [ashuangiras/polaroid](https://github.com/ashuangiras/polaroid), and the local toolchain is Go 1.27.2.
+**As of 2026-10-09:** increments 1 to 4 are implemented, and so are the first three items filed from agent feedback: [#22](https://github.com/ashuangiras/polaroid/issues/22) (member-order documentation), [#20](https://github.com/ashuangiras/polaroid/issues/20) (list results pinned immediately stale) and [#21](https://github.com/ashuangiras/polaroid/issues/21) (protocol 2025-11-25). Increment 4 covered [#15](https://github.com/ashuangiras/polaroid/issues/15) (the MCP transport) and [#16](https://github.com/ashuangiras/polaroid/issues/16) (the feedback box). Increment 3 covered [#7](https://github.com/ashuangiras/polaroid/issues/7) (execution records), [#9](https://github.com/ashuangiras/polaroid/issues/9) (subprocedure executions), [#11](https://github.com/ashuangiras/polaroid/issues/11) (context-specific verification) and [#13](https://github.com/ashuangiras/polaroid/issues/13) (contextual resolution from evidence). Increment 2 covered [#1](https://github.com/ashuangiras/polaroid/issues/1) repository bindings, [#2](https://github.com/ashuangiras/polaroid/issues/2) named subprocedure references, and [#3](https://github.com/ashuangiras/polaroid/issues/3) reference-graph validation with bounded traversal. The repository is the private repository [ashuangiras/polaroid](https://github.com/ashuangiras/polaroid), and the local toolchain is Go 1.27.2.
 
 ## Implemented
 
@@ -56,7 +56,7 @@ This page is a snapshot of the repository's current state, replaced at every han
   - edges report `selected_by` (`pin`, `evidence`, `latest`), and nodes with evidence report `verified_by`. Cycles and limits are still checked on read;
   - `GET /v1/procedures/{id}/versions/{n}/graph?repository=…&environment=…` and `GET /v1/bindings/{id}/resolution?environment=…`. CLI: `graph ID N REPO ENV`, `resolve BINDING_ID ENV`. Nothing is stored and there is no migration.
 - **MCP server** ([#15](https://github.com/ashuangiras/polaroid/issues/15), [ADR-0014](../architecture/decisions/0014-mcp-transport.md), [contract](../architecture/mcp.md)):
-  - `polaroidd` serves `/mcp` on its listener, behind the same loopback-host check and cross-origin protection: stateless streamable HTTP, JSON responses, protocol 2026-07-28 only, 1 MiB bodies. Built on the official Go SDK v1.8.0;
+  - `polaroidd` serves `/mcp` on its listener, behind the same loopback-host check and cross-origin protection: stateless streamable HTTP, JSON responses, protocols 2026-07-28 and 2025-11-25 ([ADR-0016](../architecture/decisions/0016-mcp-protocol-2025-11-25.md): the 2025-11-25 handshake issues no session; older revisions are never served), `ttlMs: 0` on every discover, list and read result (#20), 1 MiB bodies. Built on the official Go SDK v1.8.0;
   - 20 tools with full HTTP API parity (14 annotated read-only). Arguments are flat, named after record fields, decoded strictly (unknown and duplicate members rejected, member order kept); results and error bodies are the HTTP API's, as structured content and text; field errors use the flat names;
   - resource templates `polaroid://procedures/{id}`, `polaroid://procedures/{id}/versions/{version}` and `polaroid://bindings/{id}`;
   - the record shapes, strict decoding and error classification moved into `internal/transport/wire`, shared by both transports; the HTTP tests pass unchanged against it.
@@ -80,7 +80,8 @@ This page is a snapshot of the repository's current state, replaced at every han
 
 | Check | Where | Result |
 | --- | --- | --- |
-| `make ci` with `GOLANGCI_LINT=<golangci-lint 2.14.0 release binary>`, branch `issue-16-feedback-box` | darwin/arm64, local Go 1.27.2 | **Pass.** `0 issues`; all 7 packages with tests `ok` in `go test` and in `go test -race`; `deps-check: PASS (18 modules …)`; `No vulnerabilities found.`; `demo: PASS`. |
+| `make ci` with `GOLANGCI_LINT=<golangci-lint 2.14.0 release binary>`, branch `issue-21-protocol-2025-11-25` | darwin/arm64, local Go 1.27.2 | **Pass.** `0 issues`; all 7 packages with tests `ok` in `go test` and in `go test -race`; `deps-check: PASS (18 modules …)`; `No vulnerabilities found.`; `demo: PASS`. |
+| Live interop for #21 (local manual-test scripts) | darwin/arm64 | **Pass.** TypeScript SDK 1.32.1 negotiated 2025-11-25 with no session, listed 20 tools and called `report_feedback`; MCP Inspector 2.10.1 listed 20 tools; 2025-06-18 requests were refused; a foreign Host and a cross-site request got 403 at 2025-11-25. MCP: 86/86 checks; HTTP and CLI: 197/197. |
 | Live upgrade and agent loop for #16 | darwin/arm64, `polaroidd` on 127.0.0.1:7417 | **Pass.** A schema-5 database with 2 procedures and 3 executions, written earlier from Copilot chat, upgraded to schema 6 with them intact. Over raw MCP JSON-RPC: `server/discover` instructions include `report_feedback`; `tools/list` has 20 tools (14 read-only); a `report_feedback` call stored a report that `get_feedback`, `polaroid get-feedback` and `polaroid feedbacks` return byte-identically. Invalid arguments named `kind`, `summary`, `details`, `reporter` and `context`. |
 | Local manual-test scripts (gitignored), with the new feedback sections | darwin/arm64 | **Pass.** HTTP and CLI: 197/197 checks. MCP: 81/81 checks. |
 | GitHub Actions `ci`, runs 37932118685 (PR for #13) and 37932138196 (`main` at `774c442`) | ubuntu-latest | **Pass.** |
@@ -91,7 +92,7 @@ This page is a snapshot of the repository's current state, replaced at every han
 | GitHub Actions `ci`, runs 37918349018 (PR for #1) and 37918365752 (`main` at `ce8e024`) | ubuntu-latest | **Pass.** |
 | GitHub Actions `ci`, run [37912026720](https://github.com/ashuangiras/polaroid/actions/runs/37912026720) on commit `7fb84cd` (increment 1) | ubuntu-latest, Go 1.27.2, golangci-lint 2.14.0 | **Pass.** |
 | `make lint` with the `golangci-lint` on `PATH` (2.12.2) | darwin/arm64 | **Fails, as designed.** The output reads `golangci-lint 2.14.0 is required, found 2.12.2`. |
-| Test inventory | darwin/arm64, Go 1.27.2 | The source has 148 `Test` functions, and 148 top-level tests passed (plus 229 subtests). |
+| Test inventory | darwin/arm64, Go 1.27.2 | The source has 150 `Test` functions, and 150 top-level tests passed (plus 229 subtests). |
 
 Negative checks showed that the gates detect what they claim to detect. Each mutation below was made temporarily, the expected tests failed, and the mutation was reverted:
 
@@ -123,7 +124,8 @@ Negative checks showed that the gates detect what they claim to detect. Each mut
 - Ignoring the environment when looking up evidence fails `TestGraphResolvedInContext` and `TestBindingResolution`.
 - Decoding MCP tool arguments leniently fails `TestToolArgumentsAreStrict` (an unknown member was accepted).
 - Returning internal error text from an MCP tool fails `TestInternalErrorsAreNotExposed` in `transport/mcp`.
-- Accepting every protocol revision fails `TestOlderProtocolsAreRefused` (a 2025-06-18 client could call tools).
+- Serving 2025-06-18 as well fails `TestOlderProtocolsAreNeverServed`. Dropping 2025-11-25 fails it and `TestHandshakeProtocolWorksWithoutSessions`. Turning sessions on fails `TestHandshakeProtocolWorksWithoutSessions` among others (#21).
+- Setting the list cache hint to `ttlMs: 60000` fails `TestCacheableResultsAreImmediatelyStale` on all four methods (#20).
 - Returning the domain's nested field paths from MCP tools fails `TestToolArgumentsAreStrict`.
 - Accepting a multi-line feedback summary in validation fails `TestFeedbackFieldRules` and `TestInvalidFeedbackIsRejected`; the schema `CHECK` still rejected it (as a `500`). Dropping the newline `CHECK` fails `TestSchemaRejectsInvalidAndChangedFeedback`, as does dropping the context-object `CHECK`.
 - Disabling either feedback immutability trigger fails `TestSchemaRejectsInvalidAndChangedFeedback`.
@@ -146,6 +148,5 @@ Negative checks showed that the gates detect what they claim to detect. Each mut
 
 No increment is scoped beyond increment 4. Candidates, for the owner to choose and file:
 
-- Triage the first real feedback reports from agents using `/mcp`, and turn them into issues.
-- Decide whether `/mcp` should also accept protocol 2025-11-25, which the TypeScript SDK and MCP Inspector need. That would amend ADR-0014.
+- Triage the new feedback reports from agents using `/mcp`, and turn them into issues.
 - Scope an item from the roadmap's "Later" list.
