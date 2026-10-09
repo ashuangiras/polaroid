@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -361,37 +362,51 @@ func TestCacheableResultsAreImmediatelyStale(t *testing.T) {
 			t.Fatal(err)
 		}
 		params["_meta"] = map[string]any{"io.modelcontextprotocol/protocolVersion": mcptransport.ProtocolVersion, "io.modelcontextprotocol/clientCapabilities": map[string]any{}}
-		body, err := jsonv2.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": c.method, "params": params})
-		if err != nil {
-			t.Fatal(err)
-		}
-		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, h.url, bytes.NewReader(body))
-		if err != nil {
-			t.Fatal(err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json, text/event-stream")
-		req.Header.Set("Mcp-Protocol-Version", mcptransport.ProtocolVersion)
-		req.Header.Set("Mcp-Method", c.method)
-		if c.name != "" {
-			req.Header.Set("Mcp-Name", c.name)
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
+		_, body := h.raw(t, mcptransport.ProtocolVersion, c.method, c.name, params)
 		var out struct {
 			Result map[string]jsontext.Value `json:"result"`
 		}
-		err = jsonv2.UnmarshalRead(resp.Body, &out)
-		_ = resp.Body.Close()
-		if err != nil {
-			t.Fatalf("%s: %v", c.method, err)
+		if err := jsonv2.Unmarshal(body, &out); err != nil {
+			t.Fatalf("%s: %v; body %s", c.method, err, body)
 		}
 		if ttl, ok := out.Result["ttlMs"]; !ok || string(ttl) != "0" {
 			t.Errorf("%s: ttlMs = %s (present %v), want 0", c.method, ttl, ok)
 		}
 	}
+}
+
+// raw sends one JSON-RPC request exactly as given; version "" sends no
+// Mcp-Protocol-Version header.
+func (h *harness) raw(t *testing.T, version, method, name string, params map[string]any) (http.Header, []byte) {
+	t.Helper()
+	body, err := jsonv2.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, h.url, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	if version != "" {
+		req.Header.Set("Mcp-Protocol-Version", version)
+	}
+	req.Header.Set("Mcp-Method", method)
+	if name != "" {
+		req.Header.Set("Mcp-Name", name)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	out, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Header.Set("X-Test-Status", strconv.Itoa(resp.StatusCode))
+	return resp.Header, out
 }
 
 func TestResourcesMatchTools(t *testing.T) {
@@ -420,20 +435,81 @@ func TestResourcesMatchTools(t *testing.T) {
 	}
 }
 
-func TestOlderProtocolsAreRefused(t *testing.T) {
+// A 2025-11-25 client uses the initialize handshake, but still gets no
+// session and exactly the same tools and results (ADR-0016).
+func TestHandshakeProtocolWorksWithoutSessions(t *testing.T) {
 	h := newHarness(t)
-	client := sdk.NewClient(&sdk.Implementation{Name: "old-client", Version: "v0"}, nil)
-	session, err := client.Connect(context.Background(),
-		&sdk.StreamableClientTransport{Endpoint: h.url, DisableStandaloneSSE: true, MaxRetries: -1},
-		&sdk.ClientSessionOptions{ProtocolVersion: "2025-06-18"})
-	if err == nil {
-		defer func() { _ = session.Close() }()
-		_, err = session.CallTool(context.Background(), &sdk.CallToolParams{Name: "list_procedures", Arguments: json.RawMessage(`{}`)})
-		if err == nil {
-			t.Fatalf("a 2025-06-18 client could call tools (negotiated %q)", session.InitializeResult().ProtocolVersion)
+	old := h.connect(t, mcptransport.HandshakeProtocolVersion)
+	if v := old.InitializeResult().ProtocolVersion; v != mcptransport.HandshakeProtocolVersion {
+		t.Fatalf("negotiated %q, want %q", v, mcptransport.HandshakeProtocolVersion)
+	}
+	if old.ID() != "" {
+		t.Fatalf("session ID %q, want none", old.ID())
+	}
+	var tools int
+	for _, err := range old.Tools(context.Background(), nil) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		tools++
+	}
+	if tools != len(readTools)+len(writeTools) {
+		t.Fatalf("%d tools at %s, want %d", tools, mcptransport.HandshakeProtocolVersion, len(readTools)+len(writeTools))
+	}
+
+	call := func(s *sdk.ClientSession, name, args string) string {
+		t.Helper()
+		res, err := s.CallTool(context.Background(), &sdk.CallToolParams{Name: name, Arguments: json.RawMessage(args)})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		return textOf(t, res)
+	}
+	created := call(old, "create_procedure", `{"canonical_key":"demo.old","philosophy":"p","method":"m","contract":{"z":1,"a":2},"instructions":{},"revision_reason":"r"}`)
+	id := field(t, created, "id")
+	if got := h.ok(t, "get_procedure", `{"id":"`+id+`"}`); got != created {
+		t.Fatalf("a 2026-07-28 client reads something else:\n%s\n%s", got, created)
+	}
+	fb := call(old, "report_feedback", `{"kind":"suggestion","summary":"s","details":"d","reporter":"old.client"}`)
+	if got := h.ok(t, "get_feedback", `{"id":"`+field(t, fb, "id")+`"}`); got != fb {
+		t.Fatalf("feedback differs across revisions:\n%s\n%s", got, fb)
+	}
+	if got := call(old, "get_procedure", `{"canonical_key":"no.such"}`); !strings.Contains(got, `"code":"not_found"`) {
+		t.Fatalf("error at %s: %s", mcptransport.HandshakeProtocolVersion, got)
+	}
+
+	header, body := h.raw(t, "", "initialize", "", map[string]any{
+		"protocolVersion": mcptransport.HandshakeProtocolVersion, "capabilities": map[string]any{},
+		"clientInfo": map[string]any{"name": "raw", "version": "1"},
+	})
+	if sid := header.Get("Mcp-Session-Id"); sid != "" {
+		t.Fatalf("initialize issued session %q; body %s", sid, body)
+	}
+	if !strings.Contains(string(body), `"protocolVersion":"`+mcptransport.HandshakeProtocolVersion+`"`) {
+		t.Fatalf("initialize = %s", body)
+	}
+}
+
+// No client is ever served at a revision older than 2025-11-25. A request
+// naming one is refused; an older initialize is answered with 2025-11-25,
+// which the client accepts or disconnects from (MCP lifecycle).
+func TestOlderProtocolsAreNeverServed(t *testing.T) {
+	h := newHarness(t)
+	for _, v := range []string{"2025-06-18", "2024-11-05"} {
+		_, body := h.raw(t, "", "initialize", "", map[string]any{
+			"protocolVersion": v, "capabilities": map[string]any{}, "clientInfo": map[string]any{"name": "raw", "version": "1"},
+		})
+		if !strings.Contains(string(body), `"protocolVersion":"`+mcptransport.HandshakeProtocolVersion+`"`) {
+			t.Errorf("initialize at %s = %s, want the counter-offer %s", v, body, mcptransport.HandshakeProtocolVersion)
+		}
+		header, body := h.raw(t, v, "tools/list", "", map[string]any{})
+		if status := header.Get("X-Test-Status"); status != "400" || !strings.Contains(string(body), "Unsupported protocol version") {
+			t.Errorf("tools/list at %s: status %s, body %s; want 400 Unsupported protocol version", v, status, body)
+		}
+		if s := h.connect(t, v); s.InitializeResult().ProtocolVersion != mcptransport.HandshakeProtocolVersion {
+			t.Errorf("a client asking for %s was served at %q", v, s.InitializeResult().ProtocolVersion)
 		}
 	}
-	t.Logf("refused: %v", err)
 }
 
 func TestInternalErrorsAreNotExposed(t *testing.T) {

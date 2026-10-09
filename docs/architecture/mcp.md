@@ -4,8 +4,8 @@
 
 ## Transport
 
-- **Protocol:** streamable HTTP, revision **2026-07-28** only. That revision is sessionless: each POST is a complete request.
-- **Older clients:** a client that cannot negotiate 2026-07-28 is refused during the handshake.
+- **Protocol:** streamable HTTP, revisions **2026-07-28** and **2025-11-25** ([ADR-0016](decisions/0016-mcp-protocol-2025-11-25.md)). 2026-07-28 is sessionless by design. A 2025-11-25 client begins with the `initialize` handshake, but it gets no session either: each POST is a complete request at both revisions, with identical tools, results and errors.
+- **Older clients:** a request naming an older revision is refused with `400 Unsupported protocol version`. An older `initialize` is answered with 2025-11-25, and a client that cannot speak it disconnects.
 - **Responses:** JSON (`application/json`), never SSE. There is no `Mcp-Session-Id`, and `GET` and `DELETE` are not used.
 - **Limits and security:** bodies are limited to 1 MiB. `/mcp` sits behind the same loopback `Host` check and cross-origin protection as the API, with no authentication ([ADR-0006](decisions/0006-local-unauthenticated-api.md)).
 - **Caching:** every `server/discover`, list and `resources/read` result carries `ttlMs: 0`, the protocol's cache hint (SEP-2549) for "immediately stale". The tools change when `polaroidd` is upgraded and records change with every write, so a client must not answer from a cached result. `serverInfo.version` is informational and stays `v1`; it does not change with the tool catalogue.
@@ -82,6 +82,6 @@ Verified clients (2026-10-09):
 | --- | --- |
 | VS Code Copilot chat (VS Code 1.137, bundled `@github/copilot` runtime) | Works: the 17 tools of the time discovered, full workflow run from chat. |
 | Go SDK v1.8.0 client | Works; used by the automated tests. |
-| TypeScript SDK 1.32.1, MCP Inspector 2.10.1 | Refused: their newest protocol is 2025-11-25. |
+| TypeScript SDK 1.32.1, MCP Inspector 2.10.1 | Work at 2025-11-25 since ADR-0016: 20 tools listed, tools called, no session. Before it they were refused. |
 
-Other clients that support streamable HTTP take the same URL. The client must support protocol revision 2026-07-28.
+Other clients that support streamable HTTP take the same URL. The client must support protocol revision 2026-07-28 or 2025-11-25.
