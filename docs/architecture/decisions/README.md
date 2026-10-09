@@ -13,5 +13,6 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0007](0007-repository-identity-for-bindings.md) | Repositories are identified by a canonical path, and bindings by repository and local name | Accepted |
 | [0008](0008-subprocedure-references.md) | Subprocedure references are stored relationally and written only with their version | Accepted |
 | [0009](0009-reference-graph-rules.md) | Reference graphs are acyclic per procedure, bounded, and resolve contextual references to the latest version | Accepted |
+| [0010](0010-execution-records.md) | Executions are immutable after-the-fact records with a named environment and inline evidence | Accepted |
 
 Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.
