@@ -168,6 +168,22 @@ Contextual references and contextual binding policies resolve from verification 
 - **Safety:** evidence can select older versions, so the walk keeps the cycle and size checks of the [composition graph](#composition-graph-implemented) and reports them on read.
 - **Without a context:** the graph endpoint selects as before, with contextual references taking the latest version.
 
+### Feedback report (implemented)
+
+A feedback report tells Polaroid's maintainers about a problem with Polaroid itself, or suggests an improvement. It is written once and never changed or deleted. It has no triage state ([ADR-0015](decisions/0015-feedback-reports.md)).
+
+| Field | Type | Set by | Rules |
+| --- | --- | --- | --- |
+| `id` | string | server | A UUIDv7. |
+| `kind` | string | client | `problem` or `suggestion`. |
+| `summary` | string | client | Required, non-blank, valid UTF-8, and a single line: no line terminator of any kind. |
+| `details` | string | client | Required, non-blank, valid UTF-8. May span lines. |
+| `reporter` | string | client | The agent or person reporting, in the canonical-key format, for example `copilot.vscode`. Not authenticated. |
+| `context` | JSON object | client | Optional and free-form, for example the tool or endpoint involved, or record IDs. Stored like `contract` and never interpreted. IDs in it are not checked. Absent is stored and returned as `{}`. |
+| `created_at` | RFC 3339 timestamp, UTC | server | |
+
+Reporting feedback reads and changes no other record. The database enforces the field rules with `CHECK` constraints, and it rejects `UPDATE` and `DELETE`.
+
 ## Planned records (not implemented)
 
 No records are planned in the current increments. Later work (discovery, aliases, access control, the PoC import) is listed in the [roadmap](../development/roadmap.md), and its records are designed when it is refined into issues.

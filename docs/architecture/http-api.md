@@ -1,6 +1,6 @@
 # HTTP API (v1)
 
-This page is the contract of the API that `polaroidd` serves. It covers only what is implemented: procedure identity and immutable versions with subprocedure references, repository bindings with immutable revisions, and execution records. Field rules are defined in [records.md](records.md). The same operations are available to MCP clients at `/mcp`; see [mcp.md](mcp.md).
+This page is the contract of the API that `polaroidd` serves. It covers only what is implemented: procedure identity and immutable versions with subprocedure references, repository bindings with immutable revisions, execution records, and feedback reports about Polaroid itself. Field rules are defined in [records.md](records.md). The same operations are available to MCP clients at `/mcp`; see [mcp.md](mcp.md).
 
 - **Base URL:** `http://127.0.0.1:7417` by default (`polaroidd -addr`).
 - **Bodies:** every request and response body is UTF-8 JSON. Requests with a body must send `Content-Type: application/json` and stay under 1 MiB.
@@ -29,6 +29,9 @@ This page is the contract of the API that `polaroidd` serves. It covers only wha
 | `GET /v1/executions?procedure_id={id}[&version={n}][&repository={repository}]` | `200 {"executions":[...]}` | List a procedure's executions, oldest first, without `inputs` and `evidence`. Not paginated. |
 | `GET /v1/executions/{id}` | `200` execution | One execution, in full. |
 | `GET /v1/executions/{id}/verification` | `200` verification | Whether one execution is verified, and its combination. |
+| `POST /v1/feedback` | `201` feedback report, with a `Location` header | Report a problem with Polaroid, or suggest an improvement. |
+| `GET /v1/feedback[?kind={kind}]` | `200 {"feedback":[...]}` | List feedback reports, oldest first, in full. Not paginated. |
+| `GET /v1/feedback/{id}` | `200` feedback report | One feedback report. |
 
 `HEAD` is accepted wherever `GET` is.
 
@@ -247,6 +250,28 @@ Verification is derived from stored executions on every read; nothing is stored 
 - `repository`, `commit` (full hash) and `environment` (name) optionally filter the executions. Each may appear once, must be valid, and any other parameter is rejected with `400`.
 - An unknown procedure or version is `404`. A version without executions gets `{"verifications":[]}`.
 
+### Feedback
+
+```http
+POST /v1/feedback
+Content-Type: application/json
+
+{
+  "kind": "problem",
+  "summary": "record_execution rejected a short commit without saying how long it must be",
+  "details": "I passed a 7-character hash.\nThe error named the field but not the rule.",
+  "reporter": "copilot.vscode",
+  "context": {"tool": "record_execution"}
+}
+```
+
+- The response is `201`, with the report as the body and `Location: /v1/feedback/{id}`. The body is the request plus `id` and `created_at`, with `context` compacted, or `{}` when it was absent.
+- `GET /v1/feedback/{id}` returns the same bytes. An unknown report is `404`.
+- An unknown `kind`, a blank or multi-line `summary`, blank `details`, an invalid `reporter` and a `context` that is not an object are each `400`, naming the field.
+- `GET /v1/feedback` lists every report, oldest first, with every field. `kind=problem` or `kind=suggestion` filters the list. `kind` may appear once and must be valid. Any other parameter is `400`. Without reports, the body is `{"feedback":[]}`.
+
+Reports are never changed or deleted, and Polaroid tracks no triage state ([records.md](records.md#feedback-report-implemented)).
+
 ## Errors
 
 Every error is a JSON object of this form:
@@ -259,9 +284,9 @@ Every error is a JSON object of this form:
 
 | Status | `code` | When |
 | --- | --- | --- |
-| 400 | `invalid_request` | Malformed JSON, unknown or duplicate members, wrong JSON types, or a field that fails validation (listed in `fields`). Also a version or revision path segment that is not a positive integer, a pinned version the procedure does not have, a reference to an unknown procedure, an execution that does not match its version or binding, and a missing, repeated, invalid or unknown query parameter when listing bindings, executions or verifications. |
+| 400 | `invalid_request` | Malformed JSON, unknown or duplicate members, wrong JSON types, or a field that fails validation (listed in `fields`). Also a version or revision path segment that is not a positive integer, a pinned version the procedure does not have, a reference to an unknown procedure, an execution that does not match its version or binding, and a missing, repeated, invalid or unknown query parameter when listing bindings, executions, verifications or feedback. |
 | 403 | `forbidden` | The `Host` header does not name a loopback address while the daemon listens on loopback, or a browser sent an unsafe cross-origin request. |
-| 404 | `not_found` | Unknown procedure (also as a binding's or execution's `procedure_id`), canonical key, version, binding (also as an execution's `binding_id`), binding revision, execution or endpoint. |
+| 404 | `not_found` | Unknown procedure (also as a binding's or execution's `procedure_id`), canonical key, version, binding (also as an execution's `binding_id`), binding revision, execution, feedback report or endpoint. |
 | 405 | `method_not_allowed` | The endpoint exists, but not for this method. The `Allow` header lists the methods it accepts. |
 | 409 | `canonical_key_exists` | Another procedure already uses the canonical key. |
 | 409 | `version_conflict` | `base_version` is not the latest version. `latest_version` is included. |
@@ -307,6 +332,9 @@ Example `invalid_request` response:
 | `polaroid executions PROCEDURE_ID [REPOSITORY]` | `GET /v1/executions?procedure_id={id}[&repository={repository}]` |
 | `polaroid verification ID` | `GET /v1/executions/{id}/verification` |
 | `polaroid verifications ID N [REPO [COMMIT [ENV]]]` | `GET /v1/procedures/{id}/versions/{n}/verifications[?repository=…][&commit=…][&environment=…]` |
+| `polaroid feedback [FILE]` | `POST /v1/feedback` |
+| `polaroid feedbacks [KIND]` | `GET /v1/feedback[?kind={kind}]` |
+| `polaroid get-feedback ID` | `GET /v1/feedback/{id}` |
 
 `FILE` defaults to stdin, and so does `-`. The server is `-server URL`, else `$POLAROID_URL`, else `http://127.0.0.1:7417`.
 
@@ -314,4 +342,4 @@ Example `invalid_request` response:
 
 Within `/v1`, changes are additive only: new endpoints, or new optional response fields. Clients must ignore response fields they do not know. Requests stay strict, so a client sending a field the server does not yet support gets `400`, not silent data loss. A breaking change needs a new version prefix and an ADR.
 
-Listing is unbounded today. Pagination, if added, will be opt-in through new query parameters, so existing clients keep receiving complete lists. Until then, the list endpoints for bindings and executions reject any query parameter they do not document.
+Listing is unbounded today. Pagination, if added, will be opt-in through new query parameters, so existing clients keep receiving complete lists. Until then, the list endpoints for bindings, executions and feedback reject any query parameter they do not document.

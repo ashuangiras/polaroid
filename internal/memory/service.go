@@ -90,6 +90,16 @@ type Store interface {
 	// consistent snapshot.
 	Verifications(ctx context.Context, f VerificationFilter) ([]CombinationStatus, error)
 
+	// CreateFeedback stores f, and never modifies or deletes a report.
+	CreateFeedback(ctx context.Context, f Feedback) error
+
+	// Feedback returns one report, or an error wrapping ErrNotFound.
+	Feedback(ctx context.Context, id string) (Feedback, error)
+
+	// ListFeedback returns every report, or only those of kind if it is not
+	// empty, oldest first.
+	ListFeedback(ctx context.Context, kind FeedbackKind) ([]Feedback, error)
+
 	// Ping reports whether the store can serve requests.
 	Ping(ctx context.Context) error
 }

@@ -163,8 +163,8 @@ func (b *syncBuffer) String() string {
 }
 
 var (
-	readTools  = []string{"get_binding", "get_binding_revision", "get_execution", "get_graph", "get_procedure", "get_verification", "get_version", "list_bindings", "list_executions", "list_procedures", "list_verifications", "resolve_binding"}
-	writeTools = []string{"create_binding", "create_procedure", "record_execution", "revise_binding", "revise_procedure"}
+	readTools  = []string{"get_binding", "get_binding_revision", "get_execution", "get_feedback", "get_graph", "get_procedure", "get_verification", "get_version", "list_bindings", "list_executions", "list_feedback", "list_procedures", "list_verifications", "resolve_binding"}
+	writeTools = []string{"create_binding", "create_procedure", "record_execution", "report_feedback", "revise_binding", "revise_procedure"}
 )
 
 func TestToolsAndResourcesAreAdvertised(t *testing.T) {
@@ -173,8 +173,8 @@ func TestToolsAndResourcesAreAdvertised(t *testing.T) {
 	if v := h.session.InitializeResult().ProtocolVersion; v != mcptransport.ProtocolVersion {
 		t.Fatalf("negotiated protocol %q, want %q", v, mcptransport.ProtocolVersion)
 	}
-	if !strings.Contains(h.session.InitializeResult().Instructions, "record_execution") {
-		t.Fatalf("instructions do not describe the loop: %q", h.session.InitializeResult().Instructions)
+	if instr := h.session.InitializeResult().Instructions; !strings.Contains(instr, "record_execution") || !strings.Contains(instr, "report_feedback") {
+		t.Fatalf("instructions do not describe the loop: %q", instr)
 	}
 
 	var read, write []string
@@ -304,6 +304,44 @@ func TestToolArgumentsAreStrict(t *testing.T) {
 	}
 	h.fail(t, "get_procedure", `{"canonical_key":"no.such"}`, "not_found")
 	h.fail(t, "get_graph", `{"procedure_id":"x","version":1,"repository":"github.com/o/r"}`, "invalid_request")
+}
+
+func TestFeedbackThroughTools(t *testing.T) {
+	h := newHarness(t)
+	p := h.ok(t, "create_procedure", `{"canonical_key":"demo.fb","philosophy":"p","method":"m","contract":{},"instructions":{},"revision_reason":"r"}`)
+
+	reported := h.ok(t, "report_feedback", `{"kind":"problem","summary":"get_graph needs both repository and environment",`+
+		`"details":"I passed only repository.\nThe error said so.","reporter":"copilot.vscode","context":{"tool":"get_graph","b":1,"a":2}}`)
+	if !strings.Contains(reported, `"context":{"tool":"get_graph","b":1,"a":2}`) {
+		t.Fatalf("context member order not kept: %s", reported)
+	}
+	id := field(t, reported, "id")
+	if got := h.ok(t, "get_feedback", `{"id":"`+id+`"}`); got != reported {
+		t.Fatalf("get_feedback differs from report_feedback:\n%s\n%s", got, reported)
+	}
+	suggestion := h.ok(t, "report_feedback", `{"kind":"suggestion","summary":"s","details":"d","reporter":"copilot.vscode"}`)
+	if !strings.Contains(suggestion, `"context":{}`) {
+		t.Fatalf("absent context: %s", suggestion)
+	}
+	if got := h.ok(t, "list_feedback", `{}`); got != `{"feedback":[`+reported+`,`+suggestion+`]}` {
+		t.Fatalf("list_feedback = %s", got)
+	}
+	if got := h.ok(t, "list_feedback", `{"kind":"suggestion"}`); got != `{"feedback":[`+suggestion+`]}` {
+		t.Fatalf("list_feedback suggestion = %s", got)
+	}
+
+	if e := h.fail(t, "report_feedback", `{"kind":"bug","summary":"a\nb","details":" ","reporter":"Copilot","context":[]}`, "invalid_request"); !slices.Equal(e.fields(), []string{"kind", "summary", "details", "reporter", "context"}) {
+		t.Fatalf("invalid report: fields %v", e.fields())
+	}
+	h.fail(t, "report_feedback", `{"kind":"problem","summary":"s","details":"d","reporter":"r","status":"open"}`, "invalid_request")
+	if e := h.fail(t, "list_feedback", `{"kind":"bug"}`, "invalid_request"); !slices.Equal(e.fields(), []string{"kind"}) {
+		t.Fatalf("invalid kind: %+v", e)
+	}
+	h.fail(t, "get_feedback", `{"id":"missing"}`, "not_found")
+
+	if got := h.ok(t, "get_procedure", `{"canonical_key":"demo.fb"}`); got != p {
+		t.Fatalf("reporting feedback changed the procedure:\n%s\n%s", got, p)
+	}
 }
 
 func TestResourcesMatchTools(t *testing.T) {

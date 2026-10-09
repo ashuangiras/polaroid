@@ -14,7 +14,7 @@ Agents use Polaroid in a loop:
 
 Polaroid does not run an LLM, and it does not execute instructions. Its code manages generic records, versions, relationships, resolution and evidence. Task knowledge lives in the records, so adding a task never requires a code change.
 
-> **Status: increments 1–3 of the [roadmap](docs/development/roadmap.md) are implemented.** Procedure identity, immutable version storage, subprocedure references with cycle checks and a bounded composition graph, repository bindings, and immutable execution records with their child executions, context-specific verification, and evidence-based contextual resolution work end to end. The current state and the verification evidence are in [docs/development/status.md](docs/development/status.md).
+> **Status: increments 1–4 of the [roadmap](docs/development/roadmap.md) are implemented.** Procedure identity, immutable version storage, subprocedure references with cycle checks and a bounded composition graph, repository bindings, immutable execution records with their child executions, context-specific verification, evidence-based contextual resolution, an MCP server, and a feedback box for reports about Polaroid itself work end to end. The current state and the verification evidence are in [docs/development/status.md](docs/development/status.md).
 
 ## What works today
 
@@ -27,8 +27,9 @@ Polaroid does not run an LLM, and it does not execute instructions. Its code man
 - Resolve from evidence: `bin/polaroid graph ID N REPO ENV` resolves contextual references in a repository and environment. A verified parent's execution fixes its children's versions; otherwise a contextual reference takes the highest version verified there, else the latest. Every edge says how it was selected (`pin`, `evidence` or `latest`), and every node with evidence names the execution that verifies it.
 - Bind a procedure in a repository under a local name, without copying it. A binding's immutable revisions hold the repository's inputs and a version policy: a pinned version, or a contextual policy, which `bin/polaroid resolve BINDING_ID ENV` resolves from evidence. Binding revisions use the same expected-base rule.
 - Records persist in SQLite. Stored versions and binding revisions are immutable, which the database itself enforces.
+- Report on Polaroid itself: an agent or person records a `problem` or a `suggestion` with a one-line summary, details, a reporter name and an optional free-form context (`bin/polaroid feedback`, the MCP tool `report_feedback`). Reports are immutable and untriaged; `bin/polaroid feedbacks [KIND]` lists them for triage elsewhere, for example as GitHub issues.
 - `GET /healthz`, a JSON HTTP API ([contract](docs/architecture/http-api.md)) and a generic CLI.
-- An MCP server at `/mcp` ([contract](docs/architecture/mcp.md)): 17 tools with the same operations, records and error codes as the HTTP API, plus read-only resources for procedures, versions and bindings. It speaks stateless streamable HTTP, protocol revision 2026-07-28.
+- An MCP server at `/mcp` ([contract](docs/architecture/mcp.md)): 20 tools with the same operations, records and error codes as the HTTP API, plus read-only resources for procedures, versions and bindings. It speaks stateless streamable HTTP, protocol revision 2026-07-28.
 
 ## Prerequisites
 

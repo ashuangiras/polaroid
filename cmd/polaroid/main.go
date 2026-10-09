@@ -120,6 +120,20 @@ var commands = []command{
 			}
 			return c.do(http.MethodGet, path, nil)
 		}},
+	{"feedback", "[FILE]", "report a problem with Polaroid, or a suggestion, from request JSON in FILE or stdin", 0, 1,
+		func(c *client, args []string) error { return c.send(http.MethodPost, "/v1/feedback", args) }},
+	{"feedbacks", "[KIND]", "list feedback reports, optionally only KIND (problem or suggestion)", 0, 1,
+		func(c *client, args []string) error {
+			path := "/v1/feedback"
+			if len(args) == 1 {
+				path += "?" + url.Values{"kind": {args[0]}}.Encode()
+			}
+			return c.do(http.MethodGet, path, nil)
+		}},
+	{"get-feedback", "ID", "show one feedback report", 1, 1,
+		func(c *client, args []string) error {
+			return c.do(http.MethodGet, "/v1/feedback/"+url.PathEscape(args[0]), nil)
+		}},
 }
 
 func usage() string {

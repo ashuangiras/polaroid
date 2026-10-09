@@ -604,6 +604,63 @@ func NewVerificationList(statuses []memory.CombinationStatus) VerificationList {
 	return body
 }
 
+// FeedbackRecord is the client-supplied content of a feedback report.
+// context is optional.
+type FeedbackRecord struct {
+	Kind     string         `json:"kind"`
+	Summary  string         `json:"summary"`
+	Details  string         `json:"details"`
+	Reporter string         `json:"reporter"`
+	Context  jsontext.Value `json:"context,omitzero"`
+}
+
+// Domain returns r in domain form.
+func (r FeedbackRecord) Domain() memory.FeedbackRecord {
+	return memory.FeedbackRecord{
+		Kind:     memory.FeedbackKind(r.Kind),
+		Summary:  r.Summary,
+		Details:  r.Details,
+		Reporter: r.Reporter,
+		Context:  r.Context,
+	}
+}
+
+// Feedback is a stored report. context is always present, {} when none was
+// given.
+type Feedback struct {
+	ID        string         `json:"id"`
+	Kind      string         `json:"kind"`
+	Summary   string         `json:"summary"`
+	Details   string         `json:"details"`
+	Reporter  string         `json:"reporter"`
+	Context   jsontext.Value `json:"context"`
+	CreatedAt time.Time      `json:"created_at"`
+}
+
+func NewFeedback(f memory.Feedback) Feedback {
+	return Feedback{
+		ID:        f.ID,
+		Kind:      string(f.Kind),
+		Summary:   f.Summary,
+		Details:   f.Details,
+		Reporter:  f.Reporter,
+		Context:   f.Context,
+		CreatedAt: f.CreatedAt,
+	}
+}
+
+type FeedbackList struct {
+	Feedback []Feedback `json:"feedback"`
+}
+
+func NewFeedbackList(reports []memory.Feedback) FeedbackList {
+	body := FeedbackList{Feedback: make([]Feedback, len(reports))}
+	for i, f := range reports {
+		body.Feedback[i] = NewFeedback(f)
+	}
+	return body
+}
+
 type ErrorBody struct {
 	Error ErrorDetail `json:"error"`
 }
