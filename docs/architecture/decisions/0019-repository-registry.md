@@ -1,6 +1,6 @@
 # 0019. Repositories are registered records with a canonical identifier and explicit aliases
 
-**Status:** Accepted
+**Status:** Accepted; the exact-identifier rule for verification and resolution evidence is superseded by [ADR-0022](0022-repository-identity-in-evidence.md)
 **Date:** 2026-10-09
 
 ## Context

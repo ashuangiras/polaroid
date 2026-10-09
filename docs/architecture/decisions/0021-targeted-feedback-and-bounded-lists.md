@@ -1,6 +1,6 @@
 # 0021. Feedback has a typed subject, and lists are filterable with opt-in keyset pagination
 
-**Status:** Accepted
+**Status:** Accepted; the pagination contract is refined by [ADR-0023](0023-pagination-guarantees-and-scope-labels.md)
 **Date:** 2026-10-09
 
 ## Context

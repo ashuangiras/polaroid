@@ -25,5 +25,7 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0019](0019-repository-registry.md) | Repositories are registered records with a canonical identifier and explicit aliases | Accepted |
 | [0020](0020-procedure-origin-and-applicability.md) | Procedure origin is set once on the identity; applicability is declared per version | Accepted |
 | [0021](0021-targeted-feedback-and-bounded-lists.md) | Feedback has a typed subject, and lists are filterable with opt-in keyset pagination | Accepted |
+| [0022](0022-repository-identity-in-evidence.md) | Evidence matches by registered repository identity | Accepted |
+| [0023](0023-pagination-guarantees-and-scope-labels.md) | Lists are live traversals with bound cursors; discovery can page a snapshot; every version names its scope | Accepted |
 
 Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.
