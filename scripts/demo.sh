@@ -20,7 +20,9 @@
 # success leaving the parent unverified there until the parent is recorded.
 # Fixtures A and B (examples/multi-repository) then show the repository
 # registry, shared and local procedures, applicability, separate evidence,
-# targeted feedback and pagination (#35), all with scripted outcomes.
+# targeted feedback and pagination (#35), all with scripted outcomes, and the
+# loader replays #35's development records: Polaroid's registration, the
+# origins, the shared classification and a procedure local to Polaroid.
 # Finally it restarts the daemon and confirms every record is unchanged, and
 # upgrades a database written at schema version 6.
 #
@@ -533,6 +535,31 @@ for list in "feedbacks" "executions $test_id" "repositories"; do
 	echo "9. $list: $(wc -l <<<"$all" | tr -d ' ') items, one per page, none skipped or repeated"
 done
 
+step "20. The loader replays #35's development records: Polaroid registered, origins, shared classification and a procedure local to Polaroid"
+verify_v2="$(bin/polaroid get-version "$verify_id" 2)"
+full="$(scripts/load-fixtures.sh "$dev" 2>/dev/null)" || fail "the loader did not load $dev"
+jq -e --arg r "$dev_repo" '.repositories | has($r)' <<<"$full" >/dev/null || fail "the loader did not register $dev_repo"
+record_model_id="$(jq -r '.procedures["polaroid.record-model.change"]' <<<"$full")"
+[[ "$(bin/polaroid get-version "$verify_id" 2)" == "$verify_v2" ]] || fail "dev.change.verify version 2 changed"
+jq -e --argjson v2 "$verify_v2" '.applicability == {shared: {}} and (.goal | length > 0)
+	and ([.philosophy, .method, .contract, .instructions, .references] == ($v2 | [.philosophy, .method, .contract, .instructions, .references]))' \
+	<<<"$(bin/polaroid get-version "$verify_id" 3)" >/dev/null || fail "dev.change.verify version 3 is not version 2 classified as shared"
+store="$(bin/polaroid list)"
+[[ "$(scripts/load-fixtures.sh "$dev" 2>/dev/null)" == "$full" && "$(bin/polaroid list)" == "$store" ]] || fail "loading $dev again changed the store"
+[[ "$(bin/polaroid list scope=shared | jq -r '[.procedures[].canonical_key] | join(" ")')" == "dev.change.verify go.module.build go.module.checks go.test.run" ]] ||
+	fail "unexpected shared procedures: $(bin/polaroid list scope=shared)"
+[[ "$(bin/polaroid list "repository=$dev_repo" scope=local | jq -r '[.procedures[].canonical_key] | join(" ")')" == polaroid.record-model.change ]] ||
+	fail "polaroid.record-model.change is not local to $dev_repo"
+bin/polaroid list repository=example.com/fixtures/go-service | jq -e 'all(.procedures[]; .canonical_key != "polaroid.record-model.change")' >/dev/null ||
+	fail "Polaroid's local procedure is offered to another repository"
+jq -e --arg r "$(jq -r --arg r "$dev_repo" '.repositories[$r]' <<<"$full")" '.origin.repository_id == $r' <<<"$(bin/polaroid get "$record_model_id")" >/dev/null ||
+	fail "polaroid.record-model.change has no origin in $dev_repo"
+echo "dev.change.verify version 3 is version 2 declared shared; a second load changed nothing; polaroid.record-model.change is local to $dev_repo"
+echo "a new version without evidence does not move selection: the evidenced versions stay selected"
+expect_dev_target "$dev_commit" "root@2 true $parent_c
+build@1 true $build_c
+checks@2 true $checks_c"
+
 dev_snapshot() {
 	bin/polaroid get "$verify_id"
 	bin/polaroid get "$checks_id"
@@ -547,7 +574,7 @@ dev_snapshot() {
 }
 dev_before="$(dev_snapshot)"
 
-step "20. Restart polaroidd and confirm every record persisted"
+step "21. Restart polaroidd and confirm every record persisted"
 stop_daemon
 start_daemon
 [[ "$(bin/polaroid get-by-key "$key")" == "$history" ]] || fail "history differs after restart"
@@ -558,7 +585,7 @@ start_daemon
 echo "every history, binding, execution and verification is byte-for-byte identical after restart"
 stop_daemon
 
-step "21. Upgrade a database written at schema version 6 (#35): history reads back, and registration associates it without rewriting it"
+step "22. Upgrade a database written at schema version 6 (#35): history reads back, and registration associates it without rewriting it"
 legacy="$work/schema-6.db"
 for f in internal/storage/sqlite/migrations/000[1-6]_*.sql; do sqlite3 "$legacy" <"$f"; done
 sqlite3 "$legacy" <<'SQL'
