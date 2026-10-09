@@ -4,7 +4,7 @@ Increments are ordered. Issue-ready items are filed as [GitHub issues](https://g
 
 > **Work-item authority.** GitHub Issues are the source of truth for scope and acceptance criteria. This roadmap keeps only order and links for filed items, never a second copy. Items not yet issue-ready stay here until they are refined and filed.
 
-Increments 1 to 5 and the items from agent feedback are implemented. Nothing below them is.
+Increments 1 to 6 and the items from agent feedback are implemented. Nothing below them is.
 
 ## Increment 1 — Procedure identity and immutable versions (done)
 
@@ -45,10 +45,14 @@ No new product capability: the loop that increments 1 to 4 built is used on real
 3. [#31 Separate selection evidence from target verification in resolution](https://github.com/ashuangiras/polaroid/issues/31) (found while using #28) — **done** ([ADR-0018](../architecture/decisions/0018-selection-evidence-and-target-verification.md))
 4. [#33 Teach dev.change.verify explicit target verification, and follow it](https://github.com/ashuangiras/polaroid/issues/33) (depends on #31) — **done**, a record change ([procedural-loop.md](procedural-loop.md#target-aware-procedure-33))
 
+## Increment 6 — Several repositories in one catalog (done)
+
+1. [#35 Organize procedural knowledge, execution history and feedback for use by several repositories](https://github.com/ashuangiras/polaroid/issues/35) — **done** ([ADR-0019](../architecture/decisions/0019-repository-registry.md), [ADR-0020](../architecture/decisions/0020-procedure-origin-and-applicability.md), [ADR-0021](../architecture/decisions/0021-targeted-feedback-and-bounded-lists.md), [procedural-loop.md](procedural-loop.md#several-repositories-35))
+
 ## Later (unordered, not yet scoped)
 
+- Onboard a second real repository: register it, bind the shared development procedures with its own commands, and verify one of its commits through them.
 - Semantic discovery and duplicate suggestions for procedures.
-- Aliases and identity consolidation (explicit records; history is never rewritten).
+- Merging two registered repositories (identity consolidation); aliases exist since #35, but a merge does not.
 - Access control for reads and writes ([ADR-0006](../architecture/decisions/0006-local-unauthenticated-api.md)).
-- Opt-in pagination for `GET /v1/procedures`.
 - **Import from the earlier Python/SQLite PoC — blocked:** no source database or schema is available in this environment. Compatibility is not claimed; scope the importer only once a real database or schema is provided.
