@@ -1,4 +1,5 @@
-// Command polaroidd serves Polaroid's HTTP API over a SQLite database file.
+// Command polaroidd serves Polaroid's HTTP API, and MCP at /mcp, over a
+// SQLite database file.
 //
 // Usage:
 //
@@ -26,6 +27,7 @@ import (
 	"github.com/ashuangiras/polaroid/internal/memory"
 	"github.com/ashuangiras/polaroid/internal/storage/sqlite"
 	httptransport "github.com/ashuangiras/polaroid/internal/transport/http"
+	mcptransport "github.com/ashuangiras/polaroid/internal/transport/mcp"
 )
 
 const (
@@ -108,7 +110,11 @@ func run(ctx context.Context, cfg config, logger *slog.Logger, ready func(net.Ad
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
-	handler := httptransport.NewHandler(memory.NewService(store), logger)
+	svc := memory.NewService(store)
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", mcptransport.NewHandler(svc, logger))
+	mux.Handle("/", httptransport.NewHandler(svc, logger))
+	var handler http.Handler = mux
 	if tcp, ok := ln.Addr().(*net.TCPAddr); ok && tcp.IP.IsLoopback() {
 		handler = httptransport.RequireLoopbackHost(handler)
 	} else {

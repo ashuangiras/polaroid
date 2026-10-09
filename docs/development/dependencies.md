@@ -1,6 +1,6 @@
 # Dependencies and licenses
 
-Polaroid keeps third-party code to a minimum. The `polaroid` CLI links only the Go standard library. `polaroidd` links one direct dependency, the SQLite driver, and the modules that the driver needs.
+Polaroid keeps third-party code to a minimum. The `polaroid` CLI links only the Go standard library. `polaroidd` links two direct dependencies, the SQLite driver and the MCP Go SDK, and the modules that they need.
 
 `make deps-check` ([scripts/check-deps.sh](../../scripts/check-deps.sh)) enforces this file. The check fails if any of these is true:
 
@@ -8,13 +8,13 @@ Polaroid keeps third-party code to a minimum. The `polaroid` CLI links only the 
 - A module is listed at a version other than the one in use.
 - A row lists a module that is no longer compiled.
 - A module's license file does not read as the license listed for it.
-- A listed license is not one of MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0 or ISC.
+- A listed license is not one of MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0 or ISC. A license file holding both the Apache-2.0 and MIT texts is listed as `Apache-2.0 AND MIT`, and both parts must be allowed.
 
 To add a dependency, follow the `go.dependency.add` example procedure in [examples/procedures](../../examples/procedures). Then add a row here in the same change.
 
 ## Go modules compiled into Polaroid
 
-Licenses were verified on 2026-10-09. Each module's own LICENSE file in the Go module cache was read and classified, and the result was cross-checked against the `LICENSE-3RD-PARTY.md` notice that modernc.org/sqlite ships.
+Licenses were verified on 2026-10-09. Each module's own LICENSE file in the Go module cache was read and classified. For the modernc modules, the result was cross-checked against the `LICENSE-3RD-PARTY.md` notice that modernc.org/sqlite ships.
 
 | Module | Version | License | Compiled on | Why |
 | --- | --- | --- | --- | --- |
@@ -28,6 +28,14 @@ Licenses were verified on 2026-10-09. Each module's own LICENSE file in the Go m
 | `golang.org/x/sys` | `v0.48.0` | BSD-3-Clause | linux, darwin | System calls for modernc.org/libc and modernc.org/memory. |
 | `github.com/mattn/go-isatty` | `v0.0.24` | MIT | darwin | Needed by modernc.org/libc on darwin. |
 | `github.com/ncruces/go-strftime` | `v1.0.0` | MIT | darwin | Needed by modernc.org/libc on darwin. |
+| `github.com/modelcontextprotocol/go-sdk` | `v1.8.0` | Apache-2.0 AND MIT | linux, darwin | Direct: the official MCP Go SDK, for the `/mcp` endpoint ([ADR-0014](../architecture/decisions/0014-mcp-transport.md)). The project is relicensing from MIT to Apache-2.0. Its LICENSE holds both texts: new contributions are Apache-2.0, and older ones stay MIT until relicensed. |
+| `github.com/google/jsonschema-go` | `v0.4.3` | MIT | linux, darwin | JSON Schema inference for tool input schemas; needed by the MCP SDK. |
+| `github.com/segmentio/encoding` | `v0.5.4` | MIT | linux, darwin | JSON encoding inside the MCP SDK. |
+| `github.com/segmentio/asm` | `v1.1.3` | MIT | linux, darwin | Needed by github.com/segmentio/encoding. |
+| `github.com/yosida95/uritemplate/v3` | `v3.0.2` | BSD-3-Clause | linux, darwin | RFC 6570 URI templates for MCP resource templates; needed by the MCP SDK. |
+| `golang.org/x/oauth2` | `v0.35.0` | BSD-3-Clause | linux, darwin | Compiled in through the MCP SDK's authorization support, which Polaroid does not use. |
+| `golang.org/x/sync` | `v0.23.0` | BSD-3-Clause | linux, darwin | Needed by the MCP SDK. |
+| `golang.org/x/time` | `v0.15.0` | BSD-3-Clause | linux, darwin | Rate limiting inside the MCP SDK. |
 
 The module graph also references modules that are never compiled into Polaroid. modernc.org/sqlite's notice lists them, for example `github.com/hashicorp/golang-lru/v2` (MPL-2.0). `go.sum` holds checksums for some of their `go.mod` files. They carry no license obligation for Polaroid's binaries, and the check above ignores them by design.
 

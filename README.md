@@ -28,6 +28,7 @@ Polaroid does not run an LLM, and it does not execute instructions. Its code man
 - Bind a procedure in a repository under a local name, without copying it. A binding's immutable revisions hold the repository's inputs and a version policy: a pinned version, or a contextual policy, which `bin/polaroid resolve BINDING_ID ENV` resolves from evidence. Binding revisions use the same expected-base rule.
 - Records persist in SQLite. Stored versions and binding revisions are immutable, which the database itself enforces.
 - `GET /healthz`, a JSON HTTP API ([contract](docs/architecture/http-api.md)) and a generic CLI.
+- An MCP server at `/mcp` ([contract](docs/architecture/mcp.md)): 17 tools with the same operations, records and error codes as the HTTP API, plus read-only resources for procedures, versions and bindings. It speaks stateless streamable HTTP, protocol revision 2026-07-28.
 
 ## Prerequisites
 
@@ -52,6 +53,16 @@ kill %1                                      # graceful shutdown
 ```
 
 Or run the scripted version, which also binds the procedure in two repositories, restarts the daemon and checks that every history persisted: `make demo`.
+
+## Use it from an agent (MCP)
+
+While `polaroidd` runs, point any MCP client that supports streamable HTTP at `http://127.0.0.1:7417/mcp`. For VS Code, add this to `.vscode/mcp.json`:
+
+```json
+{"servers": {"polaroid": {"type": "http", "url": "http://127.0.0.1:7417/mcp"}}}
+```
+
+The server's instructions describe the agent loop. The tools, their arguments and their errors are in [docs/architecture/mcp.md](docs/architecture/mcp.md).
 
 ## Commands
 
@@ -88,8 +99,10 @@ The CLI uses `-server URL`, else `$POLAROID_URL`, else `http://127.0.0.1:7417`. 
 | `internal/memory` | Domain records and version rules |
 | `internal/storage/sqlite` | SQLite persistence |
 | `internal/transport/http` | The HTTP API |
+| `internal/transport/mcp` | The MCP server at `/mcp` |
+| `internal/transport/wire` | Record and error JSON shapes shared by both transports |
 | [examples/](examples) | Example procedure records |
-| [docs/architecture/](docs/architecture) | [Overview](docs/architecture/overview.md), [records](docs/architecture/records.md), [HTTP API](docs/architecture/http-api.md), [decisions](docs/architecture/decisions/README.md) |
+| [docs/architecture/](docs/architecture) | [Overview](docs/architecture/overview.md), [records](docs/architecture/records.md), [HTTP API](docs/architecture/http-api.md), [MCP](docs/architecture/mcp.md), [decisions](docs/architecture/decisions/README.md) |
 | [docs/development/](docs/development) | [Workflow](docs/development/workflow.md), [status](docs/development/status.md), [roadmap](docs/development/roadmap.md), [dependencies](docs/development/dependencies.md) |
 
 ## Module path and license
