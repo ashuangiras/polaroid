@@ -11,11 +11,14 @@ inventory="${DEPS_INVENTORY:-docs/development/dependencies.md}"
 platforms="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64"
 allowlist=" MIT BSD-2-Clause BSD-3-Clause Apache-2.0 ISC "
 
-# classify prints the SPDX identifier recognised in a license file, or "unknown".
+# classify prints the SPDX expression recognised in a license file, or
+# "unknown". A file holding both the Apache-2.0 and MIT texts (a project
+# relicensing, such as the MCP Go SDK) is "Apache-2.0 AND MIT".
 classify() {
 	local text
 	text="$(tr -s '[:space:]' ' ' <"$1")"
 	case "$text" in
+	*"Apache License"*"Version 2.0"*"Permission is hereby granted, free of charge"*) echo "Apache-2.0 AND MIT" ;;
 	*"Permission is hereby granted, free of charge"*) echo MIT ;;
 	*"Apache License"*"Version 2.0"*) echo Apache-2.0 ;;
 	*"Redistribution and use in source and binary forms"*"Neither the name"*) echo BSD-3-Clause ;;
@@ -32,7 +35,9 @@ trap 'rm -rf "$canary"' EXIT
 printf 'Permission is hereby granted,\n  free of charge, to any person\n' >"$canary/mit"
 printf 'Redistribution and use in source and binary\nforms ... 3. Neither the name of\n' >"$canary/bsd3"
 printf 'All rights reserved.\n' >"$canary/none"
-if [[ "$(classify "$canary/mit")" != MIT || "$(classify "$canary/bsd3")" != BSD-3-Clause || "$(classify "$canary/none")" != unknown ]]; then
+printf 'Apache License\n Version 2.0, January 2004 ... MIT License ... Permission is hereby granted,\nfree of charge\n' >"$canary/both"
+if [[ "$(classify "$canary/mit")" != MIT || "$(classify "$canary/bsd3")" != BSD-3-Clause || "$(classify "$canary/none")" != unknown ||
+	"$(classify "$canary/both")" != "Apache-2.0 AND MIT" ]]; then
 	echo "deps-check: license classifier canary failed" >&2
 	exit 1
 fi
@@ -48,7 +53,7 @@ used="$(printf '%s\n' "$used" | sed '/^$/d' | sort -u)"
 # Canary: the SQLite driver is compiled, so an empty or partial list is a bug.
 grep -q '^modernc.org/sqlite ' <<<"$used" || { echo "deps-check: module list is implausible: [$used]" >&2; exit 1; }
 
-documented="$(sed -n 's/^| `\([^`]*\)` | `\([^`]*\)` | \([A-Za-z0-9.-]*\) |.*$/\1 \2 \3/p' "$inventory" | sort -u)"
+documented="$(sed -n 's/^| `\([^`]*\)` | `\([^`]*\)` | \([A-Za-z0-9.][A-Za-z0-9. -]*[A-Za-z0-9]\) |.*$/\1 \2 \3/p' "$inventory" | sort -u)"
 
 failures=0
 problem() {
@@ -57,14 +62,16 @@ problem() {
 }
 
 while read -r mod ver; do
-	license="$(awk -v m="$mod" -v v="$ver" '$1 == m && $2 == v { print $3 }' <<<"$documented")"
+	license="$(awk -v m="$mod" -v v="$ver" '$1 == m && $2 == v { $1 = ""; $2 = ""; sub(/^ +/, ""); print }' <<<"$documented")"
 	if [[ -z "$license" ]]; then
 		problem "$mod $ver is compiled but not listed in $inventory"
 		continue
 	fi
-	if [[ "$allowlist" != *" $license "* ]]; then
-		problem "$mod is listed as $license, which is not on the permissive allowlist"
-	fi
+	for part in ${license// AND / }; do
+		if [[ "$allowlist" != *" $part "* ]]; then
+			problem "$mod is listed as $license, and $part is not on the permissive allowlist"
+		fi
+	done
 	go mod download "$mod@$ver"
 	dir="$(go list -m -f '{{.Dir}}' "$mod")"
 	file=""

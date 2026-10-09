@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/ashuangiras/polaroid/internal/memory"
+	"github.com/ashuangiras/polaroid/internal/transport/wire"
 )
 
 func (a *api) createBinding(w http.ResponseWriter, r *http.Request) {
@@ -16,14 +17,14 @@ func (a *api) createBinding(w http.ResponseWriter, r *http.Request) {
 		Repository:  body.Repository,
 		Name:        body.Name,
 		ProcedureID: body.ProcedureID,
-		Config:      body.Revision.config(),
+		Config:      body.Revision.Domain(),
 	})
 	if err != nil {
 		a.fail(w, r, err)
 		return
 	}
 	w.Header().Set("Location", bindingPath(h.Binding.ID))
-	a.respond(w, r, http.StatusCreated, newBindingHistoryBody(h))
+	a.respond(w, r, http.StatusCreated, wire.NewBindingHistory(h))
 }
 
 // listBindings requires the repository query parameter and rejects any
@@ -38,11 +39,7 @@ func (a *api) listBindings(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	body := bindingListBody{Bindings: make([]bindingBody, len(bindings))}
-	for i, b := range bindings {
-		body.Bindings[i] = newBindingBody(b)
-	}
-	a.respond(w, r, http.StatusOK, body)
+	a.respond(w, r, http.StatusOK, wire.NewBindingList(bindings))
 }
 
 func (a *api) getBinding(w http.ResponseWriter, r *http.Request) {
@@ -51,7 +48,7 @@ func (a *api) getBinding(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	a.respond(w, r, http.StatusOK, newBindingHistoryBody(h))
+	a.respond(w, r, http.StatusOK, wire.NewBindingHistory(h))
 }
 
 func (a *api) resolveBinding(w http.ResponseWriter, r *http.Request) {
@@ -64,15 +61,7 @@ func (a *api) resolveBinding(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	a.respond(w, r, http.StatusOK, bindingResolutionBody{
-		BindingID:       res.Binding.ID,
-		BindingRevision: res.Revision.Number,
-		Repository:      res.Binding.Repository,
-		Environment:     environmentName{Name: res.Environment},
-		VersionPolicy:   newVersionPolicyBody(res.Revision.VersionPolicy),
-		SelectedBy:      string(res.SelectedBy),
-		Graph:           newGraphNodeBody(res.Graph),
-	})
+	a.respond(w, r, http.StatusOK, wire.NewBindingResolution(res))
 }
 
 func (a *api) reviseBinding(w http.ResponseWriter, r *http.Request) {
@@ -82,14 +71,14 @@ func (a *api) reviseBinding(w http.ResponseWriter, r *http.Request) {
 	}
 	rev, err := a.svc.ReviseBinding(r.Context(), r.PathValue("id"), memory.BindingRevise{
 		BaseRevision: body.BaseRevision,
-		Config:       body.Revision.config(),
+		Config:       body.Revision.Domain(),
 	})
 	if err != nil {
 		a.fail(w, r, err)
 		return
 	}
 	w.Header().Set("Location", revisionPath(rev.BindingID, rev.Number))
-	a.respond(w, r, http.StatusCreated, newBindingRevisionBody(rev))
+	a.respond(w, r, http.StatusCreated, wire.NewBindingRevision(rev))
 }
 
 func (a *api) getBindingRevision(w http.ResponseWriter, r *http.Request) {
@@ -107,5 +96,5 @@ func (a *api) getBindingRevision(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	a.respond(w, r, http.StatusOK, newBindingRevisionBody(rev))
+	a.respond(w, r, http.StatusOK, wire.NewBindingRevision(rev))
 }

@@ -4,7 +4,7 @@ Increments are ordered. Issue-ready items are filed as [GitHub issues](https://g
 
 > **Work-item authority.** GitHub Issues are the source of truth for scope and acceptance criteria. This roadmap keeps only order and links for filed items, never a second copy. Items not yet issue-ready stay here until they are refined and filed.
 
-Increments 1, 2 and 3 are implemented. Nothing else below is.
+Increments 1, 2 and 3, and the first item of increment 4, are implemented. Nothing else below is.
 
 ## Increment 1 — Procedure identity and immutable versions (done)
 
@@ -23,11 +23,15 @@ Create, list, retrieve and revise procedures with stable IDs, unique canonical k
 3. [#11 Context-specific verification of executions](https://github.com/ashuangiras/polaroid/issues/11) (depends on #7, #9) — **done**
 4. [#13 Resolve contextual references from verification evidence](https://github.com/ashuangiras/polaroid/issues/13) (depends on #11) — **done**
 
+## Increment 4 — Agent integration
+
+1. [#15 MCP transport: tools and resources over streamable HTTP](https://github.com/ashuangiras/polaroid/issues/15) — **done**
+2. [#16 Feedback box: agents report problems and suggestions about Polaroid](https://github.com/ashuangiras/polaroid/issues/16) (depends on #15)
+
 ## Later (unordered, not yet scoped)
 
 - Semantic discovery and duplicate suggestions for procedures.
 - Aliases and identity consolidation (explicit records; history is never rewritten).
-- MCP transport beside the HTTP API.
 - Access control for reads and writes ([ADR-0006](../architecture/decisions/0006-local-unauthenticated-api.md)).
 - Opt-in pagination for `GET /v1/procedures`.
 - **Import from the earlier Python/SQLite PoC — blocked:** no source database or schema is available in this environment. Compatibility is not claimed; scope the importer only once a real database or schema is provided.

@@ -7,7 +7,6 @@
 package http
 
 import (
-	"encoding/json/jsontext"
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
@@ -21,10 +20,11 @@ import (
 	"strings"
 
 	"github.com/ashuangiras/polaroid/internal/memory"
+	"github.com/ashuangiras/polaroid/internal/transport/wire"
 )
 
 // MaxRequestBytes bounds every request body.
-const MaxRequestBytes = 1 << 20
+const MaxRequestBytes = wire.MaxRequestBytes
 
 type api struct {
 	svc    *memory.Service
@@ -109,14 +109,14 @@ func (a *api) createProcedure(w http.ResponseWriter, r *http.Request) {
 	}
 	h, err := a.svc.CreateProcedure(r.Context(), memory.NewProcedure{
 		CanonicalKey: body.CanonicalKey,
-		Definition:   body.Version.definition(),
+		Definition:   body.Version.Domain(),
 	})
 	if err != nil {
 		a.fail(w, r, err)
 		return
 	}
 	w.Header().Set("Location", procedurePath(h.Procedure.ID))
-	a.respond(w, r, http.StatusCreated, newHistoryBody(h))
+	a.respond(w, r, http.StatusCreated, wire.NewHistory(h))
 }
 
 func (a *api) listProcedures(w http.ResponseWriter, r *http.Request) {
@@ -125,11 +125,7 @@ func (a *api) listProcedures(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	body := procedureListBody{Procedures: make([]procedureBody, len(procedures))}
-	for i, p := range procedures {
-		body.Procedures[i] = newProcedureBody(p)
-	}
-	a.respond(w, r, http.StatusOK, body)
+	a.respond(w, r, http.StatusOK, wire.NewProcedureList(procedures))
 }
 
 func (a *api) getProcedure(w http.ResponseWriter, r *http.Request) {
@@ -138,7 +134,7 @@ func (a *api) getProcedure(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	a.respond(w, r, http.StatusOK, newHistoryBody(h))
+	a.respond(w, r, http.StatusOK, wire.NewHistory(h))
 }
 
 func (a *api) getProcedureByKey(w http.ResponseWriter, r *http.Request) {
@@ -147,7 +143,7 @@ func (a *api) getProcedureByKey(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	a.respond(w, r, http.StatusOK, newHistoryBody(h))
+	a.respond(w, r, http.StatusOK, wire.NewHistory(h))
 }
 
 func (a *api) reviseProcedure(w http.ResponseWriter, r *http.Request) {
@@ -157,14 +153,14 @@ func (a *api) reviseProcedure(w http.ResponseWriter, r *http.Request) {
 	}
 	v, err := a.svc.ReviseProcedure(r.Context(), r.PathValue("id"), memory.Revision{
 		BaseVersion: body.BaseVersion,
-		Definition:  body.Version.definition(),
+		Definition:  body.Version.Domain(),
 	})
 	if err != nil {
 		a.fail(w, r, err)
 		return
 	}
 	w.Header().Set("Location", versionPath(v.ProcedureID, v.Number))
-	a.respond(w, r, http.StatusCreated, newVersionBody(v))
+	a.respond(w, r, http.StatusCreated, wire.NewVersion(v))
 }
 
 func (a *api) getVersion(w http.ResponseWriter, r *http.Request) {
@@ -177,7 +173,7 @@ func (a *api) getVersion(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	a.respond(w, r, http.StatusOK, newVersionBody(v))
+	a.respond(w, r, http.StatusOK, wire.NewVersion(v))
 }
 
 func (a *api) getGraph(w http.ResponseWriter, r *http.Request) {
@@ -207,7 +203,7 @@ func (a *api) getGraph(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	a.respond(w, r, http.StatusOK, newGraphNodeBody(g))
+	a.respond(w, r, http.StatusOK, wire.NewGraphNode(g))
 }
 
 // versionNumber parses the {version} path segment, writing the error
@@ -228,40 +224,11 @@ func versionNumber(w http.ResponseWriter, r *http.Request) (int, bool) {
 // fail maps a domain error to its response. Anything unrecognised is an
 // internal failure: it is logged, and the client only learns that it happened.
 func (a *api) fail(w http.ResponseWriter, r *http.Request, err error) {
-	var invalid *memory.ValidationError
-	var conflict *memory.VersionConflictError
-	var revisionConflict *memory.RevisionConflictError
-	var cycle *memory.ReferenceCycleError
-	var limit *memory.GraphLimitError
-	switch {
-	case errors.As(err, &invalid):
-		detail := errorDetail{Code: "invalid_request", Message: invalid.Error()}
-		for _, p := range invalid.Problems {
-			detail.Fields = append(detail.Fields, fieldProblem(p))
-		}
-		writeError(w, http.StatusBadRequest, detail)
-	case errors.As(err, &conflict):
-		writeError(w, http.StatusConflict, errorDetail{Code: "version_conflict", Message: conflict.Error(), LatestVersion: conflict.LatestVersion})
-	case errors.As(err, &revisionConflict):
-		writeError(w, http.StatusConflict, errorDetail{Code: "revision_conflict", Message: revisionConflict.Error(), LatestRevision: revisionConflict.LatestRevision})
-	case errors.As(err, &cycle):
-		detail := errorDetail{Code: "reference_cycle", Message: cycle.Error()}
-		for _, s := range cycle.Cycle {
-			detail.Cycle = append(detail.Cycle, cycleStepBody{ProcedureID: s.ProcedureID, Version: s.Version, Reference: s.Reference})
-		}
-		writeError(w, http.StatusConflict, detail)
-	case errors.As(err, &limit):
-		writeError(w, http.StatusUnprocessableEntity, errorDetail{Code: "graph_too_large", Message: limit.Error()})
-	case errors.Is(err, memory.ErrCanonicalKeyExists):
-		writeError(w, http.StatusConflict, errorDetail{Code: "canonical_key_exists", Message: err.Error()})
-	case errors.Is(err, memory.ErrBindingExists):
-		writeError(w, http.StatusConflict, errorDetail{Code: "binding_exists", Message: err.Error()})
-	case errors.Is(err, memory.ErrNotFound):
-		writeError(w, http.StatusNotFound, errorDetail{Code: "not_found", Message: err.Error()})
-	default:
+	status, detail, ok := wire.Classify(err)
+	if !ok {
 		a.logger.ErrorContext(r.Context(), "request failed", "method", r.Method, "path", r.URL.Path, "error", err)
-		writeError(w, http.StatusInternalServerError, errorDetail{Code: "internal", Message: "internal error"})
 	}
+	writeError(w, status, detail)
 }
 
 func (a *api) respond(w http.ResponseWriter, r *http.Request, status int, v any) {
@@ -291,63 +258,15 @@ func decode(w http.ResponseWriter, r *http.Request, dst any) bool {
 		writeError(w, http.StatusBadRequest, errorDetail{Code: "invalid_request", Message: "could not read request body"})
 		return false
 	}
-	if err := json.Unmarshal(body, dst, json.RejectUnknownMembers(true)); err != nil {
-		writeError(w, http.StatusBadRequest, errorDetail{Code: "invalid_request", Message: describeJSONError(err)})
+	if err := wire.Decode(body, dst); err != nil {
+		writeError(w, http.StatusBadRequest, errorDetail{Code: "invalid_request", Message: err.Error()})
 		return false
 	}
 	return true
 }
 
-// describeJSONError explains a decoding failure in terms of the request
-// document, without exposing Go type names.
-func describeJSONError(err error) string {
-	var syntax *jsontext.SyntacticError
-	if errors.As(err, &syntax) {
-		where := ""
-		if syntax.JSONPointer != "" {
-			where = fmt.Sprintf(" in %q", string(syntax.JSONPointer))
-		}
-		return fmt.Sprintf("malformed JSON at byte offset %d%s: %v", syntax.ByteOffset, where, syntax.Err)
-	}
-	var semantic *json.SemanticError
-	if errors.As(err, &semantic) {
-		where := "request body"
-		if semantic.JSONPointer != "" {
-			where = fmt.Sprintf("%q", string(semantic.JSONPointer))
-		}
-		switch {
-		case errors.Is(semantic.Err, json.ErrUnknownName):
-			return fmt.Sprintf("unknown field %s", where)
-		case semantic.Err != nil:
-			return fmt.Sprintf("invalid value for %s: %v", where, semantic.Err)
-		default:
-			return fmt.Sprintf("%s has the wrong JSON type (%s)", where, kindName(semantic.JSONKind))
-		}
-	}
-	return "malformed JSON"
-}
-
-func kindName(k jsontext.Kind) string {
-	switch k {
-	case jsontext.KindBeginObject:
-		return "object"
-	case jsontext.KindBeginArray:
-		return "array"
-	case jsontext.KindString:
-		return "string"
-	case jsontext.KindNumber:
-		return "number"
-	case jsontext.KindTrue, jsontext.KindFalse:
-		return "boolean"
-	case jsontext.KindNull:
-		return "null"
-	default:
-		return "unknown"
-	}
-}
-
 func writeError(w http.ResponseWriter, status int, detail errorDetail) {
-	_ = writeJSON(w, status, errorBody{Error: detail})
+	_ = writeJSON(w, status, wire.ErrorBody{Error: detail})
 }
 
 // writeJSON writes v as the response body. If v cannot be encoded it sends a

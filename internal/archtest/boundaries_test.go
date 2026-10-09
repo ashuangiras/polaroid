@@ -4,6 +4,7 @@ import (
 	"context"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,12 +13,16 @@ import (
 	_ "github.com/ashuangiras/polaroid/internal/memory"
 	_ "github.com/ashuangiras/polaroid/internal/storage/sqlite"
 	_ "github.com/ashuangiras/polaroid/internal/transport/http"
+	_ "github.com/ashuangiras/polaroid/internal/transport/mcp"
+	_ "github.com/ashuangiras/polaroid/internal/transport/wire"
 )
 
 // Dependency direction (see docs/architecture/overview.md): cmd wires
-// transport and storage to memory; memory depends on neither.
+// transport and storage to memory; memory depends on neither. The two
+// transports share only transport/wire, never each other.
 func TestPackageBoundaries(t *testing.T) {
 	root, module := moduleRootAndPath(t)
+	storage := []string{"database/sql", "modernc.org/sqlite", module + "/internal/storage", module + "/cmd"}
 	rules := []struct {
 		pkg       string
 		forbidden []string
@@ -25,7 +30,9 @@ func TestPackageBoundaries(t *testing.T) {
 		{"internal/memory", []string{"net/http", "database/sql", "modernc.org/sqlite",
 			module + "/internal/storage", module + "/internal/transport", module + "/cmd"}},
 		{"internal/storage/sqlite", []string{"net/http", module + "/internal/transport", module + "/cmd"}},
-		{"internal/transport/http", []string{"database/sql", "modernc.org/sqlite", module + "/internal/storage", module + "/cmd"}},
+		{"internal/transport/wire", slices.Concat(storage, []string{module + "/internal/transport/http", module + "/internal/transport/mcp", "github.com/modelcontextprotocol"})},
+		{"internal/transport/http", slices.Concat(storage, []string{module + "/internal/transport/mcp", "github.com/modelcontextprotocol"})},
+		{"internal/transport/mcp", slices.Concat(storage, []string{module + "/internal/transport/http"})},
 	}
 	for _, rule := range rules {
 		deps := goList(t, root, "-deps", "-f", "{{.ImportPath}}", module+"/"+rule.pkg)

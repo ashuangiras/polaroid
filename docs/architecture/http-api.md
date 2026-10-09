@@ -1,6 +1,6 @@
 # HTTP API (v1)
 
-This page is the contract of the API that `polaroidd` serves. It covers only what is implemented: procedure identity and immutable versions with subprocedure references, repository bindings with immutable revisions, and execution records. Field rules are defined in [records.md](records.md).
+This page is the contract of the API that `polaroidd` serves. It covers only what is implemented: procedure identity and immutable versions with subprocedure references, repository bindings with immutable revisions, and execution records. Field rules are defined in [records.md](records.md). The same operations are available to MCP clients at `/mcp`; see [mcp.md](mcp.md).
 
 - **Base URL:** `http://127.0.0.1:7417` by default (`polaroidd -addr`).
 - **Bodies:** every request and response body is UTF-8 JSON. Requests with a body must send `Content-Type: application/json` and stay under 1 MiB.

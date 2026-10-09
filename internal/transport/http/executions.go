@@ -8,20 +8,21 @@ import (
 	"strconv"
 
 	"github.com/ashuangiras/polaroid/internal/memory"
+	"github.com/ashuangiras/polaroid/internal/transport/wire"
 )
 
 func (a *api) recordExecution(w http.ResponseWriter, r *http.Request) {
-	var body recordExecutionBody
+	var body wire.ExecutionRecord
 	if !decode(w, r, &body) {
 		return
 	}
-	e, err := a.svc.RecordExecution(r.Context(), body.record())
+	e, err := a.svc.RecordExecution(r.Context(), body.Domain())
 	if err != nil {
 		a.fail(w, r, err)
 		return
 	}
 	w.Header().Set("Location", "/v1/executions/"+url.PathEscape(e.ID))
-	a.respond(w, r, http.StatusCreated, newExecutionBody(e))
+	a.respond(w, r, http.StatusCreated, wire.NewExecution(e))
 }
 
 func (a *api) getExecution(w http.ResponseWriter, r *http.Request) {
@@ -30,7 +31,7 @@ func (a *api) getExecution(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	a.respond(w, r, http.StatusOK, newExecutionBody(e))
+	a.respond(w, r, http.StatusOK, wire.NewExecution(e))
 }
 
 func (a *api) listExecutions(w http.ResponseWriter, r *http.Request) {
@@ -56,11 +57,7 @@ func (a *api) listExecutions(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	body := executionListBody{Executions: make([]executionSummaryBody, len(executions))}
-	for i, e := range executions {
-		body.Executions[i] = newExecutionSummaryBody(e)
-	}
-	a.respond(w, r, http.StatusOK, body)
+	a.respond(w, r, http.StatusOK, wire.NewExecutionList(executions))
 }
 
 func (a *api) getVerification(w http.ResponseWriter, r *http.Request) {
@@ -69,7 +66,7 @@ func (a *api) getVerification(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	a.respond(w, r, http.StatusOK, newVerificationBody(v))
+	a.respond(w, r, http.StatusOK, wire.NewVerification(v))
 }
 
 func (a *api) listVerifications(w http.ResponseWriter, r *http.Request) {
@@ -92,16 +89,7 @@ func (a *api) listVerifications(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	body := verificationListBody{Verifications: make([]combinationStatusBody, len(statuses))}
-	for i, s := range statuses {
-		body.Verifications[i] = combinationStatusBody{
-			Combination:       newCombinationBody(s.Combination),
-			Verified:          s.Verified,
-			LatestExecutionID: s.LatestExecutionID,
-			ExecutionIDs:      s.ExecutionIDs,
-		}
-	}
-	a.respond(w, r, http.StatusOK, body)
+	a.respond(w, r, http.StatusOK, wire.NewVerificationList(statuses))
 }
 
 // strictQuery parses the query string, accepting only the allowed

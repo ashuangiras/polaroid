@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 const createBody = `{"canonical_key":"demo.restart","version":{"philosophy":"p","method":"m",` +
@@ -96,6 +98,44 @@ func TestDaemonServesStopsGracefullyAndKeepsHistoryAcrossRestart(t *testing.T) {
 	status, after := request(t, http.MethodGet, restarted+"/v1/procedures/by-key/demo.restart", "")
 	if status != http.StatusOK || !bytes.Equal(after, before) {
 		t.Fatalf("history after restart = %d %s\nwant %s", status, after, before)
+	}
+}
+
+func TestDaemonServesMCPBesideTheAPI(t *testing.T) {
+	base, _ := startDaemon(t, filepath.Join(t.TempDir(), "polaroid.db"))
+	if status, body := request(t, http.MethodPost, base+"/v1/procedures", createBody); status != http.StatusCreated {
+		t.Fatalf("create over HTTP: %d %s", status, body)
+	}
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "daemon-test", Version: "v0"}, nil)
+	session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: base + "/mcp", DisableStandaloneSSE: true, MaxRetries: -1}, nil)
+	if err != nil {
+		t.Fatalf("connect to /mcp: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "get_procedure", Arguments: map[string]any{"canonical_key": "demo.restart"}})
+	if err != nil || res.IsError {
+		t.Fatalf("get_procedure over MCP: %+v, %v", res, err)
+	}
+	_, viaHTTP := request(t, http.MethodGet, base+"/v1/procedures/by-key/demo.restart", "")
+	if text := res.Content[0].(*mcp.TextContent).Text; text+"\n" != string(viaHTTP) {
+		t.Fatalf("MCP and HTTP disagree:\n%s\n%s", text, viaHTTP)
+	}
+
+	// /mcp sits behind the same loopback-host check as the API.
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, base+"/mcp", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = "evil.example"
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("foreign Host on /mcp: %d, want 403", resp.StatusCode)
 	}
 }
 

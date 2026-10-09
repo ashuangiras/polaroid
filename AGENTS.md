@@ -1,6 +1,6 @@
 # Polaroid: rules for agents and contributors
 
-Polaroid is a versioned procedural memory service for agents, written in Go, with SQLite storage and a JSON HTTP API. This file is the canonical rule set for changing this repository. Tool-specific files, such as `.github/copilot-instructions.md` and `.github/instructions/`, may add platform guidance only. They must not restate or override these rules.
+Polaroid is a versioned procedural memory service for agents, written in Go, with SQLite storage, a JSON HTTP API and an MCP server. This file is the canonical rule set for changing this repository. Tool-specific files, such as `.github/copilot-instructions.md` and `.github/instructions/`, may add platform guidance only. They must not restate or override these rules.
 
 ## Before you change anything
 
@@ -54,6 +54,8 @@ Polaroid is a versioned procedural memory service for agents, written in Go, wit
 | `internal/memory` | Domain records, validation, version rules, the `Store` contract |
 | `internal/storage/sqlite` | `Store` on SQLite: migrations, transactions, immutability triggers |
 | `internal/transport/http` | JSON API: parsing, validation, error mapping |
+| `internal/transport/mcp` | MCP server at `/mcp`: tools, resources, argument decoding |
+| `internal/transport/wire` | Record and error JSON shapes shared by both transports |
 | `internal/archtest` | Package-boundary tests |
 | `examples/` | Example procedure records (task knowledge) |
 | `docs/` | Architecture, decisions, workflow, status, roadmap |
