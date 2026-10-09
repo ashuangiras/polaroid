@@ -1,7 +1,9 @@
 package memory
 
 import (
+	"bytes"
 	"encoding/json/jsontext"
+	json "encoding/json/v2"
 	"fmt"
 	"regexp"
 	"slices"
@@ -62,8 +64,97 @@ func checkDefinition(p *problems, d Definition) Definition {
 	checkText(p, "version.method", d.Method)
 	d.Contract = checkObject(p, "version.contract", d.Contract)
 	d.Instructions = checkObject(p, "version.instructions", d.Instructions)
+	d.References = checkReferences(p, d.References)
 	checkText(p, "version.revision_reason", d.RevisionReason)
 	return d
+}
+
+// checkReferences returns a copy of refs in stored form, or nil if there are
+// none, so an empty list and an absent one are the same.
+func checkReferences(p *problems, refs []Reference) []Reference {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]Reference, len(refs))
+	seen := make(map[string]bool, len(refs))
+	for i, r := range refs {
+		field := fmt.Sprintf("version.references[%d]", i)
+		checkKey(p, field+".name", r.Name)
+		if r.Name != "" && seen[r.Name] {
+			p.add(field+".name", "duplicates the name of an earlier reference")
+		}
+		seen[r.Name] = true
+		if r.ProcedureID == "" {
+			p.add(field+".procedure_id", "is required")
+		}
+		checkPolicy(p, field+".version_policy", r.VersionPolicy)
+		r.Inputs = checkMapping(p, field+".inputs", r.Inputs)
+		out[i] = r
+	}
+	return out
+}
+
+const mappingRule = `must be {"input": "<parent input name>"} or {"value": <any JSON>}`
+
+// checkMapping accepts a JSON object whose members each map a child input to
+// a parent input or a literal value, and returns it compacted. Names are not
+// checked against any contract, which Polaroid never interprets.
+func checkMapping(p *problems, field string, v jsontext.Value) jsontext.Value {
+	c := checkObject(p, field, v)
+	if c == nil {
+		return nil
+	}
+	dec := jsontext.NewDecoder(bytes.NewReader(c))
+	if _, err := dec.ReadToken(); err != nil {
+		p.add(field, "must be a JSON object")
+		return nil
+	}
+	for dec.PeekKind() != jsontext.KindEndObject {
+		tok, err := dec.ReadToken()
+		if err != nil {
+			break
+		}
+		name := tok.String()
+		source, err := dec.ReadValue()
+		if err != nil {
+			break
+		}
+		switch {
+		case name == "":
+			p.add(field, "child input names must not be empty")
+		case !validInputSource(source):
+			p.add(field+"."+name, mappingRule)
+		}
+	}
+	return c
+}
+
+func validInputSource(v jsontext.Value) bool {
+	var members map[string]jsontext.Value
+	if json.Unmarshal(v, &members) != nil || len(members) != 1 {
+		return false
+	}
+	if _, ok := members["value"]; ok {
+		return true
+	}
+	var parent string
+	src, ok := members["input"]
+	return ok && json.Unmarshal(src, &parent) == nil && strings.TrimSpace(parent) != ""
+}
+
+func checkPolicy(p *problems, field string, vp VersionPolicy) {
+	switch vp.Kind {
+	case PolicyPin:
+		if vp.Pin < 1 {
+			p.add(field+".pin", "must be a version number of at least 1")
+		}
+	case PolicyContextual:
+		if vp.Pin != 0 {
+			p.add(field, "must not pin a version for a contextual policy")
+		}
+	default:
+		p.add(field, "must set exactly one of pin or contextual")
+	}
 }
 
 // validate checks n and returns its configuration in stored form.
@@ -90,18 +181,7 @@ func (r BindingRevise) validate() (BindingConfig, error) {
 
 func checkBindingConfig(p *problems, c BindingConfig) BindingConfig {
 	c.Inputs = checkObject(p, "revision.inputs", c.Inputs)
-	switch c.VersionPolicy.Kind {
-	case PolicyPin:
-		if c.VersionPolicy.Pin < 1 {
-			p.add("revision.version_policy.pin", "must be a version number of at least 1")
-		}
-	case PolicyContextual:
-		if c.VersionPolicy.Pin != 0 {
-			p.add("revision.version_policy", "must not pin a version for a contextual policy")
-		}
-	default:
-		p.add("revision.version_policy", "must set exactly one of pin or contextual")
-	}
+	checkPolicy(p, "revision.version_policy", c.VersionPolicy)
 	checkText(p, "revision.revision_reason", c.RevisionReason)
 	return c
 }

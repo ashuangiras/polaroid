@@ -137,23 +137,27 @@ func (s *Store) ListProcedures(ctx context.Context) ([]memory.Procedure, error) 
 
 const historySelect = `
 	SELECT p.id, p.canonical_key, p.created_at,
-	       v.version, v.philosophy, v.method, v.contract, v.instructions, v.revision_reason, v.created_at
+	       v.version, v.philosophy, v.method, v.contract, v.instructions, v.revision_reason, v.created_at,
+	       r.name, r.target_procedure_id, r.policy, r.pinned_version, r.inputs
 	FROM procedures AS p
 	JOIN procedure_versions AS v ON v.procedure_id = p.id
+	LEFT JOIN procedure_version_references AS r ON r.procedure_id = v.procedure_id AND r.version = v.version
 `
 
 // History implements memory.Store.
 func (s *Store) History(ctx context.Context, id string) (memory.History, error) {
-	return s.history(ctx, historySelect+`WHERE p.id = ? ORDER BY v.version`, id)
+	return s.history(ctx, historySelect+`WHERE p.id = ? ORDER BY v.version, r.position`, id)
 }
 
 // HistoryByKey implements memory.Store.
 func (s *Store) HistoryByKey(ctx context.Context, canonicalKey string) (memory.History, error) {
-	return s.history(ctx, historySelect+`WHERE p.canonical_key = ? ORDER BY v.version`, canonicalKey)
+	return s.history(ctx, historySelect+`WHERE p.canonical_key = ? ORDER BY v.version, r.position`, canonicalKey)
 }
 
-func (s *Store) history(ctx context.Context, query, arg string) (memory.History, error) {
-	rows, err := s.db.QueryContext(ctx, query, arg)
+// history reads historySelect rows: one per reference, or one per version
+// without references, ordered by version and reference position.
+func (s *Store) history(ctx context.Context, query string, args ...any) (memory.History, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return memory.History{}, fmt.Errorf("query history: %w", err)
 	}
@@ -163,19 +167,33 @@ func (s *Store) history(ctx context.Context, query, arg string) (memory.History,
 	var procedureCreated string
 	for rows.Next() {
 		var v memory.Version
-		var contract, instructions []byte
+		var contract, instructions, refInputs []byte
 		var versionCreated string
+		var refName, refTarget, refPolicy sql.NullString
+		var refPin sql.NullInt64
 		if err := rows.Scan(&h.Procedure.ID, &h.Procedure.CanonicalKey, &procedureCreated,
-			&v.Number, &v.Philosophy, &v.Method, &contract, &instructions, &v.RevisionReason, &versionCreated); err != nil {
+			&v.Number, &v.Philosophy, &v.Method, &contract, &instructions, &v.RevisionReason, &versionCreated,
+			&refName, &refTarget, &refPolicy, &refPin, &refInputs); err != nil {
 			return memory.History{}, fmt.Errorf("scan version: %w", err)
 		}
-		v.ProcedureID = h.Procedure.ID
-		v.Contract = jsontext.Value(contract)
-		v.Instructions = jsontext.Value(instructions)
-		if v.CreatedAt, err = parseTime(versionCreated); err != nil {
-			return memory.History{}, err
+		if n := len(h.Versions); n == 0 || h.Versions[n-1].Number != v.Number {
+			v.ProcedureID = h.Procedure.ID
+			v.Contract = jsontext.Value(contract)
+			v.Instructions = jsontext.Value(instructions)
+			if v.CreatedAt, err = parseTime(versionCreated); err != nil {
+				return memory.History{}, err
+			}
+			h.Versions = append(h.Versions, v)
 		}
-		h.Versions = append(h.Versions, v)
+		if refName.Valid {
+			last := &h.Versions[len(h.Versions)-1]
+			last.References = append(last.References, memory.Reference{
+				Name:          refName.String,
+				ProcedureID:   refTarget.String,
+				VersionPolicy: memory.VersionPolicy{Kind: memory.PolicyKind(refPolicy.String), Pin: int(refPin.Int64)},
+				Inputs:        jsontext.Value(refInputs),
+			})
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return memory.History{}, fmt.Errorf("read history: %w", err)
@@ -194,26 +212,11 @@ func (s *Store) history(ctx context.Context, query, arg string) (memory.History,
 
 // Version implements memory.Store.
 func (s *Store) Version(ctx context.Context, procedureID string, number int) (memory.Version, error) {
-	v := memory.Version{ProcedureID: procedureID}
-	var contract, instructions []byte
-	var created string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT version, philosophy, method, contract, instructions, revision_reason, created_at
-		FROM procedure_versions
-		WHERE procedure_id = ? AND version = ?`, procedureID, number).
-		Scan(&v.Number, &v.Philosophy, &v.Method, &contract, &instructions, &v.RevisionReason, &created)
-	if errors.Is(err, sql.ErrNoRows) {
-		return memory.Version{}, memory.ErrNotFound
-	}
+	h, err := s.history(ctx, historySelect+`WHERE p.id = ? AND v.version = ? ORDER BY r.position`, procedureID, number)
 	if err != nil {
-		return memory.Version{}, fmt.Errorf("query version: %w", err)
-	}
-	v.Contract = jsontext.Value(contract)
-	v.Instructions = jsontext.Value(instructions)
-	if v.CreatedAt, err = parseTime(created); err != nil {
 		return memory.Version{}, err
 	}
-	return v, nil
+	return h.Versions[0], nil
 }
 
 // write runs fn in a transaction that holds SQLite's write lock from the start
@@ -233,7 +236,26 @@ func (s *Store) write(ctx context.Context, fn func(*sql.Tx) error) error {
 	return nil
 }
 
+// insertVersion stores v and its references. References go first: the schema
+// accepts them only for a version that does not exist yet.
 func insertVersion(ctx context.Context, tx *sql.Tx, v memory.Version) error {
+	if err := checkTargets(ctx, tx, v.References); err != nil {
+		return err
+	}
+	for i, r := range v.References {
+		var pinned any
+		if r.VersionPolicy.Kind == memory.PolicyPin {
+			pinned = r.VersionPolicy.Pin
+		}
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO procedure_version_references
+				(procedure_id, version, position, name, target_procedure_id, policy, pinned_version, inputs)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			v.ProcedureID, v.Number, i, r.Name, r.ProcedureID, string(r.VersionPolicy.Kind), pinned, string(r.Inputs))
+		if err != nil {
+			return fmt.Errorf("insert reference %q of version %d: %w", r.Name, v.Number, err)
+		}
+	}
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO procedure_versions
 			(procedure_id, version, philosophy, method, contract, instructions, revision_reason, created_at)
@@ -242,6 +264,33 @@ func insertVersion(ctx context.Context, tx *sql.Tx, v memory.Version) error {
 		v.RevisionReason, formatTime(v.CreatedAt))
 	if err != nil {
 		return fmt.Errorf("insert version %d: %w", v.Number, err)
+	}
+	return nil
+}
+
+// checkTargets returns a *memory.MissingTargetsError listing every reference
+// whose target procedure, or pinned version of it, does not exist. Procedures
+// and versions are never deleted, so the answer holds for the transaction.
+func checkTargets(ctx context.Context, tx *sql.Tx, refs []memory.Reference) error {
+	var missing []memory.MissingTarget
+	for i, r := range refs {
+		var procedureExists, versionExists bool
+		err := tx.QueryRowContext(ctx, `
+			SELECT EXISTS (SELECT 1 FROM procedures WHERE id = ?),
+			       EXISTS (SELECT 1 FROM procedure_versions WHERE procedure_id = ? AND version = ?)`,
+			r.ProcedureID, r.ProcedureID, r.VersionPolicy.Pin).Scan(&procedureExists, &versionExists)
+		if err != nil {
+			return fmt.Errorf("read reference target: %w", err)
+		}
+		switch {
+		case !procedureExists:
+			missing = append(missing, memory.MissingTarget{Index: i, Procedure: true})
+		case r.VersionPolicy.Kind == memory.PolicyPin && !versionExists:
+			missing = append(missing, memory.MissingTarget{Index: i})
+		}
+	}
+	if len(missing) > 0 {
+		return &memory.MissingTargetsError{Missing: missing}
 	}
 	return nil
 }

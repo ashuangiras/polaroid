@@ -2,7 +2,7 @@
 
 This page defines Polaroid's records, how they are identified and how they are versioned. Each section is marked as **implemented** or **planned**. The [HTTP API](http-api.md) serves the implemented records with exactly these field names.
 
-Summary: a **procedure** is a shared identity with immutable **versions**. A **binding** lets one repository use a procedure under a local name, with immutable **binding revisions** that hold the repository's inputs and version policy.
+Summary: a **procedure** is a shared identity with immutable **versions**. A version may **reference** other procedures it composes. A **binding** lets one repository use a procedure under a local name, with immutable **binding revisions** that hold the repository's inputs and version policy.
 
 ## Implemented records
 
@@ -33,12 +33,26 @@ A version is one immutable definition of a procedure.
 | `method` | string | client | Required and not blank. The approach in brief. |
 | `contract` | JSON object | client | Required. For example inputs, outputs, preconditions and postconditions. The members are free-form. |
 | `instructions` | JSON object | client | Required. The members are free-form, for example `steps`. |
+| `references` | list of [references](#subprocedure-reference-implemented) | client | Optional. The procedures this version composes, in the order given. Omitted from responses when there are none; `[]` and `null` mean none. |
 | `revision_reason` | string | client | Required and not blank. For version 1, why the procedure was created. Later, what changed and why. |
 | `created_at` | RFC 3339 timestamp, UTC | server | |
 
 Polaroid checks the shape of `contract` and `instructions`, never their meaning. Each must be a JSON object with valid UTF-8 and unique member names at every level. Polaroid removes insignificant whitespace before storing it. Member order, values, number formatting and string escapes are kept exactly as submitted. String fields are stored exactly as submitted, without trimming.
 
-The established design also gives a version **references** to other procedures. They are **not implemented**. A request that contains `references` is rejected as an unknown field, not silently dropped. See [planned records](#planned-records-not-implemented).
+### Subprocedure reference (implemented)
+
+A reference is a named use of another procedure by a version. It is part of the version, so it is immutable with it ([ADR-0008](decisions/0008-subprocedure-references.md)).
+
+| Field | Type | Rules |
+| --- | --- | --- |
+| `name` | string | Canonical-key format, unique within the version. |
+| `procedure_id` | string | The target procedure, which must exist. |
+| `version_policy` | JSON object | The [binding policy type](#binding-revision-implemented): `{"pin": N}`, where the target must have version `N`, or `{"contextual": {}}`, stored but not resolved yet. |
+| `inputs` | JSON object | Required, and may be `{}`. Maps each child input name to exactly one source: `{"input": "<parent input name>"}` passes a parent input through, and `{"value": <any JSON>}` passes a literal. Stored compacted, otherwise as submitted. |
+
+Polaroid validates the shape only. It does not check input names against either procedure's `contract`, which it never interprets. Field errors name the reference by position, for example `version.references[1].inputs.module`. An unknown target is `400` on `version.references[i].procedure_id`, and a missing pinned version is `400` on `version.references[i].version_policy.pin`. Every failing reference is listed.
+
+References are written in the same transaction as their version, and the database rejects adding, changing or removing them afterwards. Cycles, including self-references, are not detected yet, and no endpoint traverses the graph ([#3](https://github.com/ashuangiras/polaroid/issues/3)).
 
 ### Versioning rules (implemented)
 
@@ -87,12 +101,9 @@ Binding revisions follow the [versioning rules](#versioning-rules-implemented) w
 
 These follow the established design. None of them exist in code, storage or the API yet. Their fields and rules are settled in the [roadmap](../development/roadmap.md) work items, and the open questions below must be answered before implementation.
 
-### Subprocedure reference (increment 2)
+### Reference-graph validation (increment 2)
 
-A procedure version may refer to other procedures through **named references**. Each reference has a name, a target procedure, a version policy and explicit child inputs mapped from the parent's inputs.
-
-- The version policy either **pins** an exact version or asks for **contextual** resolution.
-- Validation: the target exists, a pinned version exists, and references form no cycle. Graph traversal is bounded.
+Reject versions whose references would form a cycle, including a self-reference, and serve a bounded traversal of a version's composition graph ([#3](https://github.com/ashuangiras/polaroid/issues/3)).
 
 ### Execution and subprocedure execution (increment 3)
 

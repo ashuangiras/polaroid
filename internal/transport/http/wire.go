@@ -11,11 +11,12 @@ import (
 // are deliberately absent, so a client that sends them is rejected.
 
 type definitionBody struct {
-	Philosophy     string         `json:"philosophy"`
-	Method         string         `json:"method"`
-	Contract       jsontext.Value `json:"contract"`
-	Instructions   jsontext.Value `json:"instructions"`
-	RevisionReason string         `json:"revision_reason"`
+	Philosophy     string          `json:"philosophy"`
+	Method         string          `json:"method"`
+	Contract       jsontext.Value  `json:"contract"`
+	Instructions   jsontext.Value  `json:"instructions"`
+	References     []referenceBody `json:"references"`
+	RevisionReason string          `json:"revision_reason"`
 }
 
 func (d definitionBody) definition() memory.Definition {
@@ -24,8 +25,40 @@ func (d definitionBody) definition() memory.Definition {
 		Method:         d.Method,
 		Contract:       d.Contract,
 		Instructions:   d.Instructions,
+		References:     references(d.References),
 		RevisionReason: d.RevisionReason,
 	}
+}
+
+// referenceBody is one named subprocedure reference, in requests and
+// responses alike.
+type referenceBody struct {
+	Name          string            `json:"name"`
+	ProcedureID   string            `json:"procedure_id"`
+	VersionPolicy versionPolicyBody `json:"version_policy"`
+	Inputs        jsontext.Value    `json:"inputs"`
+}
+
+func references(body []referenceBody) []memory.Reference {
+	if len(body) == 0 {
+		return nil
+	}
+	refs := make([]memory.Reference, len(body))
+	for i, r := range body {
+		refs[i] = memory.Reference{Name: r.Name, ProcedureID: r.ProcedureID, VersionPolicy: r.VersionPolicy.policy(), Inputs: r.Inputs}
+	}
+	return refs
+}
+
+func newReferenceBodies(refs []memory.Reference) []referenceBody {
+	if len(refs) == 0 {
+		return nil
+	}
+	body := make([]referenceBody, len(refs))
+	for i, r := range refs {
+		body[i] = referenceBody{Name: r.Name, ProcedureID: r.ProcedureID, VersionPolicy: newVersionPolicyBody(r.VersionPolicy), Inputs: r.Inputs}
+	}
+	return body
 }
 
 type createProcedureBody struct {
@@ -109,14 +142,17 @@ func newProcedureBody(p memory.Procedure) procedureBody {
 }
 
 type versionBody struct {
-	ProcedureID    string         `json:"procedure_id"`
-	Version        int            `json:"version"`
-	Philosophy     string         `json:"philosophy"`
-	Method         string         `json:"method"`
-	Contract       jsontext.Value `json:"contract"`
-	Instructions   jsontext.Value `json:"instructions"`
-	RevisionReason string         `json:"revision_reason"`
-	CreatedAt      time.Time      `json:"created_at"`
+	ProcedureID  string         `json:"procedure_id"`
+	Version      int            `json:"version"`
+	Philosophy   string         `json:"philosophy"`
+	Method       string         `json:"method"`
+	Contract     jsontext.Value `json:"contract"`
+	Instructions jsontext.Value `json:"instructions"`
+	// References is omitted when there are none, so versions stored before
+	// references existed are served unchanged.
+	References     []referenceBody `json:"references,omitzero"`
+	RevisionReason string          `json:"revision_reason"`
+	CreatedAt      time.Time       `json:"created_at"`
 }
 
 func newVersionBody(v memory.Version) versionBody {
@@ -127,6 +163,7 @@ func newVersionBody(v memory.Version) versionBody {
 		Method:         v.Method,
 		Contract:       v.Contract,
 		Instructions:   v.Instructions,
+		References:     newReferenceBodies(v.References),
 		RevisionReason: v.RevisionReason,
 		CreatedAt:      v.CreatedAt,
 	}

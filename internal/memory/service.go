@@ -14,14 +14,17 @@ import (
 // stored record, and must enforce canonical-key and binding-name uniqueness.
 type Store interface {
 	// CreateProcedure stores p together with its first version. It returns an
-	// error wrapping ErrCanonicalKeyExists if p.CanonicalKey is already used.
+	// error wrapping ErrCanonicalKeyExists if p.CanonicalKey is already used,
+	// and a *MissingTargetsError if a reference's target or pinned version
+	// does not exist.
 	CreateProcedure(ctx context.Context, p Procedure, first Version) error
 
 	// AppendVersion stores next if, and only if, baseVersion is the latest
 	// version of next.ProcedureID; the check and the write are one atomic
 	// step. Callers set next.Number to baseVersion+1. It returns a
-	// *VersionConflictError when baseVersion is not the latest version and an
-	// error wrapping ErrNotFound when the procedure does not exist.
+	// *VersionConflictError when baseVersion is not the latest version, an
+	// error wrapping ErrNotFound when the procedure does not exist, and a
+	// *MissingTargetsError as CreateProcedure does.
 	AppendVersion(ctx context.Context, baseVersion int, next Version) error
 
 	// ListProcedures returns every procedure ordered by canonical key.
@@ -89,6 +92,10 @@ func (s *Service) CreateProcedure(ctx context.Context, in NewProcedure) (History
 		if errors.Is(err, ErrCanonicalKeyExists) {
 			return History{}, fmt.Errorf("procedure %q: %w", in.CanonicalKey, ErrCanonicalKeyExists)
 		}
+		var missing *MissingTargetsError
+		if errors.As(err, &missing) {
+			return History{}, missingTargets(def.References, missing)
+		}
 		return History{}, fmt.Errorf("create procedure: %w", err)
 	}
 	return History{Procedure: p, Versions: []Version{v}}, nil
@@ -110,6 +117,10 @@ func (s *Service) ReviseProcedure(ctx context.Context, procedureID string, in Re
 		var conflict *VersionConflictError
 		if errors.As(err, &conflict) {
 			return Version{}, conflict
+		}
+		var missing *MissingTargetsError
+		if errors.As(err, &missing) {
+			return Version{}, missingTargets(def.References, missing)
 		}
 		return Version{}, fmt.Errorf("append version: %w", err)
 	}
@@ -159,6 +170,21 @@ func (s *Service) Version(ctx context.Context, procedureID string, number int) (
 // Health reports whether the service can reach its store.
 func (s *Service) Health(ctx context.Context) error {
 	return s.store.Ping(ctx)
+}
+
+// missingTargets turns a store's missing-target report into field errors.
+func missingTargets(refs []Reference, e *MissingTargetsError) error {
+	var p problems
+	for _, m := range e.Missing {
+		r := refs[m.Index]
+		field := fmt.Sprintf("version.references[%d]", m.Index)
+		if m.Procedure {
+			p.add(field+".procedure_id", fmt.Sprintf("procedure %q does not exist", r.ProcedureID))
+		} else {
+			p.add(field+".version_policy.pin", fmt.Sprintf("procedure %q has no version %d", r.ProcedureID, r.VersionPolicy.Pin))
+		}
+	}
+	return p.err()
 }
 
 func describeLookup(err error, what string) error {
