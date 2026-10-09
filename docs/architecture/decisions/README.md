@@ -27,5 +27,6 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0021](0021-targeted-feedback-and-bounded-lists.md) | Feedback has a typed subject, and lists are filterable with opt-in keyset pagination | Accepted |
 | [0022](0022-repository-identity-in-evidence.md) | Evidence matches by registered repository identity | Accepted |
 | [0023](0023-pagination-guarantees-and-scope-labels.md) | Lists are live traversals with bound cursors; discovery can page a snapshot; every version names its scope | Accepted |
+| [0024](0024-child-inputs-follow-the-reference-mapping.md) | A child execution must have run with the inputs its reference maps | Accepted |
 
 Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.

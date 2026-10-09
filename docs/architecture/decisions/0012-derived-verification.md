@@ -1,6 +1,6 @@
 # 0012. Verification is derived on read from executions, per combination, and the latest execution decides
 
-**Status:** Accepted
+**Status:** Accepted; a child whose inputs do not match its reference's mapping does not verify its parent ([ADR-0024](0024-child-inputs-follow-the-reference-mapping.md))
 **Date:** 2026-10-09
 
 ## Context
