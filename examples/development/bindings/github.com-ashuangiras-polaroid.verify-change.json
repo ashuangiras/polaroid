@@ -1,0 +1,14 @@
+{
+  "repository": "github.com/ashuangiras/polaroid",
+  "name": "verify-change",
+  "procedure_id": "dev.change.verify",
+  "revision": {
+    "inputs": {
+      "build_command": "make build",
+      "artifacts": ["bin/polaroidd", "bin/polaroid"],
+      "gate_commands": ["make check", "make vuln", "make demo", "make e2e", "make e2e-mcp E2E_INTEROP=0"]
+    },
+    "version_policy": { "contextual": {} },
+    "revision_reason": "Polaroid verifies its changes with the shared procedure. The gate is what CI runs (make ci), one command at a time for per-command evidence."
+  }
+}

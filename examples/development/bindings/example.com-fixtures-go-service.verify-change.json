@@ -1,0 +1,14 @@
+{
+  "repository": "example.com/fixtures/go-service",
+  "name": "verify-change",
+  "procedure_id": "dev.change.verify",
+  "revision": {
+    "inputs": {
+      "build_command": "go build -o bin/ ./cmd/...",
+      "artifacts": ["bin/service"],
+      "gate_commands": ["go vet ./...", "go test ./..."]
+    },
+    "version_policy": { "contextual": {} },
+    "revision_reason": "FIXTURE ONLY (#28): a second repository binding the same shared procedure with its own inputs. No such repository exists and nothing has run here, so nothing is verified here."
+  }
+}

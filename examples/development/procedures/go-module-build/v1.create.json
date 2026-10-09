@@ -1,0 +1,36 @@
+{
+  "canonical_key": "go.module.build",
+  "version": {
+    "philosophy": "A build is evidence only when it uses the toolchain the module declares and produces the artifacts that later steps use. Build through the repository's own entry point, so the evidence matches what its contributors and CI build; a hand-written substitute can drift from it.",
+    "method": "Confirm that the toolchain in use is the one go.mod selects, run the repository's build command from the module root, and confirm that this run wrote every expected artifact.",
+    "contract": {
+      "inputs": {
+        "build_command": "The repository's build entry point, run from the module root, for example `make build`.",
+        "artifacts": "Paths, relative to the module root, that the build must write.",
+        "working_tree": "`clean`, or `modified:` with a digest of the uncommitted changes, as recorded by the caller."
+      },
+      "preconditions": [
+        "The working directory is the module root: the directory that holds go.mod.",
+        "The commit and working-tree state to build are known and recorded."
+      ],
+      "expected_outcome": "build_command exits 0, and every path in artifacts exists and was modified by this run.",
+      "verification": [
+        "Evidence lists `go version`, the go.mod line that selects the toolchain, the command, its exit status, and each artifact with its size and modification time."
+      ],
+      "boundaries": [
+        "Does not run tests, linters or other checks.",
+        "Does not change go.mod, go.sum or any source file. If the build changes a tracked file, stop and report it."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        { "id": "toolchain", "action": "Read the `toolchain` line of go.mod, or the `go` line if there is none, and run `go version`. They must name the same release. If `go` cannot start (for example `cannot find GOROOT directory`), that is an environment blocker: repair the environment and record it; do not change this procedure." },
+        { "id": "build", "action": "Note the current time, then run build_command from the module root and keep its exit status and the last lines of its output." },
+        { "id": "artifacts", "action": "Check that each path in artifacts exists and was modified after the noted time." },
+        { "id": "tree", "action": "Run `git status --porcelain`. The build must not have changed any tracked file." },
+        { "id": "record", "action": "Record outcome `succeeded` only if every step held; otherwise `failed`, naming the failing step with its output." }
+      ]
+    },
+    "revision_reason": "Initial version, written for Polaroid's development (#28) in repository-independent terms: repository-specific commands and paths are inputs."
+  }
+}
