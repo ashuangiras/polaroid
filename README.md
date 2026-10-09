@@ -56,7 +56,7 @@ Or run the scripted version, which also binds the procedure in two repositories,
 
 ## Use it from an agent (MCP)
 
-While `polaroidd` runs, point any MCP client that supports streamable HTTP at `http://127.0.0.1:7417/mcp`. For VS Code, add this to `.vscode/mcp.json`:
+While `polaroidd` runs, point any MCP client that supports streamable HTTP and protocol 2026-07-28 at `http://127.0.0.1:7417/mcp`. In VS Code, this repository's [.vscode/mcp.json](.vscode/mcp.json) already does that: start `bin/polaroidd`, and Copilot chat lists the `polaroid` tools. For another workspace, add the same file:
 
 ```json
 {"servers": {"polaroid": {"type": "http", "url": "http://127.0.0.1:7417/mcp"}}}
