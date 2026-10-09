@@ -9,7 +9,7 @@
 - **Responses:** JSON (`application/json`), never SSE. There is no `Mcp-Session-Id`, and `GET` and `DELETE` are not used.
 - **Limits and security:** bodies are limited to 1 MiB. `/mcp` sits behind the same loopback `Host` check and cross-origin protection as the API, with no authentication ([ADR-0006](decisions/0006-local-unauthenticated-api.md)).
 - **Caching:** every `server/discover`, list and `resources/read` result carries `ttlMs: 0`, the protocol's cache hint (SEP-2549) for "immediately stale". The tools change when `polaroidd` is upgraded and records change with every write, so a client must not answer from a cached result. `serverInfo.version` is informational and stays `v1`; it does not change with the tool catalogue.
-- **Server capabilities:** `tools` and `resources`, plus short instructions that describe the agent loop. The last step asks agents to report problems with Polaroid, and suggestions for it, with `report_feedback` ([ADR-0015](decisions/0015-feedback-reports.md)).
+- **Server capabilities:** `tools` and `resources`, plus short instructions that describe the agent loop. They tell agents that `selection_evidence` explains why a version was selected and does not verify their checkout, that `commit` and `inputs` give `target_verification` for the exact run, and that an unverified target still has to be run and recorded ([ADR-0018](decisions/0018-selection-evidence-and-target-verification.md)). The last step asks agents to report problems with Polaroid, and suggestions for it, with `report_feedback` ([ADR-0015](decisions/0015-feedback-reports.md)).
 
 ## Tools
 
@@ -23,13 +23,13 @@ Arguments are flat JSON objects, named after the record fields in [records.md](r
 | `list_procedures` | yes | none | `{"procedures":[…]}` |
 | `get_procedure` | yes | `id` or `canonical_key` (exactly one) | procedure history |
 | `get_version` | yes | `procedure_id`, `version` | version |
-| `get_graph` | yes | `procedure_id`, `version`; `repository` and `environment` together, optional | graph node, [resolved from evidence](records.md#contextual-resolution-implemented) when given a context |
+| `get_graph` | yes | `procedure_id`, `version`; `repository` and `environment` together, optional; `commit` and `inputs` together, optional, with a context | graph node, [resolved from evidence](records.md#contextual-resolution-implemented) when given a context, with [target verification](records.md#selection-evidence-and-target-verification-implemented) when given a target |
 | `create_procedure` | no | `canonical_key`, `philosophy`, `method`, `contract`, `instructions`, `references` (optional), `revision_reason` | procedure history |
 | `revise_procedure` | no | `procedure_id`, `base_version`, then the same version fields | version |
 | `list_bindings` | yes | `repository` | `{"bindings":[…]}` |
 | `get_binding` | yes | `id` | binding history |
 | `get_binding_revision` | yes | `binding_id`, `revision` | binding revision |
-| `resolve_binding` | yes | `binding_id`, `environment` | binding resolution |
+| `resolve_binding` | yes | `binding_id`, `environment`; `commit` and `inputs` together, optional | binding resolution, with target verification when given a target |
 | `create_binding` | no | `repository`, `name`, `procedure_id`, `inputs`, `version_policy`, `revision_reason` | binding history |
 | `revise_binding` | no | `binding_id`, `base_revision`, `inputs`, `version_policy`, `revision_reason` | binding revision |
 | `record_execution` | no | the execution fields: `procedure_id`, `version`, `binding_id` and `binding_revision` (optional), `repository`, `commit`, `environment`, `inputs`, `outcome`, `evidence`, `children` (optional) | execution |

@@ -13,6 +13,8 @@
 # selected child version changes, the parent is re-recorded, a later failure
 # withdraws it, and a second repository stays unverified. Outcomes are
 # scripted: this is a regression check of Polaroid, not agent evidence.
+# A two-commit scenario then shows that evidence from commit A selects a
+# candidate at commit B without verifying B, until a run at B is recorded.
 # Finally it restarts the daemon and confirms every record is unchanged.
 #
 # Usage: scripts/demo.sh   (run `make build` first, or use `make demo`)
@@ -325,6 +327,35 @@ checks@2 latest -"
 jq -e '.executions == []' <<<"$(bin/polaroid executions "$verify_id" "$fixture_repo")" >/dev/null || fail "$fixture_repo has executions"
 echo "$fixture_repo has no executions, so nothing is verified there"
 
+step "17. Evidence from commit A selects a candidate at commit B, but only a run at B verifies B (ADR-0018)"
+commit_a=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+commit_b=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+b_inputs='{"module":"modernc.org/sqlite"}'
+record_b() { # record_b COMMIT: a scripted success of go.dependency.add v2 under the $repo_b binding
+	jq -n --arg p "$id" --arg b "$binding_b_id" --arg r "$repo_b" --arg c "$1" --argjson in "$b_inputs" --arg s "$scripted" \
+		'{procedure_id: $p, version: 2, binding_id: $b, binding_revision: 1, repository: $r, commit: $c,
+		  environment: {name: "demo.ci", attributes: {runner: "scripts/demo.sh"}}, inputs: $in, outcome: "succeeded", evidence: {scripted: $s}}' |
+		bin/polaroid record | jq -r .id
+}
+at_target() { # at_target COMMIT: "version selected_by evidence-commit verified latest"
+	bin/polaroid resolve "$binding_b_id" demo.ci "$1" "$b_inputs" |
+		jq -r '"v\(.graph.version) \(.selected_by) evidence@\(.graph.selection_evidence.commit // "-" | .[0:7]) verified=\(.graph.target_verification.verified) latest=\(.graph.target_verification.latest_execution_id // "-")"'
+}
+run_a="$(record_b "$commit_a")"
+got="$(at_target "$commit_b")"
+[[ "$got" == "v2 evidence evidence@aaaaaaa verified=false latest=-" ]] || fail "at an unseen commit: $got"
+echo "target B before any run there: $got"
+[[ "$(bin/polaroid resolve "$binding_b_id" demo.ci | jq 'has("target_verification") or (.graph | has("target_verification"))')" == false ]] ||
+	fail "a resolution without a target reports target verification"
+run_b="$(record_b "$commit_b")"
+got="$(at_target "$commit_b")"
+[[ "$got" == "v2 evidence evidence@bbbbbbb verified=true latest=$run_b" ]] || fail "after recording at B: $got"
+echo "target B after a run at B:     $got"
+got="$(at_target "$commit_a")"
+[[ "$got" == "v2 evidence evidence@bbbbbbb verified=true latest=$run_a" ]] || fail "A is no longer verified at A: $got"
+jq -e --arg c "$commit_a" '.commit == $c and .outcome == "succeeded"' <<<"$(bin/polaroid get-execution "$run_a")" >/dev/null || fail "A's execution changed"
+echo "target A, still verified by its own run: $got"
+
 dev_snapshot() {
 	bin/polaroid get "$verify_id"
 	bin/polaroid get "$checks_id"
@@ -334,7 +365,7 @@ dev_snapshot() {
 }
 dev_before="$(dev_snapshot)"
 
-step "17. Restart polaroidd and confirm every record persisted"
+step "18. Restart polaroidd and confirm every record persisted"
 stop_daemon
 start_daemon
 [[ "$(bin/polaroid get-by-key "$key")" == "$history" ]] || fail "history differs after restart"

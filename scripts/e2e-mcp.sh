@@ -243,6 +243,10 @@ step resolve_binding "{\"binding_id\":\"$BIND\",\"environment\":\"ci.linux\"}" '
 check "resolve_binding resolves revision 2 to parent@1 (the only version)" json_has '.binding_revision == 2 and .version == 1'
 step resolve_binding "{\"binding_id\":\"$BIND\",\"environment\":\"ci.windows\"}" '[.graph.references[] | {name, selected_by}]'
 check "in an environment without evidence, contextual references fall back to latest" json_has '.[1] == {"name":"latest","selected_by":"latest"}'
+step get_graph "{\"procedure_id\":\"$LEAF\",\"version\":2,\"repository\":\"github.com/example/service\",\"environment\":\"ci.linux\",\"commit\":\"$(printf 'f%.0s' {1..40})\",\"inputs\":{\"module\":\"m\"}}" '{evidence_commit: .selection_evidence.commit, target: (.target_verification | {commit: .combination.commit, verified, execution_ids})}'
+check "selection evidence names its commit; at another commit the target is unverified (ADR-0018)" json_has --arg c "$COMMIT" '.evidence_commit == $c and .target.verified == false and .target.execution_ids == []'
+step get_graph "{\"procedure_id\":\"$LEAF\",\"version\":2,\"repository\":\"github.com/example/service\",\"environment\":\"ci.linux\",\"commit\":\"$COMMIT\",\"inputs\":{\"module\":\"m\"}}" '.target_verification | {verified, latest: .latest_execution_id}'
+check "at the commit and inputs it ran with, the target is verified by that run" json_has --arg id "$C2" '.verified == true and .latest == $id'
 
 ########################################################################
 section "Resources" \
