@@ -54,6 +54,9 @@ func newServer(svc *memory.Service, logger *slog.Logger) *sdk.Server {
 		Logger:                    logger,
 		Capabilities:              &sdk.ServerCapabilities{},
 		SupportedProtocolVersions: []string{ProtocolVersion},
+		// Tools and records change with upgrades and writes, so clients must
+		// never serve a cached discover, list or read result (SEP-2549).
+		SetCacheable: func(_ context.Context, _ sdk.Request, c *sdk.Cacheable) { c.TTLMs = 0 },
 	})
 	t := &tools{svc: svc, logger: logger}
 	t.register(s)

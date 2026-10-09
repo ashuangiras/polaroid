@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"reflect"
@@ -341,6 +343,54 @@ func TestFeedbackThroughTools(t *testing.T) {
 
 	if got := h.ok(t, "get_procedure", `{"canonical_key":"demo.fb"}`); got != p {
 		t.Fatalf("reporting feedback changed the procedure:\n%s\n%s", got, p)
+	}
+}
+
+func TestCacheableResultsAreImmediatelyStale(t *testing.T) {
+	h := newHarness(t)
+	p := field(t, h.ok(t, "create_procedure", `{"canonical_key":"demo.ttl","philosophy":"p","method":"m","contract":{},"instructions":{},"revision_reason":"r"}`), "id")
+	uri := "polaroid://procedures/" + p
+	for _, c := range []struct{ method, name, params string }{
+		{"server/discover", "", `{}`},
+		{"tools/list", "", `{}`},
+		{"resources/templates/list", "", `{}`},
+		{"resources/read", uri, `{"uri":"` + uri + `"}`},
+	} {
+		var params map[string]any
+		if err := jsonv2.Unmarshal([]byte(c.params), &params); err != nil {
+			t.Fatal(err)
+		}
+		params["_meta"] = map[string]any{"io.modelcontextprotocol/protocolVersion": mcptransport.ProtocolVersion, "io.modelcontextprotocol/clientCapabilities": map[string]any{}}
+		body, err := jsonv2.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": c.method, "params": params})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, h.url, bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Header.Set("Mcp-Protocol-Version", mcptransport.ProtocolVersion)
+		req.Header.Set("Mcp-Method", c.method)
+		if c.name != "" {
+			req.Header.Set("Mcp-Name", c.name)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out struct {
+			Result map[string]jsontext.Value `json:"result"`
+		}
+		err = jsonv2.UnmarshalRead(resp.Body, &out)
+		_ = resp.Body.Close()
+		if err != nil {
+			t.Fatalf("%s: %v", c.method, err)
+		}
+		if ttl, ok := out.Result["ttlMs"]; !ok || string(ttl) != "0" {
+			t.Errorf("%s: ttlMs = %s (present %v), want 0", c.method, ttl, ok)
+		}
 	}
 }
 
