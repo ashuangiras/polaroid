@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -157,6 +158,48 @@ func TestBindingCommands(t *testing.T) {
 	}
 }
 
+func TestExecutionCommands(t *testing.T) {
+	server := newServer(t)
+	created := cli(createJSON, nil, "-server", server, "create")
+	mustSucceed(t, created)
+	var p struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(created.stdout), &p); err != nil {
+		t.Fatal(err)
+	}
+
+	recordJSON := `{"procedure_id":"` + p.ID + `","version":1,"repository":"scratch",` +
+		`"commit":"0123456789abcdef0123456789abcdef01234567","environment":{"name":"laptop","attributes":{}},` +
+		`"inputs":{},"outcome":"succeeded","evidence":{"exit":0}}`
+	recorded := cli(recordJSON, nil, "-server", server, "record")
+	mustSucceed(t, recorded)
+	var e struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(recorded.stdout), &e); err != nil || e.ID == "" {
+		t.Fatalf("record output is not an execution: %q (%v)", recorded.stdout, err)
+	}
+
+	for args, want := range map[[3]string]string{
+		{"get-execution", e.ID}:                `"evidence":{"exit":0}`,
+		{"executions", p.ID}:                   e.ID,
+		{"executions", p.ID, "scratch"}:        e.ID,
+		{"executions", p.ID, "github.com/o/r"}: `{"executions":[]}`,
+	} {
+		r := cli("", nil, append([]string{"-server", server}, slices.DeleteFunc(args[:], func(s string) bool { return s == "" })...)...)
+		mustSucceed(t, r)
+		if !strings.Contains(r.stdout, want) {
+			t.Fatalf("%v: stdout %s, want %s", args, r.stdout, want)
+		}
+	}
+
+	invalid := cli(strings.Replace(recordJSON, `"version":1`, `"version":5`, 1), nil, "-server", server, "record")
+	if invalid.code != exitFailure || !strings.Contains(invalid.stdout, `"field":"version"`) {
+		t.Fatalf("recording a missing version: exit %d, stdout %s", invalid.code, invalid.stdout)
+	}
+}
+
 func TestFailedRequestsExitOne(t *testing.T) {
 	server := newServer(t)
 	created := cli("", nil, "-server", server, "create", writeFile(t, createJSON))
@@ -231,6 +274,10 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		{"get-binding-revision", "a"},
 		{"revise-binding"},
 		{"bind", "a", "b"},
+		{"record", "a", "b"},
+		{"get-execution"},
+		{"executions"},
+		{"executions", "a", "b", "c"},
 		{"-server", "ftp://example.com", "list"},
 		{"-server", "127.0.0.1:7417", "list"},
 		{"-no-such-flag", "list"},

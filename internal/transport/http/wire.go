@@ -332,3 +332,103 @@ func newGraphNodeBody(n memory.GraphNode) graphNodeBody {
 	}
 	return body
 }
+
+type environmentBody struct {
+	Name       string         `json:"name"`
+	Attributes jsontext.Value `json:"attributes"`
+}
+
+type recordExecutionBody struct {
+	ProcedureID     string          `json:"procedure_id"`
+	Version         int             `json:"version"`
+	BindingID       string          `json:"binding_id"`
+	BindingRevision int             `json:"binding_revision"`
+	Repository      string          `json:"repository"`
+	Commit          string          `json:"commit"`
+	Environment     environmentBody `json:"environment"`
+	Inputs          jsontext.Value  `json:"inputs"`
+	Outcome         string          `json:"outcome"`
+	Evidence        jsontext.Value  `json:"evidence"`
+}
+
+func (b recordExecutionBody) record() memory.ExecutionRecord {
+	return memory.ExecutionRecord{
+		ProcedureID:     b.ProcedureID,
+		Version:         b.Version,
+		BindingID:       b.BindingID,
+		BindingRevision: b.BindingRevision,
+		Repository:      b.Repository,
+		Commit:          b.Commit,
+		Environment:     memory.Environment{Name: b.Environment.Name, Attributes: b.Environment.Attributes},
+		Inputs:          b.Inputs,
+		Outcome:         memory.Outcome(b.Outcome),
+		Evidence:        b.Evidence,
+	}
+}
+
+// executionSummaryBody is an execution without its inputs and evidence, as
+// listed. binding_id and binding_revision are omitted when no binding was used.
+type executionSummaryBody struct {
+	ID              string          `json:"id"`
+	ProcedureID     string          `json:"procedure_id"`
+	Version         int             `json:"version"`
+	BindingID       string          `json:"binding_id,omitzero"`
+	BindingRevision int             `json:"binding_revision,omitzero"`
+	Repository      string          `json:"repository"`
+	Commit          string          `json:"commit"`
+	Environment     environmentBody `json:"environment"`
+	Outcome         string          `json:"outcome"`
+	CreatedAt       time.Time       `json:"created_at"`
+}
+
+func newExecutionSummaryBody(e memory.Execution) executionSummaryBody {
+	return executionSummaryBody{
+		ID:              e.ID,
+		ProcedureID:     e.ProcedureID,
+		Version:         e.Version,
+		BindingID:       e.BindingID,
+		BindingRevision: e.BindingRevision,
+		Repository:      e.Repository,
+		Commit:          e.Commit,
+		Environment:     environmentBody{Name: e.Environment.Name, Attributes: e.Environment.Attributes},
+		Outcome:         string(e.Outcome),
+		CreatedAt:       e.CreatedAt,
+	}
+}
+
+type executionBody struct {
+	ID              string          `json:"id"`
+	ProcedureID     string          `json:"procedure_id"`
+	Version         int             `json:"version"`
+	BindingID       string          `json:"binding_id,omitzero"`
+	BindingRevision int             `json:"binding_revision,omitzero"`
+	Repository      string          `json:"repository"`
+	Commit          string          `json:"commit"`
+	Environment     environmentBody `json:"environment"`
+	Inputs          jsontext.Value  `json:"inputs"`
+	Outcome         string          `json:"outcome"`
+	Evidence        jsontext.Value  `json:"evidence"`
+	CreatedAt       time.Time       `json:"created_at"`
+}
+
+func newExecutionBody(e memory.Execution) executionBody {
+	s := newExecutionSummaryBody(e)
+	return executionBody{
+		ID:              s.ID,
+		ProcedureID:     s.ProcedureID,
+		Version:         s.Version,
+		BindingID:       s.BindingID,
+		BindingRevision: s.BindingRevision,
+		Repository:      s.Repository,
+		Commit:          s.Commit,
+		Environment:     s.Environment,
+		Inputs:          e.Inputs,
+		Outcome:         s.Outcome,
+		Evidence:        e.Evidence,
+		CreatedAt:       s.CreatedAt,
+	}
+}
+
+type executionListBody struct {
+	Executions []executionSummaryBody `json:"executions"`
+}

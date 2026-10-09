@@ -1,6 +1,6 @@
 # HTTP API (v1)
 
-This page is the contract of the API that `polaroidd` serves. It covers only what is implemented: procedure identity and immutable versions with subprocedure references, and repository bindings with immutable revisions. Field rules are defined in [records.md](records.md).
+This page is the contract of the API that `polaroidd` serves. It covers only what is implemented: procedure identity and immutable versions with subprocedure references, repository bindings with immutable revisions, and execution records. Field rules are defined in [records.md](records.md).
 
 - **Base URL:** `http://127.0.0.1:7417` by default (`polaroidd -addr`).
 - **Bodies:** every request and response body is UTF-8 JSON. Requests with a body must send `Content-Type: application/json` and stay under 1 MiB.
@@ -24,6 +24,9 @@ This page is the contract of the API that `polaroidd` serves. It covers only wha
 | `GET /v1/bindings/{id}` | `200` binding history | A binding and all of its revisions, oldest first. |
 | `GET /v1/bindings/{id}/revisions/{n}` | `200` binding revision | One revision. |
 | `POST /v1/bindings/{id}/revisions` | `201` binding revision, with a `Location` header | Append a revision derived from `base_revision`. |
+| `POST /v1/executions` | `201` execution, with a `Location` header | Record one finished run. |
+| `GET /v1/executions?procedure_id={id}[&version={n}][&repository={repository}]` | `200 {"executions":[...]}` | List a procedure's executions, oldest first, without `inputs` and `evidence`. Not paginated. |
+| `GET /v1/executions/{id}` | `200` execution | One execution, in full. |
 
 `HEAD` is accepted wherever `GET` is.
 
@@ -162,6 +165,43 @@ The response is `201`, with the new revision as the body and `Location: /v1/bind
 {"error":{"code":"revision_conflict","message":"base revision 1 is not the latest revision (latest is 2)","latest_revision":2}}
 ```
 
+### Record an execution
+
+```http
+POST /v1/executions
+Content-Type: application/json
+
+{
+  "procedure_id": "01a11de2-5b69-705a-a457-278000c106be", "version": 2,
+  "binding_id": "01a12033-e0f1-7b6c-8f5e-3d1c2b4a5968", "binding_revision": 1,
+  "repository": "github.com/ashuangiras/polaroid",
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "environment": {"name": "ci.ubuntu-latest", "attributes": {"os": "linux", "go": "1.27.2"}},
+  "inputs": {"module": "modernc.org/sqlite"},
+  "outcome": "succeeded",
+  "evidence": {"commands": [{"run": "make ci", "exit": 0}]}
+}
+```
+
+- The response is `201`, with the execution as the body and `Location: /v1/executions/{id}`. The body is the request plus `id` and `created_at`. `binding_id` and `binding_revision` are absent when no binding was given.
+- `GET /v1/executions/{id}` returns the same bytes.
+- An unknown procedure or binding is `404`.
+- These are `400`, each naming its field:
+  - a missing version or binding revision;
+  - a binding of another procedure or repository;
+  - a version other than the binding revision's pin;
+  - an abbreviated commit;
+  - empty `evidence`.
+
+### List executions
+
+`GET /v1/executions?procedure_id=…` lists one procedure's executions, oldest first, optionally filtered by `version` and `repository`.
+
+- `procedure_id` is required.
+- Each parameter may appear once.
+- Any other parameter is rejected with `400`.
+- List items have every execution field except `inputs` and `evidence`.
+
 ## Errors
 
 Every error is a JSON object of this form:
@@ -174,9 +214,9 @@ Every error is a JSON object of this form:
 
 | Status | `code` | When |
 | --- | --- | --- |
-| 400 | `invalid_request` | Malformed JSON, unknown or duplicate members, wrong JSON types, or a field that fails validation (listed in `fields`). Also a version or revision path segment that is not a positive integer, a pinned version the procedure does not have, a reference to an unknown procedure, and a missing, repeated, invalid or unknown query parameter when listing bindings. |
+| 400 | `invalid_request` | Malformed JSON, unknown or duplicate members, wrong JSON types, or a field that fails validation (listed in `fields`). Also a version or revision path segment that is not a positive integer, a pinned version the procedure does not have, a reference to an unknown procedure, an execution that does not match its version or binding, and a missing, repeated, invalid or unknown query parameter when listing bindings or executions. |
 | 403 | `forbidden` | The `Host` header does not name a loopback address while the daemon listens on loopback, or a browser sent an unsafe cross-origin request. |
-| 404 | `not_found` | Unknown procedure (also as a binding's `procedure_id`), canonical key, version, binding, binding revision or endpoint. |
+| 404 | `not_found` | Unknown procedure (also as a binding's or execution's `procedure_id`), canonical key, version, binding (also as an execution's `binding_id`), binding revision, execution or endpoint. |
 | 405 | `method_not_allowed` | The endpoint exists, but not for this method. The `Allow` header lists the methods it accepts. |
 | 409 | `canonical_key_exists` | Another procedure already uses the canonical key. |
 | 409 | `version_conflict` | `base_version` is not the latest version. `latest_version` is included. |
@@ -185,6 +225,7 @@ Every error is a JSON object of this form:
 | 409 | `reference_cycle` | The version's references would form a cycle, or a stored graph contains one. `cycle` is included. |
 | 413 | `request_too_large` | The body exceeds 1 MiB. |
 | 415 | `unsupported_media_type` | A request with a body that is not `application/json`. |
+| 422 | `graph_too_large` | A composition graph, written or read, is deeper than 32 references or has more than 2048 nodes. |
 | 500 | `internal` | An unexpected failure. The details are logged by `polaroidd` and never returned. |
 | 503 | `unavailable` | Only from `/healthz`, when the database is unreachable. |
 
@@ -215,6 +256,9 @@ Example `invalid_request` response:
 | `polaroid get-binding ID` | `GET /v1/bindings/{id}` |
 | `polaroid get-binding-revision ID N` | `GET /v1/bindings/{id}/revisions/{n}` |
 | `polaroid revise-binding ID [FILE]` | `POST /v1/bindings/{id}/revisions` |
+| `polaroid record [FILE]` | `POST /v1/executions` |
+| `polaroid get-execution ID` | `GET /v1/executions/{id}` |
+| `polaroid executions PROCEDURE_ID [REPOSITORY]` | `GET /v1/executions?procedure_id={id}[&repository={repository}]` |
 
 `FILE` defaults to stdin, and so does `-`. The server is `-server URL`, else `$POLAROID_URL`, else `http://127.0.0.1:7417`.
 
@@ -222,4 +266,4 @@ Example `invalid_request` response:
 
 Within `/v1`, changes are additive only: new endpoints, or new optional response fields. Clients must ignore response fields they do not know. Requests stay strict, so a client sending a field the server does not yet support gets `400`, not silent data loss. A breaking change needs a new version prefix and an ADR.
 
-Listing is unbounded today. Pagination, if added, will be opt-in through new query parameters, so existing clients keep receiving complete lists. Until then, `GET /v1/bindings` rejects any query parameter other than `repository`.
+Listing is unbounded today. Pagination, if added, will be opt-in through new query parameters, so existing clients keep receiving complete lists. Until then, the list endpoints for bindings and executions reject any query parameter they do not document.

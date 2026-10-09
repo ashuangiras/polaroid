@@ -2,7 +2,7 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
-**As of 2026-10-09:** increments 1 and 2 are implemented: procedure identity and immutable versions, [#1](https://github.com/ashuangiras/polaroid/issues/1) repository bindings, [#2](https://github.com/ashuangiras/polaroid/issues/2) named subprocedure references, and [#3](https://github.com/ashuangiras/polaroid/issues/3) reference-graph validation with bounded traversal. The repository is the private repository [ashuangiras/polaroid](https://github.com/ashuangiras/polaroid), and the local toolchain is Go 1.27.2.
+**As of 2026-10-09:** increments 1 and 2 are implemented, and so is the first item of increment 3, [#7](https://github.com/ashuangiras/polaroid/issues/7) (execution records). Increment 2 covered [#1](https://github.com/ashuangiras/polaroid/issues/1) repository bindings, [#2](https://github.com/ashuangiras/polaroid/issues/2) named subprocedure references, and [#3](https://github.com/ashuangiras/polaroid/issues/3) reference-graph validation with bounded traversal. The repository is the private repository [ashuangiras/polaroid](https://github.com/ashuangiras/polaroid), and the local toolchain is Go 1.27.2.
 
 ## Implemented
 
@@ -26,6 +26,17 @@ This page is a snapshot of the repository's current state, replaced at every han
   - every write of a version with references expands its graph in the write transaction. A path that reaches a procedure already on it, at any version, gets `409 reference_cycle` with the `cycle` path, and nothing is stored. This covers `A → A`, `A → B → A`, a cycle closed by a later revision of a target, and two concurrent half-cycles (exactly one is stored);
   - limits are a depth of 32 and 2048 nodes. Beyond them the response is `422 graph_too_large`, never partial data;
   - `GET /v1/procedures/{id}/versions/{n}/graph` (CLI `graph ID N`) returns the nested tree with the exact version of every node, read from one snapshot.
+- **Execution records** ([#7](https://github.com/ashuangiras/polaroid/issues/7), [ADR-0010](../architecture/decisions/0010-execution-records.md)):
+  - an execution is written once after a run and never changed. It records:
+    - the exact procedure `version`, and an optional binding revision;
+    - the `repository` and a full commit hash (40 or 64 lowercase hex characters);
+    - a named `environment` with free-form attributes;
+    - the effective `inputs`;
+    - an `outcome` of `succeeded` or `failed`;
+    - non-empty inline `evidence`;
+  - an unknown procedure or binding gets `404`. These get `400` naming the field: a missing version or binding revision, a binding of another procedure or repository, and a version other than the binding revision's pin;
+  - `POST /v1/executions`, `GET /v1/executions/{id}`, and `GET /v1/executions?procedure_id=…[&version=…][&repository=…]`, which returns summaries oldest first. CLI commands: `record`, `get-execution`, `executions`;
+  - migration `0004` adds the table, with foreign keys to the version and binding revision, a binding-consistency trigger, `CHECK`s on the commit, environment, outcome and JSON fields, and immutability triggers.
 - **Persistence:** SQLite in WAL mode with `synchronous=FULL`. Migrations are counted by `user_version`, and a database with a newer schema is refused.
 - **HTTP API v1** ([contract](../architecture/http-api.md)):
   - procedures: create, list, get by ID, get by key, get one version, get a version's composition graph, revise, and `/healthz`;
@@ -36,18 +47,18 @@ This page is a snapshot of the repository's current state, replaced at every han
 - **`polaroid` CLI:** a generic client. It reads JSON from a file or stdin, prints response bodies to stdout, and exits with 0, 1 or 2. Binding commands: `bindings`, `bind`, `get-binding`, `get-binding-revision`, `revise-binding`.
 - **Supporting material:** example records, the live demo (`make demo`, now including a two-repository binding), package-boundary tests, a dependency and license gate, CI workflow, Copilot instructions, and the docs and ADRs.
 
-**Not implemented:** executions and evidence, evidence-based contextual resolution (and any resolution of contextual binding policies), discovery, aliases, MCP, access control, and the PoC import. See the [roadmap](roadmap.md).
+**Not implemented:** subprocedure executions, verification, evidence-based contextual resolution (and any resolution of contextual binding policies), discovery, aliases, MCP, access control, and the PoC import. See the [roadmap](roadmap.md).
 
 ## Verification evidence
 
 | Check | Where | Result |
 | --- | --- | --- |
-| `make ci` with `GOLANGCI_LINT=<golangci-lint 2.14.0 release binary>`, branch `issue-3-reference-graph` | darwin/arm64, local Go 1.27.2 | **Pass.** `0 issues`; 6/6 packages `ok` in `go test` and in `go test -race`; `deps-check: PASS (10 modules …)`; `No vulnerabilities found.`; `demo: PASS`. |
-| GitHub Actions `ci`, runs 37921336843 (PR for #2) and 37921363929 (`main` at `1f15445`) | ubuntu-latest | **Pass.** |
+| `make ci` with `GOLANGCI_LINT=<golangci-lint 2.14.0 release binary>`, branch `issue-7-execution-records` | darwin/arm64, local Go 1.27.2 | **Pass.** `0 issues`; 6/6 packages `ok` in `go test` and in `go test -race`; `deps-check: PASS (10 modules …)`; `No vulnerabilities found.`; `demo: PASS`, including recording an execution, rejecting a version outside the binding's pin, and the restart. |
+| GitHub Actions `ci`, runs 37923015793 (PR for #3) and 37923034159 (`main` at `c85211c`) | ubuntu-latest | **Pass.** |
 | GitHub Actions `ci`, runs 37918349018 (PR for #1) and 37918365752 (`main` at `ce8e024`) | ubuntu-latest | **Pass.** |
 | GitHub Actions `ci`, run [37912026720](https://github.com/ashuangiras/polaroid/actions/runs/37912026720) on commit `7fb84cd` (increment 1) | ubuntu-latest, Go 1.27.2, golangci-lint 2.14.0 | **Pass.** |
 | `make lint` with the `golangci-lint` on `PATH` (2.12.2) | darwin/arm64 | **Fails, as designed.** The output reads `golangci-lint 2.14.0 is required, found 2.12.2`. |
-| Test inventory | darwin/arm64, Go 1.27.2 | The source has 90 `Test` functions, and 90 top-level tests passed (plus 105 subtests). |
+| Test inventory | darwin/arm64, Go 1.27.2 | The source has 101 `Test` functions, and 101 top-level tests passed (plus 156 subtests). |
 
 Negative checks showed that the gates detect what they claim to detect. Each mutation below was made temporarily, the expected tests failed, and the mutation was reverted:
 
@@ -62,6 +73,9 @@ Negative checks showed that the gates detect what they claim to detect. Each mut
 - Skipping the write-time graph check fails the storage cycle, concurrency and limit tests and both HTTP graph tests.
 - Disabling cycle detection in the walker fails `TestExpandGraphRejectsCycles`, the four storage cycle tests and `TestReferenceCyclesAreRejected`. The limits still stop the walk.
 - Disabling the depth limit fails `TestExpandGraphLimits`, `TestCompositionGraphLimits` and `TestGraphsOverTheLimitAreRefused`.
+- Skipping the service's execution-target checks fails seven `TestExecutionTargetsAreChecked` cases and `TestExecutionCommands`. The schema still blocked every bad write.
+- Disabling the execution-binding trigger fails two `TestSchemaRejectsInvalidAndChangedExecutions` cases.
+- Accepting abbreviated commits in validation fails `TestExecutionFieldRules` and `TestInvalidExecutionsAreRejected`. The schema `CHECK` still rejected them.
 - Leaking internal error text fails `TestInternalErrorsAreNotExposed`.
 - Making the CLI exit 0 on API errors fails `TestFailedRequestsExitOne`.
 - Adding `net/http` to `internal/memory` fails `TestPackageBoundaries`.
@@ -75,8 +89,8 @@ Negative checks showed that the gates detect what they claim to detect. Each mut
 
 ## Next work item
 
-Refine roadmap item **3.1 Execution records** and file it as an issue. Increment 3's items are ordered but not yet issue-ready. Settle at least these first:
+Refine roadmap item **3.2 Subprocedure executions** and file it as an issue. Settle these first:
 
-- how an environment is identified;
-- whether evidence is stored inline or by reference, with size limits;
-- how an execution names the binding revision and repository it ran under.
+- how a child execution names its parent and the reference it fulfils;
+- whether children are recorded with the parent in one request, or separately;
+- how a contextual reference's actually-used version is checked against the policy.

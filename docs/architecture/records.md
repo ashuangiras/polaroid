@@ -2,7 +2,7 @@
 
 This page defines Polaroid's records, how they are identified and how they are versioned. Each section is marked as **implemented** or **planned**. The [HTTP API](http-api.md) serves the implemented records with exactly these field names.
 
-Summary: a **procedure** is a shared identity with immutable **versions**. A version may **reference** other procedures it composes. A **binding** lets one repository use a procedure under a local name, with immutable **binding revisions** that hold the repository's inputs and version policy.
+Summary: a **procedure** is a shared identity with immutable **versions**. A version may **reference** other procedures it composes. A **binding** lets one repository use a procedure under a local name, with immutable **binding revisions** that hold the repository's inputs and version policy. An **execution** records one finished run of an exact version.
 
 ## Implemented records
 
@@ -106,13 +106,33 @@ A binding revision is one immutable configuration of a binding.
 
 Binding revisions follow the [versioning rules](#versioning-rules-implemented) with `base_revision` in place of `base_version`. A binding and its revision 1 are created in one atomic write. A revision is stored only if `base_revision` is the latest revision; any other base gets `409 revision_conflict` with `latest_revision`. Database triggers reject `UPDATE` and `DELETE` of bindings and revisions, gaps in revision numbers, and a pin to a version the procedure does not have.
 
+### Execution (implemented)
+
+An execution is an immutable record of one finished run, written once after the run and never changed or deleted ([ADR-0010](decisions/0010-execution-records.md)).
+
+| Field | Type | Set by | Rules |
+| --- | --- | --- | --- |
+| `id` | string | server | A UUIDv7. |
+| `procedure_id`, `version` | string, integer ≥ 1 | client | The exact version that ran. It must exist. |
+| `binding_id`, `binding_revision` | string, integer ≥ 1 | client | Optional. Give both or neither. The binding must be for this procedure and repository, and a pinned revision must pin `version`. Both fields are omitted from responses when no binding was used. |
+| `repository` | string | client | The canonical path ([ADR-0007](decisions/0007-repository-identity-for-bindings.md)). |
+| `commit` | string | client | A full commit hash: 40 or 64 lowercase hex characters. |
+| `environment` | object | client | `{"name": ..., "attributes": {...}}`. `name` uses the canonical-key format and is the environment's identity. `attributes` is a free-form JSON object, which may be `{}` and is never interpreted. |
+| `inputs` | JSON object | client | The effective inputs. Free-form, and may be `{}`. |
+| `outcome` | string | client | `succeeded` or `failed`. |
+| `evidence` | JSON object | client | Free-form and non-empty, for example commands with their exit codes, or links to external artifacts with digests. Limited only by the 1 MiB request size. |
+| `created_at` | RFC 3339 timestamp, UTC | server | |
+
+`environment.attributes`, `inputs` and `evidence` are stored like `contract`: compacted, but otherwise exactly as submitted.
+
+An unknown procedure or binding is `404`. A missing version or binding revision, and every mismatch, is `400` naming the field. The database enforces the same rules with foreign keys and triggers, and it rejects `UPDATE` and `DELETE`. Recording an execution changes no other record.
+
 ## Planned records (not implemented)
 
 These follow the established design. None of them exist in code, storage or the API yet. Their fields and rules are settled in the [roadmap](../development/roadmap.md) work items, and the open questions below must be answered before implementation.
 
-### Execution and subprocedure execution (increment 3)
+### Subprocedure execution (increment 3)
 
-- An **execution** records exactly what ran: the exact procedure version (and binding revision, if any), the effective inputs, the repository, the commit, the environment, the outcome and observable evidence.
 - A **subprocedure execution** is a child execution linked to its parent through the named reference it fulfilled.
 - When a reference asked for contextual resolution, the execution still records the exact versions actually used.
 
@@ -124,9 +144,8 @@ These follow the established design. None of them exist in code, storage or the 
 
 ### Open questions
 
-- What does contextual resolution select before any evidence exists: the latest version, or the latest version verified in a matching context?
-- How is an environment identified, and with which attributes? (Repositories are identified by canonical path; see [ADR-0007](decisions/0007-repository-identity-for-bindings.md).)
-- How is evidence stored, inline or by reference, and with what size limits?
+- When evidence exists, what does contextual resolution select: the latest version verified in a matching context, or something else? (Until then, the composition graph selects the latest version; see [ADR-0009](decisions/0009-reference-graph-rules.md).)
+- How does verification match an environment: by `environment.name` alone, as [ADR-0010](decisions/0010-execution-records.md) intends, or also by some attributes?
 
 ## Compatibility
 
