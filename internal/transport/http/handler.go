@@ -51,6 +51,7 @@ func NewHandler(svc *memory.Service, logger *slog.Logger) http.Handler {
 	a.mux.HandleFunc("GET /v1/bindings/{id}", a.getBinding)
 	a.mux.HandleFunc("POST /v1/bindings/{id}/revisions", a.reviseBinding)
 	a.mux.HandleFunc("GET /v1/bindings/{id}/revisions/{revision}", a.getBindingRevision)
+	a.mux.HandleFunc("GET /v1/bindings/{id}/resolution", a.resolveBinding)
 	a.mux.HandleFunc("POST /v1/executions", a.recordExecution)
 	a.mux.HandleFunc("GET /v1/executions", a.listExecutions)
 	a.mux.HandleFunc("GET /v1/executions/{id}", a.getExecution)
@@ -184,7 +185,24 @@ func (a *api) getGraph(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	g, err := a.svc.CompositionGraph(r.Context(), r.PathValue("id"), number)
+	query, ok := strictQuery(w, r, "repository", "environment")
+	if !ok {
+		return
+	}
+	if query.Has("repository") != query.Has("environment") {
+		missing, given := "environment", "repository"
+		if !query.Has("repository") {
+			missing, given = given, missing
+		}
+		writeError(w, http.StatusBadRequest, errorDetail{
+			Code:    "invalid_request",
+			Message: "repository and environment must be given together",
+			Fields:  []fieldProblem{{Field: missing, Message: "is required with " + given}},
+		})
+		return
+	}
+	rc := memory.ResolutionContext{Repository: query.Get("repository"), Environment: query.Get("environment")}
+	g, err := a.svc.CompositionGraph(r.Context(), r.PathValue("id"), number, rc)
 	if err != nil {
 		a.fail(w, r, err)
 		return

@@ -54,6 +54,27 @@ func (a *api) getBinding(w http.ResponseWriter, r *http.Request) {
 	a.respond(w, r, http.StatusOK, newBindingHistoryBody(h))
 }
 
+func (a *api) resolveBinding(w http.ResponseWriter, r *http.Request) {
+	query, ok := strictQuery(w, r, "environment")
+	if !ok {
+		return
+	}
+	res, err := a.svc.ResolveBinding(r.Context(), r.PathValue("id"), query.Get("environment"))
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	a.respond(w, r, http.StatusOK, bindingResolutionBody{
+		BindingID:       res.Binding.ID,
+		BindingRevision: res.Revision.Number,
+		Repository:      res.Binding.Repository,
+		Environment:     environmentName{Name: res.Environment},
+		VersionPolicy:   newVersionPolicyBody(res.Revision.VersionPolicy),
+		SelectedBy:      string(res.SelectedBy),
+		Graph:           newGraphNodeBody(res.Graph),
+	})
+}
+
 func (a *api) reviseBinding(w http.ResponseWriter, r *http.Request) {
 	var body reviseBindingBody
 	if !decode(w, r, &body) {

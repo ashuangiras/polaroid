@@ -53,9 +53,16 @@ var commands = []command{
 		func(c *client, args []string) error {
 			return c.do(http.MethodGet, procedurePath(args[0])+"/versions/"+url.PathEscape(args[1]), nil)
 		}},
-	{"graph", "ID N", "show the composition graph of version N, with the version each reference selects", 2, 2,
+	{"graph", "ID N [REPO ENV]", "show version N's composition graph, resolved in REPO and ENV if given", 2, 4,
 		func(c *client, args []string) error {
-			return c.do(http.MethodGet, procedurePath(args[0])+"/versions/"+url.PathEscape(args[1])+"/graph", nil)
+			path := procedurePath(args[0]) + "/versions/" + url.PathEscape(args[1]) + "/graph"
+			switch len(args) {
+			case 3:
+				return usageError("graph needs both REPO and ENV, or neither")
+			case 4:
+				path += "?" + url.Values{"repository": {args[2]}, "environment": {args[3]}}.Encode()
+			}
+			return c.do(http.MethodGet, path, nil)
 		}},
 	{"revise", "ID [FILE]", "append a version from request JSON in FILE or stdin", 1, 2,
 		func(c *client, args []string) error {
@@ -76,6 +83,10 @@ var commands = []command{
 	{"revise-binding", "ID [FILE]", "append a binding revision from request JSON in FILE or stdin", 1, 2,
 		func(c *client, args []string) error {
 			return c.send(http.MethodPost, bindingPath(args[0])+"/revisions", args[1:])
+		}},
+	{"resolve", "BINDING_ID ENV", "resolve a binding's latest revision in environment ENV", 2, 2,
+		func(c *client, args []string) error {
+			return c.do(http.MethodGet, bindingPath(args[0])+"/resolution?"+url.Values{"environment": {args[1]}}.Encode(), nil)
 		}},
 	{"record", "[FILE]", "record a finished execution from request JSON in FILE or stdin", 0, 1,
 		func(c *client, args []string) error { return c.send(http.MethodPost, "/v1/executions", args) }},

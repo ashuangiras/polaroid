@@ -47,7 +47,7 @@ A reference is a named use of another procedure by a version. It is part of the 
 | --- | --- | --- |
 | `name` | string | Canonical-key format, unique within the version. |
 | `procedure_id` | string | The target procedure, which must exist. |
-| `version_policy` | JSON object | The [binding policy type](#binding-revision-implemented): `{"pin": N}`, where the target must have version `N`, or `{"contextual": {}}`, stored but not resolved yet. |
+| `version_policy` | JSON object | The [binding policy type](#binding-revision-implemented): `{"pin": N}`, where the target must have version `N`, or `{"contextual": {}}`, resolved from evidence ([contextual resolution](#contextual-resolution-implemented)). |
 | `inputs` | JSON object | Required, and may be `{}`. Maps each child input name to exactly one source: `{"input": "<parent input name>"}` passes a parent input through, and `{"value": <any JSON>}` passes a literal. Stored compacted, otherwise as submitted. |
 
 Polaroid validates the shape only. It does not check input names against either procedure's `contract`, which it never interprets. Field errors name the reference by position, for example `version.references[1].inputs.module`. An unknown target is `400` on `version.references[i].procedure_id`, and a missing pinned version is `400` on `version.references[i].version_policy.pin`. Every failing reference is listed.
@@ -58,7 +58,7 @@ References are written in the same transaction as their version, and the databas
 
 A version's references, their targets' references, and so on, form its composition graph ([ADR-0009](decisions/0009-reference-graph-rules.md)).
 
-- **Selected versions:** a pinned reference selects its pinned version. A contextual reference selects the target's **latest version** at the time of the check or read. That is the rule until execution evidence exists (increment 3). Contextual *binding* policies are still not resolved.
+- **Selected versions:** a pinned reference selects its pinned version. Without a resolution context, a contextual reference selects the target's **latest version** at the time of the check or read; the write-time check always does. With a context, [contextual resolution](#contextual-resolution-implemented) selects from evidence.
 - **No cycles:** a path may not reach a procedure that is already on it, at any version. `A → A` and `A v2 → B → A v1` are both cycles. Every write of a version with references expands its graph in the same transaction. A cycle gets `409 reference_cycle`, and nothing is stored. This includes a cycle closed by a later revision of a contextually referenced target.
 - **Limits:** a graph may be at most **32** references deep and **2048** nodes in the expanded tree. A target shared by two references counts under each. A larger graph gets `422 graph_too_large`, never partial data. Writes check the new version's graph. A later revision elsewhere can still push an existing version's graph over the limits, and reading that graph then returns `422`.
 - Versions stored before cycle checking existed are never rewritten. If one holds a cycle, reading its graph returns `409 reference_cycle`.
@@ -100,7 +100,7 @@ A binding revision is one immutable configuration of a binding.
 | `created_at` | RFC 3339 timestamp, UTC | server | |
 
 - **`{"pin": N}`** selects version `N` of the bound procedure. `N` must be an integer of at least 1, and the procedure must have that version when the revision is stored; otherwise the request gets `400` naming `revision.version_policy.pin`.
-- **`{"contextual": {}}`** asks for contextual resolution. It is stored and returned exactly as given. Contextual resolution is **not implemented** (increment 3): no endpoint resolves it, and no response names a selected version. The `contextual` object accepts no members yet. Any member is rejected, so parameters can be added later without changing the meaning of stored policies.
+- **`{"contextual": {}}`** asks for contextual resolution. It is stored and returned exactly as given, and binding reads never name a selected version. `GET /v1/bindings/{id}/resolution` resolves it in an environment ([contextual resolution](#contextual-resolution-implemented)). The `contextual` object accepts no members yet. Any member is rejected, so parameters can be added later without changing the meaning of stored policies.
 
 `inputs` is stored like `contract`: insignificant whitespace removed, everything else exactly as submitted.
 
@@ -152,18 +152,25 @@ Verification is derived from executions and their links on every read. Nothing i
   Success in one combination says nothing about another. Changing any child's version anywhere in the tree makes a new combination, which needs a fresh parent execution. Earlier executions stay with the combination they were recorded in.
 - **Status of a combination.** It is the verification of its **latest** execution, by `created_at` and then `id`. A failure after a success therefore makes the combination unverified until a newer execution succeeds. Every execution remains listed in `execution_ids`.
 
+### Contextual resolution (implemented)
+
+Contextual references and contextual binding policies resolve from verification evidence in a requesting context ([ADR-0013](decisions/0013-evidence-based-resolution.md)). Nothing is stored for a resolution.
+
+- **Context:** a `repository` and an `environment` name. The commit and inputs are not part of it.
+- **Verified in the context:** a version is verified in a context when its latest execution with that repository and environment is verified, whatever its commit and inputs. That execution is the version's *evidence*.
+- **Selection:** the walk starts at the root, which carries its own evidence if it has any.
+  - **Under a node with evidence:** every reference selects the version of the child execution that the evidence linked for it, and that child execution becomes the child node's evidence. A verified combination is thus followed as a whole.
+  - **Under a node without evidence:**
+    - a pinned reference selects its pin, with the pin's own evidence if any;
+    - a contextual reference selects the **highest version number** verified in the context;
+    - if none is verified, it selects the **latest** version, unverified.
+- **Reporting:** every graph edge has `selected_by` (`pin`, `evidence` or `latest`). Every node with evidence has `verified_by`, the evidence's execution ID.
+- **Safety:** evidence can select older versions, so the walk keeps the cycle and size checks of the [composition graph](#composition-graph-implemented) and reports them on read.
+- **Without a context:** the graph endpoint selects as before, with contextual references taking the latest version.
+
 ## Planned records (not implemented)
 
-These follow the established design. None of them exist in code, storage or the API yet. Their fields and rules are settled in the [roadmap](../development/roadmap.md) work items, and the open questions below must be answered before implementation.
-
-### Contextual resolution from evidence (increment 3)
-
-Contextual references and contextual binding policies will be resolved using verification evidence for the requesting context, always reporting the exact versions selected.
-
-### Open questions
-
-- When evidence exists, what does contextual resolution select: the latest version verified in a matching combination, or something else? (Until then, the composition graph selects the latest version; see [ADR-0009](decisions/0009-reference-graph-rules.md).)
-- What does a requesting context consist of, given that a combination includes the commit and inputs, which a resolving agent may not know in advance?
+No records are planned in the current increments. Later work (discovery, aliases, access control, the PoC import) is listed in the [roadmap](../development/roadmap.md), and its records are designed when it is refined into issues.
 
 ## Compatibility
 

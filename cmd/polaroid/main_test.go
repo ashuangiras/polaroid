@@ -191,12 +191,28 @@ func TestExecutionCommands(t *testing.T) {
 		{"verifications", p.ID, "1"}:                              `"latest_execution_id":"` + e.ID + `"`,
 		{"verifications", p.ID, "1", "scratch", commit, "laptop"}: `"execution_ids":["` + e.ID + `"]`,
 		{"verifications", p.ID, "1", "scratch", commit, "other"}:  `{"verifications":[]}`,
+		{"graph", p.ID, "1", "scratch", "laptop"}:                 `"verified_by":"` + e.ID + `"`,
 	} {
 		r := cli("", nil, append([]string{"-server", server}, slices.DeleteFunc(args[:], func(s string) bool { return s == "" })...)...)
 		mustSucceed(t, r)
 		if !strings.Contains(r.stdout, want) {
 			t.Fatalf("%v: stdout %s, want %s", args, r.stdout, want)
 		}
+	}
+
+	bound := cli(`{"repository":"scratch","name":"follow","procedure_id":"`+p.ID+`",`+
+		`"revision":{"inputs":{},"version_policy":{"contextual":{}},"revision_reason":"r"}}`, nil, "-server", server, "bind")
+	mustSucceed(t, bound)
+	var b struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(bound.stdout), &b); err != nil {
+		t.Fatal(err)
+	}
+	resolved := cli("", nil, "-server", server, "resolve", b.ID, "laptop")
+	mustSucceed(t, resolved)
+	if !strings.Contains(resolved.stdout, `"selected_by":"evidence"`) {
+		t.Fatalf("resolve: %s", resolved.stdout)
 	}
 
 	invalid := cli(strings.Replace(recordJSON, `"version":1`, `"version":5`, 1), nil, "-server", server, "record")
@@ -273,6 +289,9 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		{"get", "a", "b"},
 		{"get-version", "a"},
 		{"graph", "a"},
+		{"graph", "a", "1", "repo"},
+		{"graph", "a", "1", "repo", "env", "x"},
+		{"resolve", "a"},
 		{"revise"},
 		{"bindings"},
 		{"get-binding"},

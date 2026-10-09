@@ -38,10 +38,10 @@ func TestCompositionGraphEndpoint(t *testing.T) {
 		return fmt.Sprintf(`{"procedure_id":%q,"canonical_key":"go.dependency.add","version":%d,"references":[]}`, leaf, n)
 	}
 	want := fmt.Sprintf(`{"procedure_id":%q,"canonical_key":"compose.root","version":1,"references":[`+
-		`{"name":"old-leaf","version_policy":{"pin":1},"inputs":{},"node":%s},`+
-		`{"name":"mid","version_policy":{"contextual":{}},"inputs":{"module":{"input":"driver"}},"node":`+
+		`{"name":"old-leaf","version_policy":{"pin":1},"selected_by":"pin","inputs":{},"node":%s},`+
+		`{"name":"mid","version_policy":{"contextual":{}},"selected_by":"latest","inputs":{"module":{"input":"driver"}},"node":`+
 		`{"procedure_id":%q,"canonical_key":"compose.mid","version":1,"references":[`+
-		`{"name":"leaf","version_policy":{"contextual":{}},"inputs":{},"node":%s}]}}]}`,
+		`{"name":"leaf","version_policy":{"contextual":{}},"selected_by":"latest","inputs":{},"node":%s}]}}]}`,
 		root, leafNode(1), mid, leafNode(2))
 	if got := strings.TrimSpace(string(resp.body)); got != want {
 		t.Fatalf("graph =\n %s\nwant\n %s", got, want)
