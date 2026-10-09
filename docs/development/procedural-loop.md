@@ -147,7 +147,67 @@ After #31 the capability existed, but `dev.change.verify` version 1 still resolv
 
 **Automated evidence.** `make demo` step 18 loads version 2 with the loader (version 1 unchanged, references unchanged, the stored instructions resolve with `commit` and `inputs`), shows that a second load changes nothing and that a differing version 2 is refused without writing, and then, over MCP at a new scripted commit: nothing verified; after the children only, the children verified and the parent not; after the parent, all three verified; and at a later commit with the same inputs, nothing verified. The #28 replay in steps 12 to 16 loads the fixtures as they were then, without this version.
 
+**Live run of version 2** (Copilot, the authoring session, 2026-10-09, `bin/dogfood/polaroid.db`). Target: commit `827aff26ba79c070b28299c16a97adb2e2e5f35e`, the implementation commit of #33 with the fixture and the demo, in a detached worktree `/tmp/polaroid-verify-827aff2` with an empty `git status --porcelain`; `darwin-arm64.local` with Go 1.27.2, bash 5.2.37, jq 1.8.1, sqlite3 3.51.0 and golangci-lint 2.14.0 passed as `GOLANGCI_LINT`; binding `01a12169-52ff…` revision 1, so the effective inputs are its inputs plus `working_tree: clean`.
+
+| Step | Result |
+| --- | --- |
+| `resolve_binding` at `827aff2` with the inputs | Root **v1**, build v1 and checks v2, all `selected_by: evidence` with `selection_evidence.commit` `2b2dea6`; `target_verification` **false, no executions** for all three. |
+| `get_graph` for **version 2** at the same target | Chosen explicitly for its first run (the `selection` step). build v1 and checks v2 by evidence from `2b2dea6`; all three unverified at the target. |
+| `go.module.build` v1 | `01a121de-5a0d-7774-a54c-26d670ba48a3` succeeded: `toolchain go1.27.2` matched `go version`; `make build` exit 0; both artifacts written by the run; tree unchanged. |
+| `go.module.checks` v2 | `01a121e0-f85c-7083-b2bf-e0eed7808cf1` succeeded: `go test ./...` 7 `ok`; `make check` `0 issues.`, 7 `ok` lines in each test run, none cached, `deps-check: PASS`; `make vuln` `No vulnerabilities found.`; `make demo` `demo: PASS` (with step 18); `make e2e` `passed=192 failed=0`; `make e2e-mcp E2E_INTEROP=0` `passed=83 failed=0`; interop recorded as not run. |
+| `get_graph` v2 at the target, children only | build and checks **verified**, with those executions as latest; the root still **unverified, no executions**. |
+| `dev.change.verify` v2 | `01a121e1-6f23-7999-8e69-d02afa3e0803` succeeded, with `binding_id`, `binding_revision: 1` and both children. Its evidence says that version 2 was chosen explicitly and what resolution selected. `get_verification`: **verified**. HEAD and the porcelain status were rechecked before each record. |
+| `resolve_binding` at `827aff2` | Root **v2** now `selected_by: evidence` from `827aff2`; all three **verified** at the target, latest = the three executions above. |
+| Other targets | `bfcbb3a` (an unseen commit) and `827aff2` with `working_tree: modified:x`: all unverified. `2b2dea6`: the children verified by their #31 runs, but root v2 unverified, because version 2 never ran there. |
+
+Resolutions with a target were sent as raw MCP JSON-RPC, because the chat client rejected them (see below); `get_graph`, `record_execution` and every other call went through the normal MCP tools.
+
+**Fresh session.** A Copilot subagent started from the authoring session, with no access to its conversation; its only input was the prompt below, which gives the goal, the commit, the service and environment facts, and no procedure steps or call sequence. It shares the workspace and the VS Code MCP client. It is not a chat session started by a person. It worked in its own worktree `/tmp/polaroid-verify-827aff2-r2`, at the same commit, which the run above had already verified:
+
+- it found the binding, and resolution gave it **version 2 by evidence** (from `827aff2`); it followed what was selected;
+- before its run, target verification was already **true** (latest `01a121e1-6f23…`). Following the `existing-evidence` step, it reported that as context and ran again;
+- it recorded `go.module.build` v1 `01a121e3-e3b8-727e-99e2-55994198851a`, `go.module.checks` v2 `01a121e6-0b33-7fce-a182-a03f36de2b4c` (the same gate results: 7 `ok`, `0 issues.`, `deps-check: PASS`, `No vulnerabilities found.`, `demo: PASS`, `passed=192 failed=0`, `passed=83 failed=0`), and `dev.change.verify` v2 `01a121e6-38ad-7e1c-bddf-fb0fb86d35fa` with binding revision 1 and both children; verified;
+- resolving again at the target reported all three verified with **its** executions as latest; `list_verifications` for version 2 shows one combination at `827aff2` with two executions;
+- its `resolve_binding` calls with `commit` and `inputs` were rejected by the client in the same way, so it used `bin/polaroid resolve` and said so in the parent's evidence. No procedure step was wrong, and it appended no version.
+
+```text
+Goal: verify Polaroid (this repository, github.com/ashuangiras/polaroid, work
+item https://github.com/ashuangiras/polaroid/issues/33) at commit
+827aff26ba79c070b28299c16a97adb2e2e5f35e, using the procedure that Polaroid
+holds for this repository, and record what you did in Polaroid.
+
+Polaroid is a procedural-memory service running at http://127.0.0.1:7417.
+Its MCP tools are available to you as mcp_polaroid_proc_*; the same
+operations are available over its HTTP API at that address, and through the
+CLI bin/polaroid in this repository (POLAROID_URL=http://127.0.0.1:7417).
+Polaroid stores procedures, bindings and execution evidence; you interpret
+the procedures and do the work with your own tools.
+
+- Discover the binding this repository has for verifying a change, and
+  retrieve the procedure it gives you. The stored procedure versions are the
+  only instructions to follow: do not use steps from memory, from this
+  repository's documentation about procedures, or from elsewhere.
+- Work in a clean checkout of exactly that commit outside this working tree,
+  for example a git worktree under /tmp.
+- If a tool call fails, report the error verbatim; you may use an
+  equivalent operation over HTTP or the CLI, and say that you did.
+- Environment facts: this machine has been called darwin-arm64.local in
+  Polaroid. go is Go 1.27.2. The pinned golangci-lint 2.14.0 is at
+  /tmp/gcl/golangci-lint-2.14.0-darwin-arm64/golangci-lint; the one on PATH
+  is 2.12.2. jq, sqlite3 and bash 5 are installed. Network is available.
+- Do not edit files in this repository, push, merge, or comment on issues.
+
+Finish with: the commit verified; the procedure and versions you followed
+and how they were chosen; what Polaroid said about this commit before and
+after your run; each execution you recorded, with its ID, procedure, version
+and outcome; and anything that did not work as the procedure described.
+```
+
+A chat session started by a person can repeat it with the same prompt (for a later commit, change the commit).
+
+**MCP client refresh.** VS Code's connection to `polaroid` (`mcp.config.ws0.polaroid`, pointing at the daemon above; the daemon itself was not restarted) was restarted with `workbench.mcp.restartServer`. Its log shows `Discovered 20 tools` at the restart, and the tool definitions the agent sees list `commit` and `inputs` for both `resolve_binding` and `get_graph`. Through the normal tools, `get_graph` with `commit` and `inputs` works. `resolve_binding` with them is still rejected before any request reaches the server: `Your input to the tool was invalid (must NOT have additional properties)`. The server's `tools/list` advertises both arguments, and the same call over raw JSON-RPC or the CLI works, so the cause is on the client side; that it keeps a validator from the schema it first saw in a long session is a guess, not established. Recorded as feedback report `01a121e7-a0f3-7214-8e4b-9a6bb07bac6d`. Whether a newly started chat accepts the arguments is not yet checked.
+
 ## Reproduce
 
 - **Regression replay:** `make demo` (needs `jq`).
-- **The live loop, in a store of your own:** run `bin/polaroidd -db /tmp/loop.db` on `127.0.0.1:7417` (stop any other daemon on that port first), load the seed with `scripts/load-fixtures.sh -n 1 examples/development`, and give an agent the prompt above with a commit of your choice. Loading without `-n 1` also appends the correction, as any store loaded from the fixtures has it.
+- **The live loop, in a store of your own:** run `bin/polaroidd -db /tmp/loop.db` on `127.0.0.1:7417` (stop any other daemon on that port first), load the seed with `scripts/load-fixtures.sh -n 1 examples/development`, and give an agent the #33 prompt above with a commit of your choice. Loading without `-n 1` also appends the correction, as any store loaded from the fixtures has it.
