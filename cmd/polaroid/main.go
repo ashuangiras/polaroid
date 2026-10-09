@@ -91,15 +91,33 @@ var commands = []command{
 			}
 			return c.do(http.MethodGet, "/v1/executions?"+query.Encode(), nil)
 		}},
+	{"verification", "ID", "show whether an execution is verified, and its combination", 1, 1,
+		func(c *client, args []string) error {
+			return c.do(http.MethodGet, "/v1/executions/"+url.PathEscape(args[0])+"/verification", nil)
+		}},
+	{"verifications", "ID N [REPO [COMMIT [ENV]]]", "list version N's combinations and their status", 2, 5,
+		func(c *client, args []string) error {
+			query := url.Values{}
+			for i, name := range []string{"repository", "commit", "environment"} {
+				if len(args) > i+2 {
+					query.Set(name, args[i+2])
+				}
+			}
+			path := procedurePath(args[0]) + "/versions/" + url.PathEscape(args[1]) + "/verifications"
+			if len(query) > 0 {
+				path += "?" + query.Encode()
+			}
+			return c.do(http.MethodGet, path, nil)
+		}},
 }
 
 func usage() string {
 	var b strings.Builder
 	b.WriteString("Usage: polaroid [-server URL] [-timeout DURATION] COMMAND [ARGUMENTS]\n\nCommands:\n")
 	for _, cmd := range commands {
-		fmt.Fprintf(&b, "  %-36s %s\n", strings.TrimSpace(cmd.name+" "+cmd.args), cmd.summary)
+		fmt.Fprintf(&b, "  %-40s %s\n", strings.TrimSpace(cmd.name+" "+cmd.args), cmd.summary)
 	}
-	fmt.Fprintf(&b, "  %-36s %s\n", "help", "show this help")
+	fmt.Fprintf(&b, "  %-40s %s\n", "help", "show this help")
 	fmt.Fprintf(&b, "\nThe server is -server, else $POLAROID_URL, else %s.\n", defaultServer)
 	b.WriteString("Each response body is printed to stdout, also when the request fails.\n")
 	b.WriteString("Exit status: 0 success, 1 request failed, 2 usage error.\n")

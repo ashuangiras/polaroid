@@ -452,3 +452,83 @@ func newExecutionBody(e memory.Execution) executionBody {
 type executionListBody struct {
 	Executions []executionSummaryBody `json:"executions"`
 }
+
+// combinationBody is the context an execution verifies. children is
+// omitted when the version has no linked children, at any level.
+type combinationBody struct {
+	Repository  string             `json:"repository"`
+	Commit      string             `json:"commit"`
+	Environment environmentName    `json:"environment"`
+	Inputs      jsontext.Value     `json:"inputs"`
+	Children    []childVersionBody `json:"children,omitzero"`
+}
+
+type environmentName struct {
+	Name string `json:"name"`
+}
+
+type childVersionBody struct {
+	Reference string             `json:"reference"`
+	Version   int                `json:"version"`
+	Children  []childVersionBody `json:"children,omitzero"`
+}
+
+func newCombinationBody(c memory.Combination) combinationBody {
+	return combinationBody{
+		Repository:  c.Repository,
+		Commit:      c.Commit,
+		Environment: environmentName{Name: c.Environment},
+		Inputs:      c.Inputs,
+		Children:    newChildVersionBodies(c.Children),
+	}
+}
+
+func newChildVersionBodies(children []memory.ChildVersion) []childVersionBody {
+	var out []childVersionBody
+	for _, c := range children {
+		out = append(out, childVersionBody{Reference: c.Reference, Version: c.Version, Children: newChildVersionBodies(c.Children)})
+	}
+	return out
+}
+
+// verificationBody judges one execution. problems is omitted when it is
+// verified.
+type verificationBody struct {
+	ExecutionID string          `json:"execution_id"`
+	ProcedureID string          `json:"procedure_id"`
+	Version     int             `json:"version"`
+	Verified    bool            `json:"verified"`
+	Problems    []problemBody   `json:"problems,omitzero"`
+	Combination combinationBody `json:"combination"`
+}
+
+type problemBody struct {
+	Code        string `json:"code"`
+	Reference   string `json:"reference,omitzero"`
+	ExecutionID string `json:"execution_id,omitzero"`
+}
+
+func newVerificationBody(v memory.Verification) verificationBody {
+	body := verificationBody{
+		ExecutionID: v.ExecutionID,
+		ProcedureID: v.ProcedureID,
+		Version:     v.Version,
+		Verified:    v.Verified,
+		Combination: newCombinationBody(v.Combination),
+	}
+	for _, p := range v.Problems {
+		body.Problems = append(body.Problems, problemBody{Code: string(p.Code), Reference: p.Reference, ExecutionID: p.ExecutionID})
+	}
+	return body
+}
+
+type combinationStatusBody struct {
+	Combination       combinationBody `json:"combination"`
+	Verified          bool            `json:"verified"`
+	LatestExecutionID string          `json:"latest_execution_id"`
+	ExecutionIDs      []string        `json:"execution_ids"`
+}
+
+type verificationListBody struct {
+	Verifications []combinationStatusBody `json:"verifications"`
+}

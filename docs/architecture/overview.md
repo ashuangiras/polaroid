@@ -2,7 +2,7 @@
 
 Polaroid stores procedures that agents find, follow, and correct. It manages generic records, versions, and (later) relationships and evidence. It never runs an LLM and never executes instructions: agents do that with their own tools. Task knowledge lives in record content; adding a task never changes code.
 
-This page describes what is **implemented**: procedure identity and immutable versions (increment 1); repository bindings, named subprocedure references and the bounded composition graph (increment 2); and immutable execution records with child-execution links ([#7](https://github.com/ashuangiras/polaroid/issues/7), [#9](https://github.com/ashuangiras/polaroid/issues/9), increment 3). Planned components are listed at the end and in the [roadmap](../development/roadmap.md).
+This page describes what is **implemented**: procedure identity and immutable versions (increment 1); repository bindings, named subprocedure references and the bounded composition graph (increment 2); and immutable execution records with child-execution links and derived, context-specific verification ([#7](https://github.com/ashuangiras/polaroid/issues/7), [#9](https://github.com/ashuangiras/polaroid/issues/9), [#11](https://github.com/ashuangiras/polaroid/issues/11), increment 3). Planned components are listed at the end and in the [roadmap](../development/roadmap.md).
 
 ## Components and dependency direction
 
@@ -42,7 +42,7 @@ There is deliberately one interface (`memory.Store`): it lets the domain stay ig
 
 - **Writes** run in one transaction that takes SQLite's write lock at `BEGIN` (`_txlock=immediate`, `busy_timeout` 5s). Concurrent writers queue; none fails mid-transaction.
 - **Revisions** carry the base version they were derived from. The store checks "base equals latest" and inserts `latest + 1` inside that transaction, so of N concurrent revisions from one base exactly one succeeds and the rest get `409 version_conflict`. Nothing is merged or overwritten. Binding revisions follow the same rule with `base_revision` and `409 revision_conflict`.
-- **Reads** are single SQL statements, so a history is always one consistent snapshot (WAL mode lets reads proceed during writes). The composition graph needs one query per node, so it reads inside one transaction instead.
+- **Reads** are single SQL statements, so a history is always one consistent snapshot (WAL mode lets reads proceed during writes). The composition graph and verification need one query per node, so they read inside one transaction instead.
 - **Integrity backstops in the schema**: unique canonical keys and `(repository, name)` pairs; triggers reject any `UPDATE` or `DELETE` of procedures, versions, bindings, binding revisions, executions and their child links, any non-contiguous version or revision number, a pin to a version that does not exist, an execution that does not match its binding revision, and a child link that does not fulfil its reference; a reference row can be written only in the same transaction as its new version (a trigger plus a deferred foreign key); `CHECK` constraints require `contract`, `instructions` and `inputs` to be JSON objects and keep identifiers in their canonical formats. These hold even for a client that bypasses `polaroidd`.
 - **Durability**: `synchronous=FULL`. Schema migrations run in a write transaction at startup; a database newer than the binary is refused.
 
@@ -59,4 +59,4 @@ Binding to a non-loopback address is possible (`-addr`) but logs a warning: anyo
 
 ## Planned components (not implemented)
 
-Context-specific verification and evidence-based resolution (the rest of increment 3) will extend `memory` and add tables via new migrations. Until then, contextual references select the latest version in the composition graph ([ADR-0009](decisions/0009-reference-graph-rules.md)), and contextual binding policies are stored but not resolved. MCP transport would sit beside `transport/http`. See [records.md](records.md#planned-records-not-implemented) and the [roadmap](../development/roadmap.md).
+Evidence-based contextual resolution (the rest of increment 3) will extend `memory`. Until then, contextual references select the latest version in the composition graph ([ADR-0009](decisions/0009-reference-graph-rules.md)), and contextual binding policies are stored but not resolved. MCP transport would sit beside `transport/http`. See [records.md](records.md#planned-records-not-implemented) and the [roadmap](../development/roadmap.md).
