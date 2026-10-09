@@ -66,6 +66,8 @@ While `polaroidd` runs, point any MCP client that supports streamable HTTP and p
 
 The server's instructions describe the agent loop. The tools, their arguments and their errors are in [docs/architecture/mcp.md](docs/architecture/mcp.md).
 
+Polaroid's own development procedures (build, checks, verify a change) are records too, in [examples/development](examples/development). Load them with `scripts/load-fixtures.sh examples/development`, and an agent can verify a change by resolving the `verify-change` binding of `github.com/ashuangiras/polaroid`. [docs/development/procedural-loop.md](docs/development/procedural-loop.md) shows an agent following them, correcting a stale instruction and recording the evidence.
+
 ## Commands
 
 | Command | Does |
@@ -77,7 +79,7 @@ The server's instructions describe the agent loop. The tools, their arguments an
 | `make deps-check` | Verifies the [dependency and license inventory](docs/development/dependencies.md). |
 | `make check` | Runs every offline check above. |
 | `make vuln` | Runs govulncheck. |
-| `make demo` | Runs the live demonstration against a real daemon. |
+| `make demo` | Runs the live demonstration against a real daemon, including a scripted replay of the procedural-memory loop on the development procedures. |
 | `make run ARGS="..."` | Builds and runs `polaroidd`. |
 | `make ci` | Runs `check`, `vuln`, `demo`, `e2e` and `e2e-mcp` with `E2E_INTEROP=0`, which is exactly what GitHub Actions runs. |
 | `make e2e` / `make e2e-mcp` | Runs the end-to-end scripts against a real daemon and writes a report of every command, its output and each check to `bin/e2e/`. `e2e-mcp` also tries the TypeScript SDK and MCP Inspector when npm is available, and inspects a local VS Code install; `E2E_INTEROP=0` skips those checks and reports them as skipped. |
@@ -104,9 +106,9 @@ The CLI uses `-server URL`, else `$POLAROID_URL`, else `http://127.0.0.1:7417`. 
 | `internal/transport/http` | The HTTP API |
 | `internal/transport/mcp` | The MCP server at `/mcp` |
 | `internal/transport/wire` | Record and error JSON shapes shared by both transports |
-| [examples/](examples) | Example procedure records |
+| [examples/](examples) | Example procedure records, and Polaroid's own development procedures |
 | [docs/architecture/](docs/architecture) | [Overview](docs/architecture/overview.md), [records](docs/architecture/records.md), [HTTP API](docs/architecture/http-api.md), [MCP](docs/architecture/mcp.md), [decisions](docs/architecture/decisions/README.md) |
-| [docs/development/](docs/development) | [Workflow](docs/development/workflow.md), [status](docs/development/status.md), [roadmap](docs/development/roadmap.md), [dependencies](docs/development/dependencies.md) |
+| [docs/development/](docs/development) | [Workflow](docs/development/workflow.md), [status](docs/development/status.md), [roadmap](docs/development/roadmap.md), [dependencies](docs/development/dependencies.md), [procedural loop](docs/development/procedural-loop.md) |
 
 ## Module path and license
 
