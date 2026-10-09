@@ -80,6 +80,9 @@ type (
 		Commit      string `json:"commit,omitzero"`
 		Environment string `json:"environment,omitzero"`
 	}
+	listFeedbackArgs struct {
+		Kind string `json:"kind,omitzero" jsonschema:"only reports of this kind: problem or suggestion"`
+	}
 )
 
 func (t *tools) register(s *sdk.Server) {
@@ -184,6 +187,23 @@ func (t *tools) register(s *sdk.Server) {
 				ProcedureID: in.ProcedureID, Version: in.Version, Repository: in.Repository, Commit: in.Commit, Environment: in.Environment,
 			})
 			return wire.NewVerificationList(vs), err
+		})
+	add(s, t, "report_feedback", "Report a problem with Polaroid itself (a confusing error, a missing capability, a tool that misbehaved) "+
+		"or suggest an improvement. kind is problem or suggestion; summary is one line; context is an optional free-form object, "+
+		"for example the tool and IDs involved. Reports are never changed or deleted.", write,
+		func(ctx context.Context, in wire.FeedbackRecord) (any, error) {
+			f, err := t.svc.ReportFeedback(ctx, in.Domain())
+			return wire.NewFeedback(f), err
+		})
+	add(s, t, "list_feedback", "List feedback reports about Polaroid, oldest first, optionally only one kind.", read,
+		func(ctx context.Context, in listFeedbackArgs) (any, error) {
+			fs, err := t.svc.ListFeedback(ctx, memory.FeedbackKind(in.Kind))
+			return wire.NewFeedbackList(fs), err
+		})
+	add(s, t, "get_feedback", "Get one feedback report.", read,
+		func(ctx context.Context, in byID) (any, error) {
+			f, err := t.svc.Feedback(ctx, in.ID)
+			return wire.NewFeedback(f), err
 		})
 }
 

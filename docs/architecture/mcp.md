@@ -8,13 +8,13 @@
 - **Older clients:** a client that cannot negotiate 2026-07-28 is refused during the handshake.
 - **Responses:** JSON (`application/json`), never SSE. There is no `Mcp-Session-Id`, and `GET` and `DELETE` are not used.
 - **Limits and security:** bodies are limited to 1 MiB. `/mcp` sits behind the same loopback `Host` check and cross-origin protection as the API, with no authentication ([ADR-0006](decisions/0006-local-unauthenticated-api.md)).
-- **Server capabilities:** `tools` and `resources`, plus short instructions that describe the agent loop.
+- **Server capabilities:** `tools` and `resources`, plus short instructions that describe the agent loop. The last step asks agents to report problems with Polaroid, and suggestions for it, with `report_feedback` ([ADR-0015](decisions/0015-feedback-reports.md)).
 
 ## Tools
 
 Arguments are flat JSON objects, named after the record fields in [records.md](records.md).
 
-- **Decoding is strict, as for HTTP request bodies.** Unknown or duplicate members are rejected, and so are values of the wrong JSON type. Free-form objects (`contract`, `instructions`, `inputs`, `evidence`, `environment.attributes`, reference `inputs`) are stored with their member order intact.
+- **Decoding is strict, as for HTTP request bodies.** Unknown or duplicate members are rejected, and so are values of the wrong JSON type. Free-form objects (`contract`, `instructions`, `inputs`, `evidence`, `environment.attributes`, reference `inputs`, feedback `context`) are stored with their member order intact.
 - **Schemas:** every tool advertises an input schema generated from its argument type.
 
 | Tool | Read-only | Arguments | Result |
@@ -36,6 +36,9 @@ Arguments are flat JSON objects, named after the record fields in [records.md](r
 | `list_executions` | yes | `procedure_id`; `version` and `repository` optional | `{"executions":[…]}` |
 | `get_verification` | yes | `execution_id` | verification |
 | `list_verifications` | yes | `procedure_id`, `version`; `repository`, `commit` and `environment` optional | `{"verifications":[…]}` |
+| `report_feedback` | no | `kind`, `summary`, `details`, `reporter`, `context` (optional) | feedback report |
+| `list_feedback` | yes | `kind` optional | `{"feedback":[…]}` |
+| `get_feedback` | yes | `id` | feedback report |
 
 ### Results
 
@@ -74,7 +77,7 @@ Verified clients (2026-10-09):
 
 | Client | Result |
 | --- | --- |
-| VS Code Copilot chat (VS Code 1.137, bundled `@github/copilot` runtime) | Works: 17 tools discovered, full workflow run from chat. |
+| VS Code Copilot chat (VS Code 1.137, bundled `@github/copilot` runtime) | Works: the 17 tools of the time discovered, full workflow run from chat. |
 | Go SDK v1.8.0 client | Works; used by the automated tests. |
 | TypeScript SDK 1.32.1, MCP Inspector 2.10.1 | Refused: their newest protocol is 2025-11-25. |
 

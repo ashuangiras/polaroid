@@ -221,6 +221,45 @@ func TestExecutionCommands(t *testing.T) {
 	}
 }
 
+func TestFeedbackCommands(t *testing.T) {
+	server := newServer(t)
+	const reportJSON = `{"kind":"problem","summary":"The CLI hides the error code","details":"Only stdout has it.",` +
+		`"reporter":"copilot.cli","context":{"command":"record"}}`
+	reported := cli("", nil, "-server", server, "feedback", writeFile(t, reportJSON))
+	mustSucceed(t, reported)
+	var f struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(reported.stdout), &f); err != nil || f.ID == "" {
+		t.Fatalf("feedback output is not a report: %q (%v)", reported.stdout, err)
+	}
+	suggested := cli(`{"kind":"suggestion","summary":"s","details":"d","reporter":"copilot.cli"}`, nil, "-server", server, "feedback")
+	mustSucceed(t, suggested)
+
+	got := cli("", nil, "-server", server, "get-feedback", f.ID)
+	mustSucceed(t, got)
+	if got.stdout != reported.stdout {
+		t.Fatalf("get-feedback = %s, want %s", got.stdout, reported.stdout)
+	}
+	all := cli("", nil, "-server", server, "feedbacks")
+	mustSucceed(t, all)
+	if want := `{"feedback":[` + strings.TrimSpace(reported.stdout) + `,` + strings.TrimSpace(suggested.stdout) + `]}`; strings.TrimSpace(all.stdout) != want {
+		t.Fatalf("feedbacks = %s, want %s", all.stdout, want)
+	}
+	problems := cli("", nil, "-server", server, "feedbacks", "problem")
+	mustSucceed(t, problems)
+	if want := `{"feedback":[` + strings.TrimSpace(reported.stdout) + `]}`; strings.TrimSpace(problems.stdout) != want {
+		t.Fatalf("feedbacks problem = %s, want %s", problems.stdout, want)
+	}
+
+	if r := cli("", nil, "-server", server, "feedbacks", "bug"); r.code != exitFailure || !strings.Contains(r.stdout, `"field":"kind"`) {
+		t.Fatalf("unknown kind: exit %d, stdout %s", r.code, r.stdout)
+	}
+	if r := cli(strings.Replace(reportJSON, `"problem"`, `"bug"`, 1), nil, "-server", server, "feedback"); r.code != exitFailure || !strings.Contains(r.stdout, `"field":"kind"`) {
+		t.Fatalf("reporting an unknown kind: exit %d, stdout %s", r.code, r.stdout)
+	}
+}
+
 func TestFailedRequestsExitOne(t *testing.T) {
 	server := newServer(t)
 	created := cli("", nil, "-server", server, "create", writeFile(t, createJSON))
@@ -306,6 +345,10 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		{"verification", "a", "b"},
 		{"verifications", "a"},
 		{"verifications", "a", "1", "r", "c", "e", "x"},
+		{"feedback", "a", "b"},
+		{"feedbacks", "problem", "x"},
+		{"get-feedback"},
+		{"get-feedback", "a", "b"},
 		{"-server", "ftp://example.com", "list"},
 		{"-server", "127.0.0.1:7417", "list"},
 		{"-no-such-flag", "list"},

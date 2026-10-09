@@ -31,6 +31,7 @@ const instructions = `Polaroid stores procedures: versioned, shared instructions
 3. Follow the selected versions' instructions with your own tools.
 4. Record each run with record_execution, children first, then the parent with "children" linking them.
 5. Improve a procedure with revise_procedure, passing the version you read as base_version; a version_conflict means re-read and try again.
+6. When Polaroid itself gets in your way (a confusing error, a missing capability, a tool that misbehaved) or you see how it could serve you better, say so with report_feedback.
 Tool errors carry an error object with a stable code (invalid_request, not_found, version_conflict, ...).`
 
 // NewHandler returns the MCP endpoint over svc. It applies the same
