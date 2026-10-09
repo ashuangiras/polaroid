@@ -4,7 +4,7 @@ Increments are ordered. Issue-ready items are filed as [GitHub issues](https://g
 
 > **Work-item authority.** GitHub Issues are the source of truth for scope and acceptance criteria. This roadmap keeps only order and links for filed items, never a second copy. Items not yet issue-ready stay here until they are refined and filed.
 
-Increments 1 to 4 and the items from agent feedback are implemented. Increment 5 is in progress; nothing below it is.
+Increments 1 to 5 and the items from agent feedback are implemented. Nothing below them is.
 
 ## Increment 1 — Procedure identity and immutable versions (done)
 
@@ -36,12 +36,12 @@ Filed from feedback reports that agents recorded with `report_feedback` (#16).
 2. [#20 MCP: signal tool-catalogue changes](https://github.com/ashuangiras/polaroid/issues/20) — **done**, re-scoped to pinning `ttlMs: 0` and documenting client restarts
 3. [#21 MCP: also accept protocol 2025-11-25](https://github.com/ashuangiras/polaroid/issues/21) — **done** ([ADR-0016](../architecture/decisions/0016-mcp-protocol-2025-11-25.md))
 
-## Increment 5 — Procedural memory on Polaroid's own development
+## Increment 5 — Procedural memory on Polaroid's own development (done)
 
 No new product capability: the loop that increments 1 to 4 built is used on real development work.
 
 1. [#27 Run the end-to-end scripts' deterministic checks in CI](https://github.com/ashuangiras/polaroid/issues/27) — **done**
-2. [#28 Polaroid-guided development: reusable development procedures that improve through execution](https://github.com/ashuangiras/polaroid/issues/28) (depends on #27)
+2. [#28 Polaroid-guided development: reusable development procedures that improve through execution](https://github.com/ashuangiras/polaroid/issues/28) (depends on #27) — **done** ([ADR-0017](../architecture/decisions/0017-development-procedures-as-records.md), [procedural-loop.md](procedural-loop.md))
 
 ## Later (unordered, not yet scoped)
 
