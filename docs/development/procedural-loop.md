@@ -7,7 +7,7 @@ This page records how Polaroid's development procedures were used through Polaro
 | What | `make demo` replays the loop with scripted outcomes in a temporary store | An agent retrieved procedures over MCP, ran real commands, reasoned about a failure and wrote the records below |
 | Proves | Polaroid's lifecycle: loading, MCP calls, conflicts, composition, verification transitions, history, persistence | That the loop works in practice for a real development task |
 | Runs | In CI on every push, without an LLM | Once per session; IDs come from one local store |
-| Where | [scripts/demo.sh](../../scripts/demo.sh), steps 9 to 18 and 20 | This page |
+| Where | [scripts/demo.sh](../../scripts/demo.sh), steps 9 to 18, 20 and 21 | This page |
 
 ## The procedures
 
@@ -18,7 +18,7 @@ Fixtures in [examples/development](../../examples/development), loaded with [scr
 | `go.module.build` | 1, 2 | Build a Go module through the repository's own entry point, checking the toolchain and the artifacts. |
 | `go.module.checks` | 1, 2, 3 | Run a Go repository's package tests and gate commands, keeping exit statuses and deterministic excerpts. **Version 1 is a demonstration seed**: its step `unit` is deliberately stale (`go test ./test/...`, with the claim that tests live in a top-level `test/` directory). Its `revision_reason` says it is a seed, without naming the step. Version 2 is the agent's correction. |
 | `dev.change.verify` | 1, 2, 3 | Verify a change: establish the commit, working-tree state and environment, then run `build` (→ `go.module.build`) and `checks` (→ `go.module.checks`), both contextual, and record children before the parent. **Version 2** ([#33](https://github.com/ashuangiras/polaroid/issues/33)) resolves at the explicit target (`commit` and `inputs`), keeps selection evidence apart from target verification, always performs a fresh run, records the binding revision, and confirms target verification afterwards; see [below](#target-aware-procedure-33). |
-| `polaroid.record-model.change` | 1, 2 | Change Polaroid's stored records, schema or their requests without changing what a stored record means, then verify through `verify` (→ `dev.change.verify`). Created during [#35](https://github.com/ashuangiras/polaroid/issues/35); version 2 is local to Polaroid. See [below](#several-repositories-35). |
+| `polaroid.record-model.change` | 1, 2, 3 | Change Polaroid's stored records, schema or their requests without changing what a stored record means, then verify through `verify` (→ `dev.change.verify`). Created during [#35](https://github.com/ashuangiras/polaroid/issues/35); version 2 is local to Polaroid; version 3 ([#37](#identity-pages-and-first-runs-of-the-shared-versions-37)) adds a migration only when the schema must change. See [below](#several-repositories-35). |
 
 The latest versions of the first three (#35) repeat their predecessors' definitions with a goal and shared applicability. Every procedure records its origin in `github.com/ashuangiras/polaroid`, which the fixtures register.
 
@@ -243,7 +243,39 @@ A chat session started by a person can repeat it with the same prompt (for a lat
 
 Feedback `01a1224e-fe89-709f-a584-7830ab16fab5` (subject: the service; context: this repository and the execution above) records the client problem: after the upgrade and a client restart the log showed 25 tools, but this long-running chat kept its original 20 and rejected `list_procedures` with `repository` or `scope`, and `resolve_binding` with `commit` and `inputs`, client-side. Raw JSON-RPC to `/mcp` worked.
 
-**Not shown live.** No second real repository uses the catalog yet: repositories A and B are fixtures, exercised by `make demo` step 19 and the end-to-end scripts as scripted regression evidence. Version 2 of `polaroid.record-model.change` and the shared versions of the development procedures have not been followed yet.
+**Not shown live.** No second real repository uses the catalog yet: repositories A and B are fixtures, exercised by `make demo` step 19 and the end-to-end scripts as scripted regression evidence. Version 2 of `polaroid.record-model.change` and the shared versions of the development procedures have not been followed yet (they were in #37, [below](#identity-pages-and-first-runs-of-the-shared-versions-37)).
+
+## Identity, pages and first runs of the shared versions (#37)
+
+[#37](https://github.com/ashuangiras/polaroid/issues/37) made evidence match by registered repository identity ([ADR-0022](../architecture/decisions/0022-repository-identity-in-evidence.md)), bound cursors to their parameters and added snapshot pages, and gave every version its own `scope` ([ADR-0023](../architecture/decisions/0023-pagination-guarantees-and-scope-labels.md)). It was developed with Polaroid, in `bin/dogfood/polaroid.db`, by Copilot in the authoring session on 2026-10-09.
+
+**Retrieved first.** `list_procedures` returned the four procedures; the one that applies to this change, local to Polaroid, is `polaroid.record-model.change` version 2, which references `dev.change.verify`. `list_feedback` returned the two client reports.
+
+**A procedure defect, found by following it.** Version 2 says every record-model change adds a migration, in its method, its expected outcome, and its `migration` and `upgrade-test` steps. #37 needed none: identity is derived on read from the append-only registry, snapshot boundaries are row-ID marks of existing append-only tables, and the new response fields are derived. That is wrong instructions, not a product defect or an environment blocker. So:
+
+- the run of version 2 at the implementation commit `74485e4` was recorded as **failed** at `migration` (`01a12286-c9e9-709f-8fbd-bcba70a573a2`), with the steps that held;
+- version 3 was appended through MCP (`base_version: 2`). It makes the migration conditional on the schema having to change, says how to show compatibility without one, and asks the compatibility step to decide and test changes to what existing records derive;
+- version 3 was exported to [v3.revise.json](../../examples/development/procedures/polaroid-record-model-change/v3.revise.json) (commit `2639d70`); the loader reports versions 1 to 3 matching the live store.
+
+**Live upgrade.** Before the new build opened the store, every procedure history, execution, verification, binding history, repository and report was read over HTTP into 54 files, and the database was backed up with `sqlite3 .backup` (`bin/dogfood/pre37/`). Afterwards, all 54 compared equal apart from the added `scope` and `repository_id`; the schema is still 7. The VS Code client log showed `Discovered 25 tools`.
+
+**First runs of the classified versions, at `2639d70`** (worktree `/tmp/polaroid-verify-2639d70`, empty porcelain, `darwin-arm64.local`, binding `01a12169-52ff…` revision 1):
+
+| Step | Result |
+| --- | --- |
+| `resolve_binding` at the target, before | Root `dev.change.verify` **v2**, build v1, checks v2, all `unspecified`, all by evidence from `8d5cc70`; nothing verified at `2639d70`. The shared versions had no evidence, so the resolver kept the evidenced ones, as designed. |
+| `get_graph` for `dev.change.verify` **v3** at the target | Chosen explicitly for its first run. Its contextual children still selected build v1 and checks v2 by evidence. |
+| `go.module.build` **v2**, chosen explicitly | `01a12289-5b97-75fb-a8b0-2f63bfeb1b00` succeeded: toolchain matched; `bin/` absent before, both artifacts written by the run. |
+| `go.module.checks` **v3**, chosen explicitly | `01a1228c-05a9-7ed9-b41c-b8b2543355e9` succeeded: 7 `ok`; `0 issues.`; none cached; `deps-check: PASS`; `No vulnerabilities found.`; `demo: PASS`; `passed=209 failed=0`; `passed=97 failed=0`. |
+| `get_graph` v3 after the children | Its contextual references now selected **build v2 and checks v3 by evidence** from `2639d70`, with no change to any policy; root still unverified. |
+| `dev.change.verify` **v3** | `01a1228c-a6b4-7564-890a-16b422f6418a`, with both children and binding revision 1: **verified**. |
+| `polaroid.record-model.change` **v3** | `01a1228d-e415-7b78-b519-ab986f404d70`, with that execution as its `verify` child: **verified**. Its evidence lists the ADRs, why no migration was needed, the concurrency tests, seven mutation checks with what each broke, the live upgrade and the earlier failed run. |
+| `resolve_binding` at the target, after | Root **v3**, build **v2**, checks **v3**, all `shared`, all by evidence from `2639d70`, all **verified** there with these executions as latest. |
+| `resolve_binding` at `8d5cc70` | Root v3 is now selected there too (by evidence from `2639d70`), but **unverified** at `8d5cc70`: nothing transferred between commits. |
+
+Contextual resolution moved to the new versions only after each of them had its own verified run. Recording the parent did not create evidence for its children; each child was run and recorded.
+
+**Client.** This long-running chat still rejected the new `snapshot` argument, and `commit` and `inputs` on `resolve_binding`, client-side (`must NOT have additional properties`), although the client log reported 25 tools. Those calls, the registration-dependent reads and the version 3 revision went through raw JSON-RPC to `/mcp`. `get_graph`, `get_version`, `record_execution`, `get_verification`, `list_procedures` without new arguments and `list_feedback` went through the normal client. This is the problem already recorded in feedback `01a1224e-fe89…`.
 
 ## Reproduce
 
