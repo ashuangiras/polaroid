@@ -159,16 +159,30 @@ Verification is derived from executions and their links on every read. Nothing i
 Contextual references and contextual binding policies resolve from verification evidence in a requesting context ([ADR-0013](decisions/0013-evidence-based-resolution.md)). Nothing is stored for a resolution.
 
 - **Context:** a `repository` and an `environment` name. The commit and inputs are not part of it.
-- **Verified in the context:** a version is verified in a context when its latest execution with that repository and environment is verified, whatever its commit and inputs. That execution is the version's *evidence*.
+- **Verified in the context:** a version is verified in a context when its latest execution with that repository and environment is verified, whatever its commit and inputs. That execution is the version's *evidence*: selection evidence, not verification at any particular commit ([below](#selection-evidence-and-target-verification-implemented)).
 - **Selection:** the walk starts at the root, which carries its own evidence if it has any.
   - **Under a node with evidence:** every reference selects the version of the child execution that the evidence linked for it, and that child execution becomes the child node's evidence. A verified combination is thus followed as a whole.
   - **Under a node without evidence:**
     - a pinned reference selects its pin, with the pin's own evidence if any;
     - a contextual reference selects the **highest version number** verified in the context;
     - if none is verified, it selects the **latest** version, unverified.
-- **Reporting:** every graph edge has `selected_by` (`pin`, `evidence` or `latest`). Every node with evidence has `verified_by`, the evidence's execution ID.
+- **Reporting:** every graph edge has `selected_by` (`pin`, `evidence` or `latest`). Every node with evidence has `verified_by`, the evidence's execution ID, and `selection_evidence`, which says where that execution ran.
 - **Safety:** evidence can select older versions, so the walk keeps the cycle and size checks of the [composition graph](#composition-graph-implemented) and reports them on read.
 - **Without a context:** the graph endpoint selects as before, with contextual references taking the latest version.
+
+### Selection evidence and target verification (implemented)
+
+Resolution answers two different questions, and reports them separately ([ADR-0018](decisions/0018-selection-evidence-and-target-verification.md)).
+
+- **Selection evidence** says why a version, or a whole child combination, was selected: an earlier verified execution in the context, at **any commit and with any inputs**. Each such node reports `selection_evidence`: `execution_id`, `repository`, `commit` and `environment`. It is a reason to try the version, not verification of anything else. `verified_by` repeats the execution ID, for compatibility, and means the same.
+- **Target verification** says whether the selected combination is verified at one exact target. It is reported only when the request names a target: a `commit` and the root's effective `inputs`, given together, in the context's repository and environment. Each node then reports `target_verification` for its own selected combination at that target:
+  - the repository, the target commit and the environment name;
+  - its effective inputs: the root's are the target's `inputs`; a child's come from its reference's input mapping applied to its parent's effective inputs (`{"input": p}` takes the parent's member `p`, `{"value": v}` takes `v`, and a child input whose parent member is absent is left out);
+  - its selected child-version tree, pins included.
+
+  The status is that of the combination's latest execution, as for any [combination](#verification-implemented). With no execution there, the node is unverified. A child's success never verifies its parent, and a parent recorded with another child combination does not verify the selected one.
+- **No inference.** Polaroid compares commits, environment names and canonical inputs exactly. It never inspects a checkout and never infers compatibility from ancestry, tree contents, branch names or time. Without a target, no node claims target verification. Working-tree state counts only as part of the inputs, where a procedure's contract puts it there (for example `working_tree` in [ADR-0017](decisions/0017-development-procedures-as-records.md)'s procedures).
+- **Selection is unchanged by a target**, and target verification never changes a recorded execution or its own verification.
 
 ### Feedback report (implemented)
 

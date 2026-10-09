@@ -88,33 +88,42 @@ A graph deeper than 32 references or larger than 2048 nodes is rejected with `42
 
 ### Composition graph
 
-`GET /v1/procedures/{id}/versions/{n}/graph[?repository=…&environment=…]` returns a nested tree.
+`GET /v1/procedures/{id}/versions/{n}/graph[?repository=…&environment=…[&commit=…&inputs=…]]` returns a nested tree.
 
-- Each node has `procedure_id`, `canonical_key`, `version` (the exact version selected), `verified_by` (only when the node has evidence in the context) and `references`, which is empty for a leaf.
+- Each node has `procedure_id`, `canonical_key`, `version` (the exact version selected), `verified_by` and `selection_evidence` (only when the node has evidence in the context), `target_verification` (only with a target) and `references`, which is empty for a leaf.
 - Each reference has its stored `name` and `version_policy`, then `selected_by` (`pin`, `evidence` or `latest`), its stored `inputs`, and the selected child `node`.
 - Without `repository` and `environment`, pinned references select the pin and contextual references the target's latest version at the moment of the read.
-- With them, the graph is resolved from evidence in that repository and environment ([records.md](records.md#contextual-resolution-implemented)). They must be given together. Each may appear once, and any other query parameter is `400`.
+- With them, the graph is resolved from evidence in that repository and environment ([records.md](records.md#contextual-resolution-implemented)). They must be given together.
+- `commit` and `inputs` (a JSON object, URL-encoded) add a target ([records.md](records.md#selection-evidence-and-target-verification-implemented)). They must be given together, and only with `repository` and `environment`; otherwise each missing one is `400`. A malformed commit, or `inputs` that is not a JSON object with unique member names, is `400` naming the field.
+- Each parameter may appear once, and any other query parameter is `400`.
 - The whole walk reads one consistent snapshot.
 
+`selection_evidence` is `{"execution_id", "repository", "commit", "environment": {"name"}}`: the execution that selected the node, which may have run at any commit and with any inputs. `verified_by` repeats its ID, for compatibility. Neither says anything about another commit.
+
+`target_verification` has the shape of an entry of the [verifications list](#verification): `combination` is the node's exact selected combination at the target (repository, `commit`, environment, the node's effective `inputs` in canonical form, and the selected child-version tree), `verified` is the status of its latest execution there, and `latest_execution_id` and `execution_ids` list those executions. If nothing has run in that combination, `verified` is `false`, `execution_ids` is `[]` and `latest_execution_id` is omitted.
+
 ```json
-{"procedure_id":"…root","canonical_key":"compose.root","version":1,"verified_by":"…run","references":[
-  {"name":"old-leaf","version_policy":{"pin":1},"selected_by":"pin","inputs":{},"node":{"procedure_id":"…leaf","canonical_key":"go.dependency.add","version":1,"verified_by":"…leaf-run","references":[]}},
-  {"name":"mid","version_policy":{"contextual":{}},"selected_by":"evidence","inputs":{"module":{"input":"driver"}},"node":{"procedure_id":"…mid","canonical_key":"compose.mid","version":1,"verified_by":"…mid-run","references":[
-    {"name":"leaf","version_policy":{"contextual":{}},"selected_by":"evidence","inputs":{},"node":{"procedure_id":"…leaf","canonical_key":"go.dependency.add","version":2,"verified_by":"…leaf2-run","references":[]}}]}}]}
+{"procedure_id":"…root","canonical_key":"compose.root","version":1,"verified_by":"…run","selection_evidence":{"execution_id":"…run","repository":"github.com/ashuangiras/polaroid","commit":"0123…","environment":{"name":"ci.ubuntu-latest"}},"references":[
+  {"name":"old-leaf","version_policy":{"pin":1},"selected_by":"pin","inputs":{},"node":{"procedure_id":"…leaf","canonical_key":"go.dependency.add","version":1,"verified_by":"…leaf-run","selection_evidence":{…},"references":[]}},
+  {"name":"mid","version_policy":{"contextual":{}},"selected_by":"evidence","inputs":{"module":{"input":"driver"}},"node":{"procedure_id":"…mid","canonical_key":"compose.mid","version":1,"verified_by":"…mid-run","selection_evidence":{…},"references":[
+    {"name":"leaf","version_policy":{"contextual":{}},"selected_by":"evidence","inputs":{},"node":{"procedure_id":"…leaf","canonical_key":"go.dependency.add","version":2,"verified_by":"…leaf2-run","selection_evidence":{…},"references":[]}}]}}]}
 ```
 
 A missing procedure or version is `404`. A cycle is `409 reference_cycle`. It is possible only in versions stored before cycle checking existed, or when evidence selects an older version whose references lead back. A graph over the limits is `422 graph_too_large`. No partial graph is ever returned.
 
 ### Resolve a binding
 
-`GET /v1/bindings/{id}/resolution?environment=ci.ubuntu-latest` resolves the binding's latest revision in the binding's repository and that environment. A pin selects its version. A contextual policy selects the highest version verified there, or else the latest version.
+`GET /v1/bindings/{id}/resolution?environment=ci.ubuntu-latest[&commit=…&inputs=…]` resolves the binding's latest revision in the binding's repository and that environment. A pin selects its version. A contextual policy selects the highest version verified there, at any commit, or else the latest version. `commit` and `inputs` add a target, exactly as for the graph endpoint; `inputs` are the root's effective inputs, usually the revision's `inputs` plus anything the run adds.
 
 ```json
 {"binding_id":"…","binding_revision":2,"repository":"github.com/ashuangiras/polaroid","environment":{"name":"ci.ubuntu-latest"},
- "version_policy":{"contextual":{}},"selected_by":"evidence","graph":{"procedure_id":"…","canonical_key":"go.dependency.add","version":2,"verified_by":"…","references":[]}}
+ "version_policy":{"contextual":{}},"selected_by":"evidence","graph":{"procedure_id":"…","canonical_key":"go.dependency.add","version":2,"verified_by":"…a-run",
+  "selection_evidence":{"execution_id":"…a-run","repository":"github.com/ashuangiras/polaroid","commit":"0123…(A)","environment":{"name":"ci.ubuntu-latest"}},
+  "target_verification":{"combination":{"repository":"github.com/ashuangiras/polaroid","commit":"89ab…(B)","environment":{"name":"ci.ubuntu-latest"},"inputs":{"module":"modernc.org/sqlite"}},
+   "verified":false,"execution_ids":[]},"references":[]}}
 ```
 
-`environment` is required, must appear once and must be valid. Any other parameter is `400`. An unknown binding is `404`. Graph errors are as for the graph endpoint.
+Here version 2 was selected because it succeeded at commit A, and it is not verified at commit B, the target. `environment` is required, and each parameter must appear once and be valid. Any other parameter is `400`. An unknown binding is `404`. Graph errors are as for the graph endpoint.
 
 ### Append a version
 
@@ -319,14 +328,14 @@ Example `invalid_request` response:
 | `polaroid get ID` | `GET /v1/procedures/{id}` |
 | `polaroid get-by-key KEY` | `GET /v1/procedures/by-key/{key}` |
 | `polaroid get-version ID N` | `GET /v1/procedures/{id}/versions/{n}` |
-| `polaroid graph ID N [REPO ENV]` | `GET /v1/procedures/{id}/versions/{n}/graph[?repository=…&environment=…]` |
+| `polaroid graph ID N [REPO ENV [COMMIT INPUTS]]` | `GET /v1/procedures/{id}/versions/{n}/graph[?repository=…&environment=…[&commit=…&inputs=…]]` |
 | `polaroid revise ID [FILE]` | `POST /v1/procedures/{id}/versions` |
 | `polaroid bindings REPOSITORY` | `GET /v1/bindings?repository={repository}` |
 | `polaroid bind [FILE]` | `POST /v1/bindings` |
 | `polaroid get-binding ID` | `GET /v1/bindings/{id}` |
 | `polaroid get-binding-revision ID N` | `GET /v1/bindings/{id}/revisions/{n}` |
 | `polaroid revise-binding ID [FILE]` | `POST /v1/bindings/{id}/revisions` |
-| `polaroid resolve BINDING_ID ENV` | `GET /v1/bindings/{id}/resolution?environment={env}` |
+| `polaroid resolve BINDING_ID ENV [COMMIT INPUTS]` | `GET /v1/bindings/{id}/resolution?environment={env}[&commit=…&inputs=…]` |
 | `polaroid record [FILE]` | `POST /v1/executions` |
 | `polaroid get-execution ID` | `GET /v1/executions/{id}` |
 | `polaroid executions PROCEDURE_ID [REPOSITORY]` | `GET /v1/executions?procedure_id={id}[&repository={repository}]` |
