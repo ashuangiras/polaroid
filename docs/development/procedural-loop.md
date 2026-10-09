@@ -7,7 +7,7 @@ This page records how Polaroid's development procedures were used through Polaro
 | What | `make demo` replays the loop with scripted outcomes in a temporary store | An agent retrieved procedures over MCP, ran real commands, reasoned about a failure and wrote the records below |
 | Proves | Polaroid's lifecycle: loading, MCP calls, conflicts, composition, verification transitions, history, persistence | That the loop works in practice for a real development task |
 | Runs | In CI on every push, without an LLM | Once per session; IDs come from one local store |
-| Where | [scripts/demo.sh](../../scripts/demo.sh), steps 9 to 18 | This page |
+| Where | [scripts/demo.sh](../../scripts/demo.sh), steps 9 to 18 and 20 | This page |
 
 ## The procedures
 
@@ -15,9 +15,12 @@ Fixtures in [examples/development](../../examples/development), loaded with [scr
 
 | Canonical key | Versions | Role |
 | --- | --- | --- |
-| `go.module.build` | 1 | Build a Go module through the repository's own entry point, checking the toolchain and the artifacts. |
-| `go.module.checks` | 1, 2 | Run a Go repository's package tests and gate commands, keeping exit statuses and deterministic excerpts. **Version 1 is a demonstration seed**: its step `unit` is deliberately stale (`go test ./test/...`, with the claim that tests live in a top-level `test/` directory). Its `revision_reason` says it is a seed, without naming the step. Version 2 is the agent's correction. |
-| `dev.change.verify` | 1, 2 | Verify a change: establish the commit, working-tree state and environment, then run `build` (→ `go.module.build`) and `checks` (→ `go.module.checks`), both contextual, and record children before the parent. **Version 2** ([#33](https://github.com/ashuangiras/polaroid/issues/33)) resolves at the explicit target (`commit` and `inputs`), keeps selection evidence apart from target verification, always performs a fresh run, records the binding revision, and confirms target verification afterwards; see [below](#target-aware-procedure-33). |
+| `go.module.build` | 1, 2 | Build a Go module through the repository's own entry point, checking the toolchain and the artifacts. |
+| `go.module.checks` | 1, 2, 3 | Run a Go repository's package tests and gate commands, keeping exit statuses and deterministic excerpts. **Version 1 is a demonstration seed**: its step `unit` is deliberately stale (`go test ./test/...`, with the claim that tests live in a top-level `test/` directory). Its `revision_reason` says it is a seed, without naming the step. Version 2 is the agent's correction. |
+| `dev.change.verify` | 1, 2, 3 | Verify a change: establish the commit, working-tree state and environment, then run `build` (→ `go.module.build`) and `checks` (→ `go.module.checks`), both contextual, and record children before the parent. **Version 2** ([#33](https://github.com/ashuangiras/polaroid/issues/33)) resolves at the explicit target (`commit` and `inputs`), keeps selection evidence apart from target verification, always performs a fresh run, records the binding revision, and confirms target verification afterwards; see [below](#target-aware-procedure-33). |
+| `polaroid.record-model.change` | 1, 2 | Change Polaroid's stored records, schema or their requests without changing what a stored record means, then verify through `verify` (→ `dev.change.verify`). Created during [#35](https://github.com/ashuangiras/polaroid/issues/35); version 2 is local to Polaroid. See [below](#several-repositories-35). |
+
+The latest versions of the first three (#35) repeat their predecessors' definitions with a goal and shared applicability. Every procedure records its origin in `github.com/ashuangiras/polaroid`, which the fixtures register.
 
 Bindings of `dev.change.verify`, by the same procedure ID:
 - `github.com/ashuangiras/polaroid`, name `verify-change`: `make build`, artifacts `bin/polaroidd` and `bin/polaroid`, and the gate `make check`, `make vuln`, `make demo`, `make e2e`, `make e2e-mcp E2E_INTEROP=0`.
@@ -207,7 +210,42 @@ A chat session started by a person can repeat it with the same prompt (for a lat
 
 **MCP client refresh.** VS Code's connection to `polaroid` (`mcp.config.ws0.polaroid`, pointing at the daemon above; the daemon itself was not restarted) was restarted with `workbench.mcp.restartServer`. Its log shows `Discovered 20 tools` at the restart, and the tool definitions the agent sees list `commit` and `inputs` for both `resolve_binding` and `get_graph`. Through the normal tools, `get_graph` with `commit` and `inputs` works. `resolve_binding` with them is still rejected before any request reaches the server: `Your input to the tool was invalid (must NOT have additional properties)`. The server's `tools/list` advertises both arguments, and the same call over raw JSON-RPC or the CLI works, so the cause is on the client side; that it keeps a validator from the schema it first saw in a long session is a guess, not established. Recorded as feedback report `01a121e7-a0f3-7214-8e4b-9a6bb07bac6d`. Whether a newly started chat accepts the arguments is not yet checked.
 
+## Several repositories (#35)
+
+[#35](https://github.com/ashuangiras/polaroid/issues/35) added a repository registry, procedure origin and applicability, typed feedback subjects and bounded lists ([ADR-0019](../architecture/decisions/0019-repository-registry.md) to [ADR-0021](../architecture/decisions/0021-targeted-feedback-and-bounded-lists.md)). It was developed with Polaroid, in the store `bin/dogfood/polaroid.db`, by Copilot in the authoring session on 2026-10-09.
+
+**Retrieved first.** Over MCP, before any code: `list_procedures` returned only `dev.change.verify`, `go.module.build` and `go.module.checks`; `list_feedback` returned one report (`01a121e7…`, about the VS Code client). No procedure covered changing Polaroid's record model.
+
+**Created.** `polaroid.record-model.change` version 1 (`01a12205-d4f3-792b-a539-0fe71a4f18d6`), through `create_procedure`, before the implementation: contracts, compatibility (ADR first), migration, upgrade test, domain rules with concurrency and mutation checks, transport parity, docs, then the `verify` reference (`dev.change.verify`, contextual) at the implementation commit, and the record. Applicability could not be declared yet, which its `revision_reason` says.
+
+**Live upgrade.** The store was at schema 6. Before starting the new build: every procedure history, the Polaroid bindings, the `dev.change.verify` executions and the feedback list were read over HTTP into `bin/dogfood/pre35/`, and the database was copied with `sqlite3 .backup` (`pre35/polaroid-schema6.db`). The old daemon stopped cleanly on SIGTERM; the new build opened the same file at schema 7. Every snapshot compared equal apart from the added fields (`scope`, `goal`, `applicability`, `origin`; the old report has no `subject`), and nothing was registered. The VS Code client log then showed `Discovered 25 tools`.
+
+**Records written after the upgrade** (over MCP; this chat session never received the five new tools, so those calls were raw JSON-RPC, see below):
+
+| Record | Result |
+| --- | --- |
+| `register_repository` `github.com/ashuangiras/polaroid`, "Polaroid" | `01a12236-dcb3-73ba-bba1-fc4933800e25`; its existing bindings and executions are associated through the identifier, not rewritten. |
+| `record_procedure_origin` ×4 | The three development procedures: seeded in Polaroid (#28). `polaroid.record-model.change`: created in Polaroid during #35. |
+| `go.module.build` v2, `go.module.checks` v3, `dev.change.verify` v3 | The previous definitions, byte-identical (copied with jq from the stored version), plus a goal and `{"shared": {}}`: each contract names no repository, and each is bound by two repositories already. |
+| `polaroid.record-model.change` v2 | Local to Polaroid, with a goal, a new `live-upgrade` step and three refinements learned while following version 1 (discriminating mutation scenarios, storage-layer tests for races HTTP cannot reach, a demo step in parity). |
+
+`list_procedures` now offers the fixture repository only the three shared procedures, `scope=local` in Polaroid lists only `polaroid.record-model.change`, and binding it in `example.com/fixtures/go-service` gets `400` on `procedure_id`. All of this is exported to `examples/development` (`repositories/`, `origin.json`, the new version files); the loader reports every version matching against the live store and writes nothing, and `make demo` step 20 replays it.
+
+**Live verification at `8d5cc70`** (the fixture commit, which contains the implementation `74d6deb`), worktree `/tmp/polaroid-verify-8d5cc70`, empty porcelain, `darwin-arm64.local`, binding `01a12169-52ff…` revision 1:
+
+| Step | Result |
+| --- | --- |
+| `resolve_binding` with commit and inputs | Root **v2**, build v1, checks v2, all by evidence from `827aff2`; the new v3/v2/v3 have no evidence, so resolution kept the evidenced versions, as designed. Nothing verified at `8d5cc70`. |
+| `go.module.build` v1 | `01a1223c-6d5e-7581-a802-4f7324c0a949` succeeded: toolchain matched; `bin/` absent before, both artifacts written by the run. |
+| `go.module.checks` v2 | `01a1224b-1c92-7449-a689-bc5aa6910c67` succeeded: 7 `ok`; `0 issues.`; none cached; `deps-check: PASS`; `No vulnerabilities found.`; `demo: PASS` (steps 20 to 22 included); `passed=203 failed=0`; `passed=93 failed=0`. |
+| `dev.change.verify` v2 | `01a1224b-8a3e-71ce-a6d5-7ee65cbad5d6`, with both children: **verified**; resolving again reports root, build and checks verified at `8d5cc70` with these executions as latest. |
+| `polaroid.record-model.change` v1 | `01a1224e-c5b0-7a56-a349-8f46d6edfa15`, the version followed during the work (version 2 was appended after it), with the `dev.change.verify` execution as its `verify` child: **verified**. Its evidence lists the ADRs, migration 7, the upgrade and concurrency tests, eleven mutation checks with what each broke, the live upgrade, and one deviation (a `sed` rename in a test file). |
+
+Feedback `01a1224e-fe89-709f-a584-7830ab16fab5` (subject: the service; context: this repository and the execution above) records the client problem: after the upgrade and a client restart the log showed 25 tools, but this long-running chat kept its original 20 and rejected `list_procedures` with `repository` or `scope`, and `resolve_binding` with `commit` and `inputs`, client-side. Raw JSON-RPC to `/mcp` worked.
+
+**Not shown live.** No second real repository uses the catalog yet: repositories A and B are fixtures, exercised by `make demo` step 19 and the end-to-end scripts as scripted regression evidence. Version 2 of `polaroid.record-model.change` and the shared versions of the development procedures have not been followed yet.
+
 ## Reproduce
 
-- **Regression replay:** `make demo` (needs `jq`).
+- **Regression replay:** `make demo` (needs `jq` and `sqlite3`).
 - **The live loop, in a store of your own:** run `bin/polaroidd -db /tmp/loop.db` on `127.0.0.1:7417` (stop any other daemon on that port first), load the seed with `scripts/load-fixtures.sh -n 1 examples/development`, and give an agent the #33 prompt above with a commit of your choice. Loading without `-n 1` also appends the correction, as any store loaded from the fixtures has it.
