@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 	"uuid"
 )
@@ -13,11 +14,13 @@ import (
 // Implementations must make every write atomic, must never modify or delete a
 // stored record, and must enforce canonical-key and binding-name uniqueness.
 type Store interface {
-	// CreateProcedure stores p together with its first version. It returns an
-	// error wrapping ErrCanonicalKeyExists if p.CanonicalKey is already used,
-	// a *MissingTargetsError if a reference's target or pinned version does
-	// not exist, and the error of ExpandGraph if the stored version's graph
-	// has a cycle or exceeds the limits; then nothing is stored.
+	// CreateProcedure stores p together with its first version, and p.Origin
+	// if set. It returns an error wrapping ErrCanonicalKeyExists if
+	// p.CanonicalKey is already used, a *MissingTargetsError if a reference's
+	// target or pinned version does not exist, a *ValidationError if a named
+	// repository is not registered or CheckReferenceScopes fails, and the
+	// error of ExpandGraph if the stored version's graph has a cycle or
+	// exceeds the limits; then nothing is stored.
 	CreateProcedure(ctx context.Context, p Procedure, first Version) error
 
 	// AppendVersion stores next if, and only if, baseVersion is the latest
@@ -28,8 +31,35 @@ type Store interface {
 	// reference errors of CreateProcedure.
 	AppendVersion(ctx context.Context, baseVersion int, next Version) error
 
-	// ListProcedures returns every procedure ordered by canonical key.
-	ListProcedures(ctx context.Context) ([]Procedure, error)
+	// ListProcedures returns the procedures f selects ordered by canonical
+	// key, with one extra item when f.Page.Limit is set and more exist.
+	ListProcedures(ctx context.Context, f ProcedureFilter) ([]Procedure, error)
+
+	// SetOrigin records a procedure's origin. It returns an error wrapping
+	// ErrNotFound if the procedure does not exist, ErrOriginExists if an
+	// origin is already recorded, and a *ValidationError if the repository
+	// is not registered.
+	SetOrigin(ctx context.Context, procedureID string, o Origin) error
+
+	// CreateRepository stores r with its canonical identifier, setting
+	// r.CreatedAt strictly after every stored repository's. It returns
+	// ErrIdentifierExists if the identifier is registered.
+	CreateRepository(ctx context.Context, r *Repository) error
+
+	// AddRepositoryAlias stores a as an alias of a repository. It returns an
+	// error wrapping ErrNotFound if the repository does not exist,
+	// ErrIdentifierExists if the identifier is registered, and a
+	// *BindingNameConflictError if a binding name would be duplicated.
+	AddRepositoryAlias(ctx context.Context, repositoryID string, a RepositoryAlias) error
+
+	// Repository and RepositoryByIdentifier return a repository with its
+	// aliases, oldest first, or an error wrapping ErrNotFound.
+	Repository(ctx context.Context, id string) (Repository, error)
+	RepositoryByIdentifier(ctx context.Context, identifier string) (Repository, error)
+
+	// ListRepositories returns repositories after the position, oldest
+	// first: all of them without a limit, else at most limit+1.
+	ListRepositories(ctx context.Context, after *Position, limit int) ([]Repository, error)
 
 	// History and HistoryByKey return a consistent snapshot of a procedure and
 	// all of its versions, or an error wrapping ErrNotFound.
@@ -59,8 +89,10 @@ type Store interface {
 	// does not have.
 	AppendBindingRevision(ctx context.Context, baseRevision int, next BindingRevision) error
 
-	// ListBindings returns the bindings of one repository ordered by name.
-	ListBindings(ctx context.Context, repository string) ([]Binding, error)
+	// ListBindings returns the bindings whose repository is one of
+	// identifiers, ordered by name and ID, after the position: all of them
+	// without a limit, else at most limit+1.
+	ListBindings(ctx context.Context, identifiers []string, after *Position, limit int) ([]Binding, error)
 
 	// BindingHistory returns a consistent snapshot of a binding and all of its
 	// revisions, or an error wrapping ErrNotFound.
@@ -69,17 +101,19 @@ type Store interface {
 	// BindingRevision returns one revision, or an error wrapping ErrNotFound.
 	BindingRevision(ctx context.Context, bindingID string, number int) (BindingRevision, error)
 
-	// CreateExecution stores e and its child links. The caller has checked
-	// that its version, binding revision and children exist and match; the
-	// store returns a *LinkedChildError if a child already has a parent, and
-	// never modifies or deletes an execution.
-	CreateExecution(ctx context.Context, e Execution) error
+	// CreateExecution stores e and its child links, setting e.CreatedAt
+	// strictly after every stored execution's. The caller has checked that
+	// its version, binding revision and children exist and match; the store
+	// returns a *LinkedChildError if a child already has a parent, and never
+	// modifies or deletes an execution.
+	CreateExecution(ctx context.Context, e *Execution) error
 
 	// Execution returns one execution, or an error wrapping ErrNotFound.
 	Execution(ctx context.Context, id string) (Execution, error)
 
 	// ListExecutions returns the executions f selects, oldest first, without
-	// their Inputs and Evidence.
+	// their Inputs and Evidence, with one extra item when f.Page.Limit is set
+	// and more exist.
 	ListExecutions(ctx context.Context, f ExecutionFilter) ([]Execution, error)
 
 	// ExecutionVerification returns VerifyExecution of one execution, read
@@ -90,15 +124,16 @@ type Store interface {
 	// consistent snapshot.
 	Verifications(ctx context.Context, f VerificationFilter) ([]CombinationStatus, error)
 
-	// CreateFeedback stores f, and never modifies or deletes a report.
-	CreateFeedback(ctx context.Context, f Feedback) error
+	// CreateFeedback stores f, setting f.CreatedAt strictly after every
+	// stored report's, and never modifies or deletes a report.
+	CreateFeedback(ctx context.Context, f *Feedback) error
 
 	// Feedback returns one report, or an error wrapping ErrNotFound.
 	Feedback(ctx context.Context, id string) (Feedback, error)
 
-	// ListFeedback returns every report, or only those of kind if it is not
-	// empty, oldest first.
-	ListFeedback(ctx context.Context, kind FeedbackKind) ([]Feedback, error)
+	// ListFeedback returns the reports f selects, oldest first, with one
+	// extra item when f.Page.Limit is set and more exist.
+	ListFeedback(ctx context.Context, f FeedbackFilter) ([]Feedback, error)
 
 	// Ping reports whether the store can serve requests.
 	Ping(ctx context.Context) error
@@ -122,7 +157,13 @@ func (s *Service) CreateProcedure(ctx context.Context, in NewProcedure) (History
 		return History{}, err
 	}
 	now := timestamp()
-	p := Procedure{ID: uuid.NewV7().String(), CanonicalKey: in.CanonicalKey, CreatedAt: now, LatestVersion: 1}
+	p := Procedure{ID: uuid.NewV7().String(), CanonicalKey: in.CanonicalKey, CreatedAt: now, LatestVersion: 1,
+		Goal: def.Goal, Applicability: def.Applicability}
+	if in.Origin != nil {
+		o := *in.Origin
+		o.CreatedAt = now
+		p.Origin = &o
+	}
 	v := Version{ProcedureID: p.ID, Number: 1, CreatedAt: now, Definition: def}
 	if err := s.store.CreateProcedure(ctx, p, v); err != nil {
 		if errors.Is(err, ErrCanonicalKeyExists) {
@@ -169,13 +210,53 @@ func (s *Service) ReviseProcedure(ctx context.Context, procedureID string, in Re
 	return v, nil
 }
 
-// ListProcedures returns every procedure ordered by canonical key.
-func (s *Service) ListProcedures(ctx context.Context) ([]Procedure, error) {
-	procedures, err := s.store.ListProcedures(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list procedures: %w", err)
+// ProcedureFilter selects procedures for discovery (ADR-0021). Repository
+// keeps those whose latest version is applicable in that repository; Scope
+// (shared, local or unspecified) those whose latest version declares it;
+// Query those whose canonical key or latest goal contains it, ignoring ASCII
+// case. RepositoryID and After are set by the service for the store.
+type ProcedureFilter struct {
+	Repository   string
+	Scope        string
+	Query        string
+	Page         Page
+	RepositoryID string
+	After        *Position
+}
+
+// ListProcedures returns the procedures f selects, ordered by canonical key,
+// and the cursor of the next page if there is one.
+func (s *Service) ListProcedures(ctx context.Context, f ProcedureFilter) ([]Procedure, string, error) {
+	var p problems
+	if f.Repository != "" {
+		checkRepository(&p, "repository", f.Repository)
 	}
-	return procedures, nil
+	switch f.Scope {
+	case "", "shared", "local", "unspecified":
+	default:
+		p.add("scope", `must be "shared", "local" or "unspecified"`)
+	}
+	if f.Query != "" && strings.TrimSpace(f.Query) == "" {
+		p.add("q", "must not be blank")
+	}
+	f.After = f.Page.keyPosition(&p)
+	if err := p.err(); err != nil {
+		return nil, "", err
+	}
+	if f.Repository != "" {
+		id, err := s.identityID(ctx, f.Repository)
+		if err != nil {
+			return nil, "", err
+		}
+		f.RepositoryID = id
+	}
+	f.Query = strings.ToLower(f.Query)
+	procedures, err := s.store.ListProcedures(ctx, f)
+	if err != nil {
+		return nil, "", fmt.Errorf("list procedures: %w", err)
+	}
+	procedures, next := trim(f.Page, procedures, func(p Procedure) string { return keyCursor(p.CanonicalKey, p.ID) })
+	return procedures, next, nil
 }
 
 // Procedure returns a procedure and its full version history.

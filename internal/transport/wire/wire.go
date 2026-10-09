@@ -77,6 +77,8 @@ func kindName(k jsontext.Kind) string {
 type Definition struct {
 	Philosophy     string         `json:"philosophy"`
 	Method         string         `json:"method"`
+	Goal           string         `json:"goal,omitzero"`
+	Applicability  *Applicability `json:"applicability,omitzero"`
 	Contract       jsontext.Value `json:"contract"`
 	Instructions   jsontext.Value `json:"instructions"`
 	References     []Reference    `json:"references,omitzero"`
@@ -88,11 +90,75 @@ func (d Definition) Domain() memory.Definition {
 	return memory.Definition{
 		Philosophy:     d.Philosophy,
 		Method:         d.Method,
+		Goal:           d.Goal,
+		Applicability:  d.Applicability.Domain(),
 		Contract:       d.Contract,
 		Instructions:   d.Instructions,
 		References:     references(d.References),
 		RevisionReason: d.RevisionReason,
 	}
+}
+
+// Applicability is {"shared": {}} or {"repository": "<repository id>"}
+// (ADR-0020). A version without one is unspecified.
+type Applicability struct {
+	Shared     *SharedScope `json:"shared,omitzero"`
+	Repository string       `json:"repository,omitzero"`
+}
+
+// SharedScope has no members; any member is rejected.
+type SharedScope struct{}
+
+// Domain maps a to the domain form: nil is unspecified, and anything other
+// than exactly one member is invalid, which validation rejects.
+func (a *Applicability) Domain() memory.Applicability {
+	switch {
+	case a == nil:
+		return memory.Applicability{}
+	case a.Shared != nil && a.Repository == "":
+		return memory.Applicability{Kind: memory.ScopeShared}
+	case a.Shared == nil && a.Repository != "":
+		return memory.Applicability{Kind: memory.ScopeLocal, RepositoryID: a.Repository}
+	default:
+		return memory.InvalidApplicability
+	}
+}
+
+// NewApplicability returns a in wire form, or nil when it is unspecified.
+func NewApplicability(a memory.Applicability) *Applicability {
+	switch a.Kind {
+	case memory.ScopeShared:
+		return &Applicability{Shared: &SharedScope{}}
+	case memory.ScopeLocal:
+		return &Applicability{Repository: a.RepositoryID}
+	default:
+		return nil
+	}
+}
+
+// NewOrigin is a client-supplied procedure origin.
+type NewOrigin struct {
+	RepositoryID string `json:"repository_id"`
+	Reason       string `json:"reason"`
+}
+
+// Domain returns o in domain form.
+func (o NewOrigin) Domain() memory.Origin {
+	return memory.Origin{RepositoryID: o.RepositoryID, Reason: o.Reason}
+}
+
+// Origin is a stored procedure origin.
+type Origin struct {
+	RepositoryID string    `json:"repository_id"`
+	Reason       string    `json:"reason"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+func newOrigin(o *memory.Origin) *Origin {
+	if o == nil {
+		return nil
+	}
+	return &Origin{RepositoryID: o.RepositoryID, Reason: o.Reason, CreatedAt: o.CreatedAt}
 }
 
 // Reference is one named subprocedure reference, in requests and responses
@@ -170,23 +236,36 @@ func (c BindingConfig) Domain() memory.BindingConfig {
 	return memory.BindingConfig{Inputs: c.Inputs, VersionPolicy: c.VersionPolicy.Domain(), RevisionReason: c.RevisionReason}
 }
 
+// Procedure is a list item. scope, goal and applicability are the latest
+// version's (ADR-0020); goal, applicability and origin are omitted when
+// absent.
 type Procedure struct {
-	ID            string    `json:"id"`
-	CanonicalKey  string    `json:"canonical_key"`
-	CreatedAt     time.Time `json:"created_at"`
-	LatestVersion int       `json:"latest_version"`
+	ID            string         `json:"id"`
+	CanonicalKey  string         `json:"canonical_key"`
+	CreatedAt     time.Time      `json:"created_at"`
+	LatestVersion int            `json:"latest_version"`
+	Scope         string         `json:"scope"`
+	Goal          string         `json:"goal,omitzero"`
+	Applicability *Applicability `json:"applicability,omitzero"`
+	Origin        *Origin        `json:"origin,omitzero"`
 }
 
 func NewProcedure(p memory.Procedure) Procedure {
-	return Procedure{ID: p.ID, CanonicalKey: p.CanonicalKey, CreatedAt: p.CreatedAt, LatestVersion: p.LatestVersion}
+	return Procedure{
+		ID: p.ID, CanonicalKey: p.CanonicalKey, CreatedAt: p.CreatedAt, LatestVersion: p.LatestVersion,
+		Scope: p.Applicability.Name(), Goal: p.Goal, Applicability: NewApplicability(p.Applicability), Origin: newOrigin(p.Origin),
+	}
 }
 
+// ProcedureList is a list of procedures. next is the cursor of the next
+// page, omitted on the last page and without a limit (ADR-0021).
 type ProcedureList struct {
 	Procedures []Procedure `json:"procedures"`
+	Next       string      `json:"next,omitzero"`
 }
 
-func NewProcedureList(procedures []memory.Procedure) ProcedureList {
-	body := ProcedureList{Procedures: make([]Procedure, len(procedures))}
+func NewProcedureList(procedures []memory.Procedure, next string) ProcedureList {
+	body := ProcedureList{Procedures: make([]Procedure, len(procedures)), Next: next}
 	for i, p := range procedures {
 		body.Procedures[i] = NewProcedure(p)
 	}
@@ -194,12 +273,14 @@ func NewProcedureList(procedures []memory.Procedure) ProcedureList {
 }
 
 type Version struct {
-	ProcedureID  string         `json:"procedure_id"`
-	Version      int            `json:"version"`
-	Philosophy   string         `json:"philosophy"`
-	Method       string         `json:"method"`
-	Contract     jsontext.Value `json:"contract"`
-	Instructions jsontext.Value `json:"instructions"`
+	ProcedureID   string         `json:"procedure_id"`
+	Version       int            `json:"version"`
+	Philosophy    string         `json:"philosophy"`
+	Method        string         `json:"method"`
+	Goal          string         `json:"goal,omitzero"`
+	Applicability *Applicability `json:"applicability,omitzero"`
+	Contract      jsontext.Value `json:"contract"`
+	Instructions  jsontext.Value `json:"instructions"`
 	// References is omitted when there are none, so versions stored before
 	// references existed are served unchanged.
 	References     []Reference `json:"references,omitzero"`
@@ -213,6 +294,8 @@ func NewVersion(v memory.Version) Version {
 		Version:        v.Number,
 		Philosophy:     v.Philosophy,
 		Method:         v.Method,
+		Goal:           v.Goal,
+		Applicability:  NewApplicability(v.Applicability),
 		Contract:       v.Contract,
 		Instructions:   v.Instructions,
 		References:     newReferences(v.References),
@@ -222,19 +305,28 @@ func NewVersion(v memory.Version) Version {
 }
 
 type History struct {
-	ID            string    `json:"id"`
-	CanonicalKey  string    `json:"canonical_key"`
-	CreatedAt     time.Time `json:"created_at"`
-	LatestVersion int       `json:"latest_version"`
-	Versions      []Version `json:"versions"`
+	ID            string         `json:"id"`
+	CanonicalKey  string         `json:"canonical_key"`
+	CreatedAt     time.Time      `json:"created_at"`
+	LatestVersion int            `json:"latest_version"`
+	Scope         string         `json:"scope"`
+	Goal          string         `json:"goal,omitzero"`
+	Applicability *Applicability `json:"applicability,omitzero"`
+	Origin        *Origin        `json:"origin,omitzero"`
+	Versions      []Version      `json:"versions"`
 }
 
 func NewHistory(h memory.History) History {
+	p := NewProcedure(h.Procedure)
 	body := History{
-		ID:            h.Procedure.ID,
-		CanonicalKey:  h.Procedure.CanonicalKey,
-		CreatedAt:     h.Procedure.CreatedAt,
-		LatestVersion: h.Procedure.LatestVersion,
+		ID:            p.ID,
+		CanonicalKey:  p.CanonicalKey,
+		CreatedAt:     p.CreatedAt,
+		LatestVersion: p.LatestVersion,
+		Scope:         p.Scope,
+		Goal:          p.Goal,
+		Applicability: p.Applicability,
+		Origin:        p.Origin,
 		Versions:      make([]Version, len(h.Versions)),
 	}
 	for i, v := range h.Versions {
@@ -265,10 +357,11 @@ func NewBinding(b memory.Binding) Binding {
 
 type BindingList struct {
 	Bindings []Binding `json:"bindings"`
+	Next     string    `json:"next,omitzero"`
 }
 
-func NewBindingList(bindings []memory.Binding) BindingList {
-	body := BindingList{Bindings: make([]Binding, len(bindings))}
+func NewBindingList(bindings []memory.Binding, next string) BindingList {
+	body := BindingList{Bindings: make([]Binding, len(bindings)), Next: next}
 	for i, b := range bindings {
 		body.Bindings[i] = NewBinding(b)
 	}
@@ -323,11 +416,13 @@ func NewBindingHistory(h memory.BindingHistory) BindingHistory {
 
 // GraphNode is one node of a composition graph. References is always
 // present, empty for a leaf. verified_by and selection_evidence are omitted
-// without evidence, target_verification without a target (ADR-0018).
+// without evidence, target_verification without a target (ADR-0018), and
+// applicability when the version declares none (ADR-0020).
 type GraphNode struct {
 	ProcedureID        string              `json:"procedure_id"`
 	CanonicalKey       string              `json:"canonical_key"`
 	Version            int                 `json:"version"`
+	Applicability      *Applicability      `json:"applicability,omitzero"`
 	VerifiedBy         string              `json:"verified_by,omitzero"`
 	SelectionEvidence  *SelectionEvidence  `json:"selection_evidence,omitzero"`
 	TargetVerification *TargetVerification `json:"target_verification,omitzero"`
@@ -362,11 +457,12 @@ type GraphEdge struct {
 
 func NewGraphNode(n memory.GraphNode) GraphNode {
 	body := GraphNode{
-		ProcedureID:  n.ProcedureID,
-		CanonicalKey: n.CanonicalKey,
-		Version:      n.Version,
-		VerifiedBy:   n.VerifiedBy,
-		References:   make([]GraphEdge, len(n.Edges)),
+		ProcedureID:   n.ProcedureID,
+		CanonicalKey:  n.CanonicalKey,
+		Version:       n.Version,
+		Applicability: NewApplicability(n.Applicability),
+		VerifiedBy:    n.VerifiedBy,
+		References:    make([]GraphEdge, len(n.Edges)),
 	}
 	if e := n.Evidence; e != nil {
 		body.SelectionEvidence = &SelectionEvidence{ExecutionID: e.ExecutionID, Repository: e.Repository, Commit: e.Commit, Environment: EnvironmentName{Name: e.Environment}}
@@ -496,10 +592,11 @@ func NewExecutionSummary(e memory.Execution) ExecutionSummary {
 
 type ExecutionList struct {
 	Executions []ExecutionSummary `json:"executions"`
+	Next       string             `json:"next,omitzero"`
 }
 
-func NewExecutionList(executions []memory.Execution) ExecutionList {
-	body := ExecutionList{Executions: make([]ExecutionSummary, len(executions))}
+func NewExecutionList(executions []memory.Execution, next string) ExecutionList {
+	body := ExecutionList{Executions: make([]ExecutionSummary, len(executions)), Next: next}
 	for i, e := range executions {
 		body.Executions[i] = NewExecutionSummary(e)
 	}
@@ -637,58 +734,158 @@ func NewVerificationList(statuses []memory.CombinationStatus) VerificationList {
 }
 
 // FeedbackRecord is the client-supplied content of a feedback report.
-// context is optional.
+// context, subject, repository and execution_id are optional.
 type FeedbackRecord struct {
-	Kind     string         `json:"kind"`
-	Summary  string         `json:"summary"`
-	Details  string         `json:"details"`
-	Reporter string         `json:"reporter"`
-	Context  jsontext.Value `json:"context,omitzero"`
+	Kind        string         `json:"kind"`
+	Summary     string         `json:"summary"`
+	Details     string         `json:"details"`
+	Reporter    string         `json:"reporter"`
+	Context     jsontext.Value `json:"context,omitzero"`
+	Subject     *Subject       `json:"subject,omitzero"`
+	Repository  string         `json:"repository,omitzero"`
+	ExecutionID string         `json:"execution_id,omitzero"`
+}
+
+// Subject is what a report is about (ADR-0021): type, and the members of
+// that type.
+type Subject struct {
+	Type         string `json:"type"`
+	RepositoryID string `json:"repository_id,omitzero"`
+	ProcedureID  string `json:"procedure_id,omitzero"`
+	Version      int    `json:"version,omitzero"`
+	BindingID    string `json:"binding_id,omitzero"`
+	Revision     int    `json:"revision,omitzero"`
+	ExecutionID  string `json:"execution_id,omitzero"`
+}
+
+func (s *Subject) domain() *memory.Subject {
+	if s == nil {
+		return nil
+	}
+	return &memory.Subject{Type: memory.SubjectType(s.Type), RepositoryID: s.RepositoryID, ProcedureID: s.ProcedureID,
+		Version: s.Version, BindingID: s.BindingID, Revision: s.Revision, ExecutionID: s.ExecutionID}
+}
+
+func newSubject(s *memory.Subject) *Subject {
+	if s == nil {
+		return nil
+	}
+	return &Subject{Type: string(s.Type), RepositoryID: s.RepositoryID, ProcedureID: s.ProcedureID,
+		Version: s.Version, BindingID: s.BindingID, Revision: s.Revision, ExecutionID: s.ExecutionID}
 }
 
 // Domain returns r in domain form.
 func (r FeedbackRecord) Domain() memory.FeedbackRecord {
 	return memory.FeedbackRecord{
-		Kind:     memory.FeedbackKind(r.Kind),
-		Summary:  r.Summary,
-		Details:  r.Details,
-		Reporter: r.Reporter,
-		Context:  r.Context,
+		Kind:        memory.FeedbackKind(r.Kind),
+		Summary:     r.Summary,
+		Details:     r.Details,
+		Reporter:    r.Reporter,
+		Context:     r.Context,
+		Subject:     r.Subject.domain(),
+		Repository:  r.Repository,
+		ExecutionID: r.ExecutionID,
 	}
 }
 
 // Feedback is a stored report. context is always present, {} when none was
-// given.
+// given; subject, repository and execution_id are omitted when absent.
 type Feedback struct {
-	ID        string         `json:"id"`
-	Kind      string         `json:"kind"`
-	Summary   string         `json:"summary"`
-	Details   string         `json:"details"`
-	Reporter  string         `json:"reporter"`
-	Context   jsontext.Value `json:"context"`
-	CreatedAt time.Time      `json:"created_at"`
+	ID          string         `json:"id"`
+	Kind        string         `json:"kind"`
+	Summary     string         `json:"summary"`
+	Details     string         `json:"details"`
+	Reporter    string         `json:"reporter"`
+	Context     jsontext.Value `json:"context"`
+	Subject     *Subject       `json:"subject,omitzero"`
+	Repository  string         `json:"repository,omitzero"`
+	ExecutionID string         `json:"execution_id,omitzero"`
+	CreatedAt   time.Time      `json:"created_at"`
 }
 
 func NewFeedback(f memory.Feedback) Feedback {
 	return Feedback{
-		ID:        f.ID,
-		Kind:      string(f.Kind),
-		Summary:   f.Summary,
-		Details:   f.Details,
-		Reporter:  f.Reporter,
-		Context:   f.Context,
-		CreatedAt: f.CreatedAt,
+		ID:          f.ID,
+		Kind:        string(f.Kind),
+		Summary:     f.Summary,
+		Details:     f.Details,
+		Reporter:    f.Reporter,
+		Context:     f.Context,
+		Subject:     newSubject(f.Subject),
+		Repository:  f.Repository,
+		ExecutionID: f.ExecutionID,
+		CreatedAt:   f.CreatedAt,
 	}
 }
 
 type FeedbackList struct {
 	Feedback []Feedback `json:"feedback"`
+	Next     string     `json:"next,omitzero"`
 }
 
-func NewFeedbackList(reports []memory.Feedback) FeedbackList {
-	body := FeedbackList{Feedback: make([]Feedback, len(reports))}
+func NewFeedbackList(reports []memory.Feedback, next string) FeedbackList {
+	body := FeedbackList{Feedback: make([]Feedback, len(reports)), Next: next}
 	for i, f := range reports {
 		body.Feedback[i] = NewFeedback(f)
+	}
+	return body
+}
+
+// NewRepository is a request to register a repository (ADR-0019).
+type NewRepository struct {
+	Identifier string `json:"identifier"`
+	Name       string `json:"name"`
+}
+
+// Domain returns r in domain form.
+func (r NewRepository) Domain() memory.NewRepository {
+	return memory.NewRepository{Identifier: r.Identifier, Name: r.Name}
+}
+
+// NewAlias is a request to add an alias to a repository.
+type NewAlias struct {
+	Identifier string `json:"identifier"`
+	Reason     string `json:"reason"`
+}
+
+// Domain returns a in domain form.
+func (a NewAlias) Domain() memory.NewAlias {
+	return memory.NewAlias{Identifier: a.Identifier, Reason: a.Reason}
+}
+
+// Repository is a registered repository. aliases is always present, oldest
+// first.
+type Repository struct {
+	ID         string            `json:"id"`
+	Name       string            `json:"name"`
+	Identifier string            `json:"identifier"`
+	Aliases    []RepositoryAlias `json:"aliases"`
+	CreatedAt  time.Time         `json:"created_at"`
+}
+
+type RepositoryAlias struct {
+	Identifier string    `json:"identifier"`
+	Reason     string    `json:"reason"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+func NewRepositoryBody(r memory.Repository) Repository {
+	body := Repository{ID: r.ID, Name: r.Name, Identifier: r.Identifier, Aliases: make([]RepositoryAlias, len(r.Aliases)), CreatedAt: r.CreatedAt}
+	for i, a := range r.Aliases {
+		body.Aliases[i] = RepositoryAlias{Identifier: a.Identifier, Reason: a.Reason, CreatedAt: a.CreatedAt}
+	}
+	return body
+}
+
+type RepositoryList struct {
+	Repositories []Repository `json:"repositories"`
+	Next         string       `json:"next,omitzero"`
+}
+
+func NewRepositoryList(repos []memory.Repository, next string) RepositoryList {
+	body := RepositoryList{Repositories: make([]Repository, len(repos)), Next: next}
+	for i, r := range repos {
+		body.Repositories[i] = NewRepositoryBody(r)
 	}
 	return body
 }
@@ -768,6 +965,10 @@ func Classify(err error) (status int, detail ErrorDetail, ok bool) {
 		return http.StatusConflict, ErrorDetail{Code: "canonical_key_exists", Message: err.Error()}, true
 	case errors.Is(err, memory.ErrBindingExists):
 		return http.StatusConflict, ErrorDetail{Code: "binding_exists", Message: err.Error()}, true
+	case errors.Is(err, memory.ErrIdentifierExists):
+		return http.StatusConflict, ErrorDetail{Code: "repository_identifier_exists", Message: err.Error()}, true
+	case errors.Is(err, memory.ErrOriginExists):
+		return http.StatusConflict, ErrorDetail{Code: "origin_exists", Message: err.Error()}, true
 	case errors.Is(err, memory.ErrNotFound):
 		return http.StatusNotFound, ErrorDetail{Code: "not_found", Message: err.Error()}, true
 	default:

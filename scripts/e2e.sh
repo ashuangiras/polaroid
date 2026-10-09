@@ -379,7 +379,7 @@ show 'bin/polaroid get-binding "$BA"'
 check "get-binding returns the binding with latest_revision 1 and its revisions" json_has '.latest_revision == 1 and (.revisions | length) == 1'
 show 'bin/polaroid get-binding-revision "$BA" 1'
 check "get-binding-revision returns revision 1" json_has '.revision == 1 and .version_policy == {"pin":2}'
-show 'for q in "" "?repository=scratch&repository=x" "?repository=scratch&limit=1" "?repository=GitHub.com/X/Y"; do api GET "/v1/bindings$q" | tail -n1; done'
+show 'for q in "" "?repository=scratch&repository=x" "?repository=scratch&limit=0" "?repository=GitHub.com/X/Y"; do api GET "/v1/bindings$q" | tail -n1; done'
 check "missing, repeated, unknown and invalid query parameters all get 400" equal "$(grep -c '"code":"invalid_request"' <<<"$LAST")" 4
 
 ########################################################################
@@ -575,7 +575,7 @@ check "graph context needs both parameters; resolution needs an environment" equ
 
 ########################################################################
 section "Use Polaroid from an agent over MCP" \
-	"\`polaroidd\` serves MCP at \`/mcp\` (ADR-0014): stateless streamable HTTP, protocols 2026-07-28 and 2025-11-25 (ADR-0016), behind the same loopback and cross-origin checks. 20 tools mirror the HTTP API with flat arguments named after record fields; results are the API's record shapes, errors are tool errors with the API's codes, and three read-only resource templates serve procedures, versions and bindings. Below, raw JSON-RPC over curl shows exactly what an MCP client sends." \
+	"\`polaroidd\` serves MCP at \`/mcp\` (ADR-0014): stateless streamable HTTP, protocols 2026-07-28 and 2025-11-25 (ADR-0016), behind the same loopback and cross-origin checks. 25 tools mirror the HTTP API with flat arguments named after record fields; results are the API's record shapes, errors are tool errors with the API's codes, and three read-only resource templates serve procedures, versions and bindings. Below, raw JSON-RPC over curl shows exactly what an MCP client sends." \
 	"Point an MCP client at \`http://127.0.0.1:7417/mcp\`, e.g. VS Code \`.vscode/mcp.json\`: \`{\"servers\": {\"polaroid\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:7417/mcp\"}}}\`."
 MCP_META='{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/clientInfo":{"name":"manual-test","version":"1"}}'
 rpc() { # rpc METHOD NAME PARAMS [PROTOCOL]: one JSON-RPC request; NAME may be empty
@@ -590,7 +590,7 @@ tool() { rpc tools/call "$1" "$(jq -cn --arg n "$1" --argjson a "$2" '{name: $n,
 show 'rpc server/discover "" "{}" | jq -c "{versions: .result.supportedVersions, capabilities: (.result.capabilities | keys), server: .result._meta[\"io.modelcontextprotocol/serverInfo\"].name}"'
 check "server/discover: protocols 2026-07-28 and 2025-11-25, tools and resources" json_has '.versions == ["2026-07-28","2025-11-25"] and .capabilities == ["resources","tools"] and .server == "polaroid"'
 show 'rpc tools/list "" "{}" | jq -c "{tools: (.result.tools | length), read_only: [.result.tools[] | select(.annotations.readOnlyHint) | .name] | length, names: [.result.tools[].name] | sort}"'
-check "20 tools, 14 of them read-only" json_has '.tools == 20 and .read_only == 14'
+check "25 tools, 16 of them read-only" json_has '.tools == 25 and .read_only == 16'
 show 'tool get_procedure "{\"canonical_key\": \"go.dependency.add\"}" | jq -S .result.structuredContent | shasum -a 256 | cut -c1-16; get /v1/procedures/by-key/go.dependency.add | jq -S . | shasum -a 256 | cut -c1-16'
 check "get_procedure over MCP returns the same document as GET /v1/procedures/by-key" equal "$(sed -n 1p <<<"$LAST")" "$(sed -n 2p <<<"$LAST")"
 show 'tool create_procedure "{\"canonical_key\": \"mcp.created\", \"philosophy\": \"p\", \"method\": \"m\", \"contract\": {\"z\": 1, \"a\": 2}, \"instructions\": {}, \"revision_reason\": \"Created by an agent over MCP.\"}" | jq -r ".result.content[0].text" | jq -c "{id, canonical_key, contract: .versions[0].contract}"'
@@ -645,12 +645,42 @@ check "an agent's report over MCP is stored and is byte-identical through the CL
 check "reporting feedback changed no other record" equal "$(digest /v1/procedures)$(digest "/v1/procedures/$ID")$(digest "/v1/bindings/$BA")$(digest "/v1/executions?procedure_id=$SOLO")" "$FB_BEFORE"
 
 ########################################################################
+section "Several repositories in one catalog" \
+	"Repositories are registered explicitly, with a canonical identifier and aliases (ADR-0019). A procedure version declares where it applies: shared, local to one registered repository, or unspecified (ADR-0020); bindings, executions and references are checked against it. Feedback can name its subject, and lists take filters and opt-in \`limit\`/\`after\` pagination (ADR-0021)." \
+	"\`bin/polaroid register\`, \`alias ID\`, \`repository-by-identifier IDENTIFIER\`, \`list repository=… scope=… q=…\`, \`feedbacks subject_type=… limit=…\`."
+show 'bin/polaroid register <<<"{\"identifier\": \"github.com/example/service-a\", \"name\": \"Service A\"}" | jq -c "{id, identifier, aliases}"'
+check "registering an identifier that bindings already use creates a repository with no aliases" json_has '.identifier == "github.com/example/service-a" and .aliases == []'
+REPO_A="$(head -n1 <<<"$LAST" | jq -r .id)"
+show 'bin/polaroid alias "$REPO_A" <<<"{\"identifier\": \"mirror.example/service-a\", \"reason\": \"The mirror of service A.\"}" >/dev/null; bin/polaroid repository-by-identifier mirror.example/service-a | jq -r .id'
+check "an alias finds the same repository" equal "$LAST" "$REPO_A"
+show 'bin/polaroid register <<<"{\"identifier\": \"mirror.example/service-a\", \"name\": \"Mirror\"}" 2>/dev/null | jq -r .error.code'
+check "a registered identifier cannot be registered again" equal "$LAST" repository_identifier_exists
+show 'bin/polaroid bindings mirror.example/service-a | jq -c "[.bindings[].id]"'
+check "the alias lists the bindings recorded under the canonical identifier" json_has --arg id "$BA" 'index($id) != null'
+show 'bin/polaroid create <<<"{\"canonical_key\": \"service-a.deploy\", \"version\": {\"philosophy\": \"p\", \"method\": \"m\", \"goal\": \"Deploy service A.\", \"applicability\": {\"repository\": \"$REPO_A\"}, \"contract\": {}, \"instructions\": {}, \"revision_reason\": \"Local to A.\"}}" | jq -c "{id, scope}"'
+check "a local procedure" json_has '.scope == "local"'
+LOCAL="$(head -n1 <<<"$LAST" | jq -r .id)"
+show 'bin/polaroid bind <<<"$(bind_req github.com/example/service-b "{\"contextual\": {}}" deploy "$LOCAL")" 2>/dev/null | jq -c "{code: .error.code, fields: [.error.fields[].field]}"'
+check "another repository cannot bind it" json_has '.code == "invalid_request" and .fields == ["procedure_id"]'
+show 'bin/polaroid list repository=github.com/example/service-b scope=local | jq -c "[.procedures[].canonical_key]"; bin/polaroid list repository=mirror.example/service-a q=deploy | jq -c "[.procedures[].canonical_key]"'
+check "discovery by repository and text" equal "$LAST" '[]
+["service-a.deploy"]'
+show 'bin/polaroid feedback <<<"{\"kind\": \"suggestion\", \"summary\": \"s\", \"details\": \"d\", \"reporter\": \"manual.tester\", \"subject\": {\"type\": \"procedure\", \"procedure_id\": \"$LOCAL\", \"version\": 1}, \"repository\": \"github.com/example/service-a\"}" | jq -c "{subject, repository}"'
+check "a report names its subject and repository" json_has --arg p "$LOCAL" '.subject == {type: "procedure", procedure_id: $p, version: 1}'
+show 'bin/polaroid feedbacks subject_type=procedure "subject_id=$LOCAL" subject_version=1 repository=mirror.example/service-a | jq -c "[.feedback[].summary]"'
+check "reports about one version in one repository, found through the alias" equal "$LAST" '["s"]'
+show 'bin/polaroid feedbacks limit=2 | jq -c "{n: (.feedback | length), more: has(\"next\")}"'
+check "a page of two reports, with a next cursor" json_has '.n == 2 and .more'
+show 'n=0; after=""; while :; do out="$(bin/polaroid feedbacks limit=2 ${after:+after=$after})"; n=$((n + $(jq ".feedback | length" <<<"$out"))); after="$(jq -r ".next // empty" <<<"$out")"; [[ -n "$after" ]] || break; done; echo "$n $(bin/polaroid feedbacks | jq ".feedback | length")"'
+check "paging returns every report" equal "$(cut -d" " -f1 <<<"$LAST")" "$(cut -d" " -f2 <<<"$LAST")"
+
+########################################################################
 section "The database enforces immutability itself" \
-	"Even a client that bypasses polaroidd cannot rewrite history: schema triggers reject UPDATE/DELETE of procedures, versions, bindings, binding revisions, references, executions and execution links, feedback reports, gaps in numbering, and pins to missing versions. \`PRAGMA user_version\` records the schema version (6 migrations)." \
+	"Even a client that bypasses polaroidd cannot rewrite history: schema triggers reject UPDATE/DELETE of procedures, versions, bindings, binding revisions, references, executions and execution links, feedback reports, repositories, repository identifiers and procedure origins, gaps in numbering, and pins to missing versions. \`PRAGMA user_version\` records the schema version (7 migrations)." \
 	"Open the database with \`sqlite3 polaroid.db\` and try the statements below."
 SNAP_BEFORE="$(digest "/v1/procedures/$ID")$(digest "/v1/bindings/$BA")$(digest "/v1/bindings/$BB")"
 show 'sqlite3 "$DB" "PRAGMA user_version; SELECT name FROM sqlite_master WHERE type = '"'"'table'"'"' ORDER BY name;"'
-check "schema version is 6 with procedure, binding, reference, execution, execution-link and feedback tables" equal "$(head -n1 <<<"$LAST")" 6
+check "schema version is 7 with procedure, binding, reference, execution, execution-link, feedback and repository tables" equal "$(head -n1 <<<"$LAST")" 7
 check "the execution_children table exists" out_has "execution_children"
 check "the feedback table exists" out_has "feedback"
 for stmt in \
@@ -717,7 +747,7 @@ show 'bin/polaroid bind <<<"$(bind_req scratch "{\"pin\": 1}" legacy old-1)" | j
 check "bindings work on the upgraded database" json_has '.procedure_id == "old-1"'
 stop_daemon
 show 'sqlite3 "$WORK/v1.db" "PRAGMA user_version"'
-check "schema version is now 6" equal "$LAST" 6
+check "schema version is now 7" equal "$LAST" 7
 show 'cp "$DB" "$WORK/newer.db" && sqlite3 "$WORK/newer.db" "PRAGMA user_version = 99" && bin/polaroidd -addr 127.0.0.1:0 -db "$WORK/newer.db"'
 check "newer schema refused with exit 1" rc_is 1
 check "error says the schema is newer than this build supports" out_has "newer than this build supports"

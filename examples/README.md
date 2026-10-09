@@ -36,3 +36,11 @@ scripts/load-fixtures.sh -n 1 examples/development   # version 1 of each: the se
 ```
 
 The loader reuses existing identities, appends missing versions with the right `base_version`, refuses to overwrite a stored version that differs, and prints the IDs it used. `make demo` loads these fixtures and checks the results.
+
+Fixtures may also register repositories (`repositories/*.json`: a register request plus optional `aliases`), record an origin once (`procedures/<name>/origin.json`), and name a repository by identifier wherever an ID is expected (`version.applicability.repository`, `origin.repository_id`); the loader replaces it with the registered ID, as it does canonical keys.
+
+## Repositories A and B
+
+[multi-repository/](multi-repository) is a fixture-only pair of repositories for [#35](https://github.com/ashuangiras/polaroid/issues/35). Neither repository exists. Repository A (with a mirror alias) and B both bind the shared `go.test.run` with different `packages`; A also has `service-a.release`, local to A, which composes `go.test.run`. `make demo` loads them and shows that B cannot bind A's local procedure, that a run in A verifies nothing in B, and how feedback and paged lists find their records.
+
+The procedures in `procedures/` above declare no applicability: they are *unspecified* examples, bindable anywhere.

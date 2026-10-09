@@ -2,22 +2,30 @@
 # Loads procedure and binding fixtures into a running polaroidd through the
 # CLI (ADR-0017). A fixture is an API request body, except that the
 # procedure_id of a reference or a binding may hold a canonical key, which is
-# replaced with the ID of that procedure in the target store.
+# replaced with the ID of that procedure in the target store, and a
+# repository ID (version.applicability.repository, origin.repository_id) may
+# hold a repository identifier, which is replaced with the ID it is
+# registered to (ADR-0019, ADR-0020).
 #
+#   DIR/repositories/*.json                                     register requests, plus optional "aliases"
 #   DIR/procedures/<name>/v1.create.json, v2.revise.json, ...   one procedure
+#   DIR/procedures/<name>/origin.json                           its origin, recorded once
 #   DIR/bindings/*.json                                         create-binding requests
 #
-# Procedures are reused by canonical key: every stored version must equal the
-# fixture's, and missing versions are appended with base_version set to the
-# stored latest. Bindings are reused by repository and name if they bind the
-# same procedure with the same first revision. Nothing is ever overwritten,
-# so a second run changes nothing. The loader knows record shapes, not tasks.
+# Repositories are reused by canonical identifier if their name matches, and
+# missing aliases are added. Procedures are reused by canonical key: every
+# stored version must equal the fixture's, and missing versions are appended
+# with base_version set to the stored latest; a missing origin is recorded.
+# Bindings are reused by repository and name if they bind the same procedure
+# with the same first revision. Nothing is ever overwritten, so a second run
+# changes nothing. The loader knows record shapes, not tasks.
 #
 # Usage: scripts/load-fixtures.sh [-n MAX_VERSION] DIR
 #   -n N loads each procedure's versions up to N only.
 #   The server is $POLAROID_URL, else the CLI's default. Needs jq and
 #   bin/polaroid (make build). Progress goes to stderr; stdout gets
-#   {"procedures": {KEY: ID, ...}, "bindings": [{repository, name, id}, ...]}.
+#   {"repositories": {IDENTIFIER: ID, ...}, "procedures": {KEY: ID, ...},
+#    "bindings": [{repository, name, id}, ...]}.
 set -euo pipefail
 
 cli="$(cd "$(dirname "$0")/.." && pwd)/bin/polaroid"
@@ -67,13 +75,29 @@ id_of() {
 }
 
 # substitute FILE prints FILE with every canonical key in a reference's
-# procedure_id replaced by its ID. Every key must exist.
+# procedure_id replaced by its ID, and a repository identifier in
+# version.applicability.repository replaced by the repository's ID. Every key
+# and identifier must exist.
 substitute() {
-	local ids='{}' key
+	local ids='{}' key repo
 	for key in $(jq -r '.version.references[]?.procedure_id' "$1"); do
 		ids="$(jq -c --arg k "$key" --arg id "$(id_of "$key")" '. + {($k): $id}' <<<"$ids")"
 	done
-	jq -c --argjson ids "$ids" '(.version.references[]?.procedure_id) |= $ids[.]' "$1"
+	repo="$(jq -r '.version.applicability.repository // empty' "$1")"
+	[[ -z "$repo" ]] || repo="$(repository_id "$repo")"
+	jq -c --argjson ids "$ids" --arg repo "$repo" '(.version.references[]?.procedure_id) |= $ids[.]
+		| if $repo != "" then .version.applicability.repository = $repo else . end' "$1"
+}
+
+# repository_id IDENTIFIER_OR_ID prints the ID of the registered repository.
+repository_id() {
+	local out
+	if [[ "$1" =~ $uuid ]]; then
+		echo "$1"
+		return
+	fi
+	out="$("$cli" repository-by-identifier "$1")" || die "repository $1 is not registered: $out"
+	jq -r .id <<<"$out"
 }
 
 # missing FILE prints the referenced keys that name no stored procedure.
@@ -84,7 +108,7 @@ missing() {
 	done
 }
 
-comparable='{philosophy, method, contract, instructions, references: (.references // []), revision_reason}'
+comparable='{philosophy, method, goal: (.goal // null), applicability: (.applicability // null), contract, instructions, references: (.references // []), revision_reason}'
 
 # load_procedure DIR loads one procedure. It sets deferred=1 and changes
 # nothing if a version to load references a procedure that is not stored yet.
@@ -131,8 +155,52 @@ load_procedure() {
 	if ((latest > limit)); then
 		log "$key: the store also has versions $((limit + 1))..$latest beyond the loaded fixtures"
 	fi
+	if [[ -f "$pdir/origin.json" ]]; then
+		want="$(jq -c --arg r "$(repository_id "$(jq -r .repository_id "$pdir/origin.json")")" '.repository_id = $r' "$pdir/origin.json")"
+		got="$("$cli" get "$id" | jq -c '.origin // empty | {repository_id, reason}')"
+		if [[ -z "$got" ]]; then
+			got="$("$cli" origin "$id" <<<"$want")" || die "origin of $key failed: $got"
+			log "$key: recorded its origin"
+		elif [[ "$(jq -S . <<<"$got")" != "$(jq -S . <<<"$want")" ]]; then
+			die "$key has another origin in the store than $pdir/origin.json; origins are never overwritten"
+		fi
+	fi
 	log "$key: $id, versions 1..$limit match the fixtures"
 }
+
+# load_repository FILE registers a repository fixture, or reuses it, and
+# adds its missing aliases.
+load_repository() {
+	local identifier name out id alias reason
+	identifier="$(jq -r .identifier "$1")"
+	name="$(jq -r .name "$1")"
+	if out="$("$cli" repository-by-identifier "$identifier" 2>/dev/null)"; then
+		[[ "$(jq -r '.identifier + "\n" + .name' <<<"$out")" == "$identifier"$'\n'"$name" ]] ||
+			die "$identifier is registered differently from $1; repositories are never overwritten"
+		log "$identifier: reused repository $(jq -r .id <<<"$out")"
+	elif [[ "$(jq -r '.error.code // empty' <<<"$out" 2>/dev/null)" == not_found ]]; then
+		out="$(jq -c '{identifier, name}' "$1" | "$cli" register)" || die "register $identifier failed: $out"
+		log "$identifier: registered repository $(jq -r .id <<<"$out")"
+	else
+		die "repository-by-identifier $identifier failed: $out"
+	fi
+	id="$(jq -r .id <<<"$out")"
+	while IFS=$'\t' read -r alias reason; do
+		[[ -n "$alias" ]] || continue
+		if jq -e --arg a "$alias" 'any(.aliases[]; .identifier == $a)' <<<"$out" >/dev/null; then
+			continue
+		fi
+		out="$(jq -cn --arg i "$alias" --arg r "$reason" '{identifier: $i, reason: $r}' | "$cli" alias "$id")" || die "alias $alias failed: $out"
+		log "$identifier: added alias $alias"
+	done < <(jq -r '.aliases[]? | [.identifier, .reason] | @tsv' "$1")
+	repositories="$(jq -c --arg i "$identifier" --arg id "$id" '. + {($i): $id}' <<<"$repositories")"
+}
+
+repositories='{}'
+for f in "$dir"/repositories/*.json; do
+	[[ -f "$f" ]] || continue
+	load_repository "$f"
+done
 
 pending=("$dir"/procedures/*/)
 [[ -d "${pending[0]}" ]] || die "no procedures in $dir/procedures"
@@ -175,4 +243,4 @@ for f in "$dir"/bindings/*.json; do
 	bindings="$(jq -c --arg r "$repository" --arg n "$name" --arg id "$id" '. + [{repository: $r, name: $n, id: $id}]' <<<"$bindings")"
 done
 
-jq -n --argjson p "$procedures" --argjson b "$bindings" '{procedures: $p, bindings: $b}'
+jq -n --argjson r "$repositories" --argjson p "$procedures" --argjson b "$bindings" '{repositories: $r, procedures: $p, bindings: $b}'

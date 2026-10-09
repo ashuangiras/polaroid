@@ -196,7 +196,8 @@ func TestCompositionGraphOfAStoredCycle(t *testing.T) {
 	}
 	for _, stmt := range []string{
 		`INSERT INTO procedure_version_references VALUES ('a', 2, 0, 'me', 'a', 'contextual', NULL, '{}')`,
-		`INSERT INTO procedure_versions VALUES ('a', 2, 'p', 'm', '{}', '{}', 'r', '2026-10-09T12:00:00.000000000Z')`,
+		`INSERT INTO procedure_versions (procedure_id, version, philosophy, method, contract, instructions, revision_reason, created_at)
+		 VALUES ('a', 2, 'p', 'm', '{}', '{}', 'r', '2026-10-09T12:00:00.000000000Z')`,
 	} {
 		if _, err := tx.ExecContext(context.Background(), stmt); err != nil {
 			t.Fatal(err)

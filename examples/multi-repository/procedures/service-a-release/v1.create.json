@@ -1,0 +1,29 @@
+{
+  "canonical_key": "service-a.release",
+  "version": {
+    "philosophy": "A release of service A is only as good as the tests that ran at its commit, plus the preparation only service A needs.",
+    "method": "Prepare service A's release notes, run the shared tests through the test reference, and tag the commit.",
+    "goal": "Release service A.",
+    "applicability": { "repository": "example.com/fixtures/service-a" },
+    "contract": {
+      "inputs": { "packages": "Passed to the test reference.", "tag": "The release tag." },
+      "expected_outcome": "The test child succeeded and the tag points at the commit."
+    },
+    "instructions": {
+      "steps": [
+        { "id": "notes", "action": "Write the release notes in service A's CHANGELOG." },
+        { "id": "test", "action": "Follow the test reference." },
+        { "id": "tag", "action": "Tag the commit with the tag input." }
+      ]
+    },
+    "references": [
+      {
+        "name": "test",
+        "procedure_id": "go.test.run",
+        "version_policy": { "contextual": {} },
+        "inputs": { "packages": { "input": "packages" } }
+      }
+    ],
+    "revision_reason": "Fixture for #35: a wrapper local to repository A that composes the shared test procedure."
+  }
+}

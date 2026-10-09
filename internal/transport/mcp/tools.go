@@ -17,9 +17,19 @@ import (
 // generated schemas do not require them.
 
 type (
-	noArgs struct{}
-	byID   struct {
+	byID struct {
 		ID string `json:"id"`
+	}
+	// pageArgs ask for one page of a list (ADR-0021).
+	pageArgs struct {
+		Limit int    `json:"limit,omitzero" jsonschema:"return at most this many items (1 to 500) and a next cursor if there are more; omit for the complete list"`
+		After string `json:"after,omitzero" jsonschema:"the next cursor of the previous page; requires limit"`
+	}
+	listProceduresArgs struct {
+		Repository string `json:"repository,omitzero" jsonschema:"only procedures whose latest version applies in this repository identifier: shared, unspecified, or local to it"`
+		Scope      string `json:"scope,omitzero" jsonschema:"only shared, local or unspecified procedures"`
+		Q          string `json:"q,omitzero" jsonschema:"only procedures whose canonical key or goal contains this text, ignoring ASCII case"`
+		pageArgs
 	}
 	procedureRef struct {
 		ID           string `json:"id,omitzero" jsonschema:"the procedure ID; give this or canonical_key"`
@@ -43,8 +53,13 @@ type (
 		Inputs jsontext.Value `json:"inputs,omitzero" jsonschema:"the root's effective inputs at that commit; requires commit"`
 	}
 	createProcedureArgs struct {
-		CanonicalKey string `json:"canonical_key"`
+		CanonicalKey string          `json:"canonical_key"`
+		Origin       *wire.NewOrigin `json:"origin,omitzero" jsonschema:"where and why the procedure is created: repository_id and reason"`
 		wire.Definition
+	}
+	originArgs struct {
+		ProcedureID string `json:"procedure_id"`
+		wire.NewOrigin
 	}
 	reviseProcedureArgs struct {
 		ProcedureID string `json:"procedure_id"`
@@ -53,6 +68,15 @@ type (
 	}
 	repositoryArgs struct {
 		Repository string `json:"repository"`
+		pageArgs
+	}
+	repositoryRef struct {
+		ID         string `json:"id,omitzero" jsonschema:"the repository ID; give this or identifier"`
+		Identifier string `json:"identifier,omitzero" jsonschema:"a registered identifier, canonical or alias; give this or id"`
+	}
+	aliasArgs struct {
+		RepositoryID string `json:"repository_id"`
+		wire.NewAlias
 	}
 	createBindingArgs struct {
 		Repository  string `json:"repository"`
@@ -75,9 +99,11 @@ type (
 		targetArgs
 	}
 	listExecutionsArgs struct {
-		ProcedureID string `json:"procedure_id"`
-		Version     int    `json:"version,omitzero"`
-		Repository  string `json:"repository,omitzero"`
+		ProcedureID string `json:"procedure_id,omitzero"`
+		Version     int    `json:"version,omitzero" jsonschema:"requires procedure_id"`
+		Repository  string `json:"repository,omitzero" jsonschema:"a repository identifier; a registered one matches every identifier of its repository"`
+		Commit      string `json:"commit,omitzero"`
+		pageArgs
 	}
 	executionRef struct {
 		ExecutionID string `json:"execution_id"`
@@ -90,9 +116,18 @@ type (
 		Environment string `json:"environment,omitzero"`
 	}
 	listFeedbackArgs struct {
-		Kind string `json:"kind,omitzero" jsonschema:"only reports of this kind: problem or suggestion"`
+		Kind           string `json:"kind,omitzero" jsonschema:"only reports of this kind: problem or suggestion"`
+		SubjectType    string `json:"subject_type,omitzero" jsonschema:"only reports about a service, repository, procedure, binding or execution; service includes reports without a subject"`
+		SubjectID      string `json:"subject_id,omitzero" jsonschema:"only reports about this record; requires subject_type"`
+		SubjectVersion int    `json:"subject_version,omitzero" jsonschema:"only reports about this procedure version or binding revision; requires subject_id"`
+		Repository     string `json:"repository,omitzero" jsonschema:"only reports made in, or about, this repository (by identity)"`
+		pageArgs
 	}
 )
+
+func (a pageArgs) page() memory.Page {
+	return memory.Page{Limit: a.Limit, After: a.After}
+}
 
 func (a targetArgs) target() *memory.Target {
 	if a.Commit == "" && a.Inputs == nil {
@@ -104,10 +139,11 @@ func (a targetArgs) target() *memory.Target {
 func (t *tools) register(s *sdk.Server) {
 	const read, write = true, false
 
-	add(s, t, "list_procedures", "List all procedures, ordered by canonical key.", read,
-		func(ctx context.Context, _ noArgs) (any, error) {
-			ps, err := t.svc.ListProcedures(ctx)
-			return wire.NewProcedureList(ps), err
+	add(s, t, "list_procedures", "List procedures, ordered by canonical key, with each one's scope (shared, local or unspecified), goal and origin. "+
+		"Pass repository to see only the procedures that apply in it, scope or q to narrow further, and limit to page.", read,
+		func(ctx context.Context, in listProceduresArgs) (any, error) {
+			ps, next, err := t.svc.ListProcedures(ctx, memory.ProcedureFilter{Repository: in.Repository, Scope: in.Scope, Query: in.Q, Page: in.page()})
+			return wire.NewProcedureList(ps, next), err
 		})
 	add(s, t, "get_procedure", "Get a procedure and all of its versions, by id or by canonical_key.", read,
 		func(ctx context.Context, in procedureRef) (any, error) {
@@ -138,20 +174,64 @@ func (t *tools) register(s *sdk.Server) {
 				memory.ResolutionContext{Repository: in.Repository, Environment: in.Environment, Target: in.target()})
 			return wire.NewGraphNode(g), err
 		})
-	add(s, t, "create_procedure", "Create a procedure and its version 1. contract and instructions are free-form JSON objects.", write,
+	add(s, t, "create_procedure", "Create a procedure and its version 1. contract and instructions are free-form JSON objects. "+
+		`Declare applicability as {"shared": {}} or {"repository": "<repository id>"}, and origin if you know where the procedure comes from.`, write,
 		func(ctx context.Context, in createProcedureArgs) (any, error) {
-			h, err := t.svc.CreateProcedure(ctx, memory.NewProcedure{CanonicalKey: in.CanonicalKey, Definition: in.Domain()})
+			var origin *memory.Origin
+			if in.Origin != nil {
+				o := in.Origin.Domain()
+				origin = &o
+			}
+			h, err := t.svc.CreateProcedure(ctx, memory.NewProcedure{CanonicalKey: in.CanonicalKey, Origin: origin, Definition: in.Domain()})
 			return wire.NewHistory(h), flatten(err, "version.")
 		})
-	add(s, t, "revise_procedure", "Append a version derived from base_version, which must be the latest version.", write,
+	add(s, t, "revise_procedure", "Append a version derived from base_version, which must be the latest version. "+
+		"Changing applicability, for example promoting a local procedure to shared, is a new version.", write,
 		func(ctx context.Context, in reviseProcedureArgs) (any, error) {
 			v, err := t.svc.ReviseProcedure(ctx, in.ProcedureID, memory.Revision{BaseVersion: in.BaseVersion, Definition: in.Domain()})
 			return wire.NewVersion(v), flatten(err, "version.")
 		})
-	add(s, t, "list_bindings", "List a repository's bindings, ordered by name.", read,
+	add(s, t, "record_procedure_origin", "Record where (repository_id) and why (reason) a procedure was first created. Allowed once per procedure.", write,
+		func(ctx context.Context, in originArgs) (any, error) {
+			h, err := t.svc.RecordOrigin(ctx, in.ProcedureID, in.Domain())
+			return wire.NewHistory(h), flatten(err, "origin.")
+		})
+	add(s, t, "register_repository", "Register a repository under its canonical identifier (host and path, lowercase, no scheme or .git) with a display name. "+
+		"Register a repository once; add other identifiers of the same repository as aliases.", write,
+		func(ctx context.Context, in wire.NewRepository) (any, error) {
+			r, err := t.svc.RegisterRepository(ctx, in.Domain())
+			return wire.NewRepositoryBody(r), err
+		})
+	add(s, t, "add_repository_alias", "Register another identifier of the same repository, with the reason it is the same repository.", write,
+		func(ctx context.Context, in aliasArgs) (any, error) {
+			r, err := t.svc.AddRepositoryAlias(ctx, in.RepositoryID, in.Domain())
+			return wire.NewRepositoryBody(r), err
+		})
+	add(s, t, "get_repository", "Get a registered repository, by id or by any of its identifiers.", read,
+		func(ctx context.Context, in repositoryRef) (any, error) {
+			var r memory.Repository
+			var err error
+			switch {
+			case in.ID != "" && in.Identifier != "":
+				return nil, &memory.ValidationError{Problems: []memory.FieldProblem{{Field: "identifier", Message: "must not be given with id"}}}
+			case in.ID != "":
+				r, err = t.svc.Repository(ctx, in.ID)
+			case in.Identifier != "":
+				r, err = t.svc.RepositoryByIdentifier(ctx, in.Identifier)
+			default:
+				return nil, required("id")
+			}
+			return wire.NewRepositoryBody(r), err
+		})
+	add(s, t, "list_repositories", "List registered repositories, oldest first.", read,
+		func(ctx context.Context, in pageArgs) (any, error) {
+			rs, next, err := t.svc.ListRepositories(ctx, in.page())
+			return wire.NewRepositoryList(rs, next), err
+		})
+	add(s, t, "list_bindings", "List a repository's bindings, ordered by name. A registered identifier lists the bindings of every identifier of its repository.", read,
 		func(ctx context.Context, in repositoryArgs) (any, error) {
-			bs, err := t.svc.ListBindings(ctx, in.Repository)
-			return wire.NewBindingList(bs), err
+			bs, next, err := t.svc.ListBindings(ctx, in.Repository, in.page())
+			return wire.NewBindingList(bs, next), err
 		})
 	add(s, t, "get_binding", "Get a binding and all of its revisions.", read,
 		func(ctx context.Context, in byID) (any, error) {
@@ -190,10 +270,11 @@ func (t *tools) register(s *sdk.Server) {
 			e, err := t.svc.Execution(ctx, in.ID)
 			return wire.NewExecution(e), err
 		})
-	add(s, t, "list_executions", "List a procedure's executions, oldest first, without inputs and evidence.", read,
+	add(s, t, "list_executions", "List executions, oldest first, without inputs and evidence: optionally of one procedure and version, in one repository, at one commit.", read,
 		func(ctx context.Context, in listExecutionsArgs) (any, error) {
-			es, err := t.svc.ListExecutions(ctx, memory.ExecutionFilter{ProcedureID: in.ProcedureID, Version: in.Version, Repository: in.Repository})
-			return wire.NewExecutionList(es), err
+			es, next, err := t.svc.ListExecutions(ctx, memory.ExecutionFilter{ProcedureID: in.ProcedureID, Version: in.Version,
+				Repository: in.Repository, Commit: in.Commit, Page: in.page()})
+			return wire.NewExecutionList(es, next), err
 		})
 	add(s, t, "get_verification", "Whether an execution is verified, why not, and the combination it belongs to.", read,
 		func(ctx context.Context, in executionRef) (any, error) {
@@ -207,17 +288,20 @@ func (t *tools) register(s *sdk.Server) {
 			})
 			return wire.NewVerificationList(vs), err
 		})
-	add(s, t, "report_feedback", "Report a problem with Polaroid itself (a confusing error, a missing capability, a tool that misbehaved) "+
-		"or suggest an improvement. kind is problem or suggestion; summary is one line; context is an optional free-form object, "+
-		"for example the tool and IDs involved. Reports are never changed or deleted.", write,
+	add(s, t, "report_feedback", "Report a problem with Polaroid (a confusing error, a missing capability, a tool that misbehaved, a wrong procedure) "+
+		"or suggest an improvement. kind is problem or suggestion; summary is one line. "+
+		`subject says what it is about: {"type": "service"}, {"type": "repository", "repository_id"}, {"type": "procedure", "procedure_id"[, "version"]}, `+
+		`{"type": "binding", "binding_id"[, "revision"]} or {"type": "execution", "execution_id"}; repository and execution_id say where you were. `+
+		"context is an optional free-form object. Reports are never changed or deleted.", write,
 		func(ctx context.Context, in wire.FeedbackRecord) (any, error) {
 			f, err := t.svc.ReportFeedback(ctx, in.Domain())
 			return wire.NewFeedback(f), err
 		})
-	add(s, t, "list_feedback", "List feedback reports about Polaroid, oldest first, optionally only one kind.", read,
+	add(s, t, "list_feedback", "List feedback reports, oldest first, optionally by kind, subject and repository.", read,
 		func(ctx context.Context, in listFeedbackArgs) (any, error) {
-			fs, err := t.svc.ListFeedback(ctx, memory.FeedbackKind(in.Kind))
-			return wire.NewFeedbackList(fs), err
+			fs, next, err := t.svc.ListFeedback(ctx, memory.FeedbackFilter{Kind: memory.FeedbackKind(in.Kind), SubjectType: memory.SubjectType(in.SubjectType),
+				SubjectID: in.SubjectID, SubjectVersion: in.SubjectVersion, Repository: in.Repository, Page: in.page()})
+			return wire.NewFeedbackList(fs, next), err
 		})
 	add(s, t, "get_feedback", "Get one feedback report.", read,
 		func(ctx context.Context, in byID) (any, error) {

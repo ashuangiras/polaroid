@@ -67,12 +67,19 @@ type Execution struct {
 	ExecutionRecord
 }
 
-// ExecutionFilter selects the executions of one procedure, optionally only
-// of one version (Version > 0) or one repository (Repository != "").
+// ExecutionFilter selects executions (ADR-0021): optionally of one
+// procedure, of one version of it (Version > 0), in one repository (by
+// identity: every identifier of the repository Repository is registered
+// to), and at one commit. Repositories and After are set by the service for
+// the store; nil Repositories selects every repository.
 type ExecutionFilter struct {
-	ProcedureID string
-	Version     int
-	Repository  string
+	ProcedureID  string
+	Version      int
+	Repository   string
+	Commit       string
+	Page         Page
+	Repositories []string
+	After        *Position
 }
 
 // A full SHA-1 or SHA-256 commit hash.
@@ -151,7 +158,7 @@ func (s *Service) RecordExecution(ctx context.Context, in ExecutionRecord) (Exec
 		return Execution{}, err
 	}
 	e := Execution{ID: uuid.NewV7().String(), CreatedAt: timestamp(), ExecutionRecord: rec}
-	if err := s.store.CreateExecution(ctx, e); err != nil {
+	if err := s.store.CreateExecution(ctx, &e); err != nil {
 		var linked *LinkedChildError
 		if errors.As(err, &linked) {
 			return Execution{}, &ValidationError{Problems: []FieldProblem{{
@@ -177,6 +184,13 @@ func (s *Service) checkExecutionTargets(ctx context.Context, r ExecutionRecord) 
 		return &ValidationError{Problems: []FieldProblem{{Field: "version", Message: fmt.Sprintf("procedure %q has no version %d", r.ProcedureID, r.Version)}}}
 	}
 	var p problems
+	repositoryID, err := s.identityID(ctx, r.Repository)
+	if err != nil {
+		return err
+	}
+	if !v.Applicability.ApplicableIn(repositoryID) {
+		p.add("version", fmt.Sprintf("version %d is %s, so it does not apply in repository %q", v.Number, v.Applicability.describe(), r.Repository))
+	}
 	if r.BindingID != "" {
 		if err := s.checkBinding(ctx, r, &p); err != nil {
 			return err
@@ -220,6 +234,14 @@ func (s *Service) checkChildLinks(ctx context.Context, r ExecutionRecord, v Vers
 			p.add(field+".execution_id", fmt.Sprintf("ran procedure %q, but reference %q targets %q", child.ProcedureID, ref.Name, ref.ProcedureID))
 		case ref.VersionPolicy.Kind == PolicyPin && child.Version != ref.VersionPolicy.Pin:
 			p.add(field+".execution_id", fmt.Sprintf("ran version %d, but reference %q pins version %d", child.Version, ref.Name, ref.VersionPolicy.Pin))
+		default:
+			cv, err := s.store.Version(ctx, child.ProcedureID, child.Version)
+			if err != nil {
+				return fmt.Errorf("read child version: %w", err)
+			}
+			if !v.Applicability.Admits(cv.Applicability) {
+				p.add(field+".execution_id", fmt.Sprintf("ran version %d, which is %s; a %s version cannot compose it", child.Version, cv.Applicability.describe(), v.Applicability.describe()))
+			}
 		}
 	}
 	return nil
@@ -258,24 +280,36 @@ func (s *Service) Execution(ctx context.Context, id string) (Execution, error) {
 	return e, nil
 }
 
-// ListExecutions returns the executions selected by f, oldest first.
-func (s *Service) ListExecutions(ctx context.Context, f ExecutionFilter) ([]Execution, error) {
+// ListExecutions returns the executions selected by f, oldest first, and the
+// cursor of the next page if there is one.
+func (s *Service) ListExecutions(ctx context.Context, f ExecutionFilter) ([]Execution, string, error) {
 	var p problems
-	if f.ProcedureID == "" {
-		p.add("procedure_id", "is required")
-	}
-	if f.Version < 0 {
+	switch {
+	case f.Version < 0:
 		p.add("version", "must be a version number of at least 1")
+	case f.Version > 0 && f.ProcedureID == "":
+		p.add("version", "requires procedure_id")
 	}
 	if f.Repository != "" {
 		checkRepository(&p, "repository", f.Repository)
 	}
+	if f.Commit != "" && !commitPattern.MatchString(f.Commit) {
+		p.add("commit", "must be a full commit hash: 40 or 64 lowercase hex characters")
+	}
+	f.After = f.Page.timePosition(&p)
 	if err := p.err(); err != nil {
-		return nil, err
+		return nil, "", err
+	}
+	if f.Repository != "" {
+		var err error
+		if f.Repositories, _, err = s.sameRepository(ctx, f.Repository); err != nil {
+			return nil, "", err
+		}
 	}
 	executions, err := s.store.ListExecutions(ctx, f)
 	if err != nil {
-		return nil, fmt.Errorf("list executions: %w", err)
+		return nil, "", fmt.Errorf("list executions: %w", err)
 	}
-	return executions, nil
+	executions, next := trim(f.Page, executions, func(e Execution) string { return timeCursor(e.CreatedAt, e.ID) })
+	return executions, next, nil
 }

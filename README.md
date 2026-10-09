@@ -14,7 +14,7 @@ Agents use Polaroid in a loop:
 
 Polaroid does not run an LLM, and it does not execute instructions. Its code manages generic records, versions, relationships, resolution and evidence. Task knowledge lives in the records, so adding a task never requires a code change.
 
-> **Status: increments 1–4 of the [roadmap](docs/development/roadmap.md) are implemented.** Procedure identity, immutable version storage, subprocedure references with cycle checks and a bounded composition graph, repository bindings, immutable execution records with their child executions, context-specific verification, evidence-based contextual resolution, an MCP server, and a feedback box for reports about Polaroid itself work end to end. The current state and the verification evidence are in [docs/development/status.md](docs/development/status.md).
+> **Status: increments 1–5 of the [roadmap](docs/development/roadmap.md) are implemented, and so is the multi-repository data foundation ([#35](https://github.com/ashuangiras/polaroid/issues/35)).** Procedure identity, immutable version storage, subprocedure references with cycle checks and a bounded composition graph, a repository registry with aliases, declared procedure applicability and origin, repository bindings, immutable execution records with their child executions, context-specific verification, evidence-based contextual resolution, an MCP server, and targeted feedback reports work end to end. The current state and the verification evidence are in [docs/development/status.md](docs/development/status.md).
 
 ## What works today
 
@@ -26,17 +26,19 @@ Polaroid does not run an LLM, and it does not execute instructions. Its code man
 - Check verification: an execution is verified when it succeeded and every reference of its version has a verified child. `bin/polaroid verification ID` says why one is not. `bin/polaroid verifications ID N` lists a version's combinations (repository, commit, environment name, canonical inputs and child-version tree), each judged by its latest execution. Nothing extra is stored; verification is derived from the executions.
 - Resolve from evidence: `bin/polaroid graph ID N REPO ENV` resolves contextual references in a repository and environment. A verified parent's execution fixes its children's versions; otherwise a contextual reference takes the highest version verified there, else the latest. Every edge says how it was selected (`pin`, `evidence` or `latest`), and every node with evidence names the execution that verifies it.
 - Bind a procedure in a repository under a local name, without copying it. A binding's immutable revisions hold the repository's inputs and a version policy: a pinned version, or a contextual policy, which `bin/polaroid resolve BINDING_ID ENV` resolves from evidence. Binding revisions use the same expected-base rule.
+- Organize one catalog for several repositories: register a repository with a canonical identifier and explicit aliases (`bin/polaroid register`, `alias`, `repository-by-identifier`); declare per version whether a procedure is shared or local to one repository, and record where it came from (`origin`). Bindings, executions and composition respect applicability, and verification stays per repository and commit. `bin/polaroid list repository=… scope=… q=…` finds a repository's procedures.
+- Page through any list with `limit` and `after` (`bin/polaroid feedbacks limit=20`); lists without `limit` are complete, as before.
 - Records persist in SQLite. Stored versions and binding revisions are immutable, which the database itself enforces.
-- Report on Polaroid itself: an agent or person records a `problem` or a `suggestion` with a one-line summary, details, a reporter name and an optional free-form context (`bin/polaroid feedback`, the MCP tool `report_feedback`). Reports are immutable and untriaged; `bin/polaroid feedbacks [KIND]` lists them for triage elsewhere, for example as GitHub issues.
+- Report on Polaroid: an agent or person records a `problem` or a `suggestion` with a one-line summary, details, a reporter name, an optional subject (the service, a repository, a procedure version, a binding revision or an execution) and the repository and execution it was made in (`bin/polaroid feedback`, the MCP tool `report_feedback`). Reports are immutable and untriaged; `bin/polaroid feedbacks` lists and filters them for triage elsewhere, for example as GitHub issues.
 - `GET /healthz`, a JSON HTTP API ([contract](docs/architecture/http-api.md)) and a generic CLI.
-- An MCP server at `/mcp` ([contract](docs/architecture/mcp.md)): 20 tools with the same operations, records and error codes as the HTTP API, plus read-only resources for procedures, versions and bindings. It speaks stateless streamable HTTP, protocol revisions 2026-07-28 and 2025-11-25.
+- An MCP server at `/mcp` ([contract](docs/architecture/mcp.md)): 25 tools with the same operations, records and error codes as the HTTP API, plus read-only resources for procedures, versions and bindings. It speaks stateless streamable HTTP, protocol revisions 2026-07-28 and 2025-11-25.
 
 ## Prerequisites
 
 - Go **1.27.1** or newer. `go.mod` selects the **1.27.2** toolchain, which has fixes for vulnerabilities that affect 1.27.1, and Go downloads it automatically unless `GOTOOLCHAIN=local` is set. No C toolchain is needed.
 - GNU Make.
 - For `make lint`: [golangci-lint](https://golangci-lint.run) **2.14.0**. To use a binary that is not on `PATH`, pass `make lint GOLANGCI_LINT=/path/to/golangci-lint`.
-- For `make demo`: `jq`.
+- For `make demo`: `jq` and the `sqlite3` CLI.
 - For `make e2e` and `make e2e-mcp`: bash 4 or newer, `curl` and `jq`; `make e2e` also needs the `sqlite3` CLI. `make e2e-mcp` uses npm, when available, for its interoperability checks.
 - For `make vuln`: network access, to download govulncheck v1.8.0 and its vulnerability database.
 

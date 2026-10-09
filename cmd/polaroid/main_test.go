@@ -264,6 +264,64 @@ func TestFeedbackCommands(t *testing.T) {
 	if r := cli(strings.Replace(reportJSON, `"problem"`, `"bug"`, 1), nil, "-server", server, "feedback"); r.code != exitFailure || !strings.Contains(r.stdout, `"field":"kind"`) {
 		t.Fatalf("reporting an unknown kind: exit %d, stdout %s", r.code, r.stdout)
 	}
+	page := cli("", nil, "-server", server, "feedbacks", "subject_type=service", "limit=1")
+	mustSucceed(t, page)
+	if !strings.Contains(page.stdout, f.ID) || !strings.Contains(page.stdout, `"next":"`) {
+		t.Fatalf("feedbacks subject_type=service limit=1 = %s, want the first report and a next cursor", page.stdout)
+	}
+}
+
+func TestRepositoryAndDiscoveryCommands(t *testing.T) {
+	server := newServer(t)
+	run := func(stdin string, args ...string) string {
+		t.Helper()
+		r := cli(stdin, nil, append([]string{"-server", server}, args...)...)
+		mustSucceed(t, r)
+		return r.stdout
+	}
+	var repo struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(run(`{"identifier":"github.com/o/a","name":"A"}`, "register")), &repo); err != nil || repo.ID == "" {
+		t.Fatalf("register output is not a repository: %v", err)
+	}
+	aliased := run(`{"identifier":"mirror.example/o/a","reason":"The mirror of A."}`, "alias", repo.ID)
+	if !strings.Contains(aliased, `"aliases":[{"identifier":"mirror.example/o/a"`) {
+		t.Fatalf("alias = %s", aliased)
+	}
+	for _, args := range [][]string{{"repository", repo.ID}, {"repository-by-identifier", "mirror.example/o/a"}} {
+		if got := run("", args...); got != aliased {
+			t.Fatalf("%v = %s, want %s", args, got, aliased)
+		}
+	}
+	if got := run("", "repositories", "limit=1"); !strings.Contains(got, repo.ID) || strings.Contains(got, `"next"`) {
+		t.Fatalf("repositories limit=1 = %s", got)
+	}
+
+	local := strings.Replace(createJSON, `"version":{`, `"version":{"goal":"Add a Go dependency.","applicability":{"repository":"`+repo.ID+`"},`, 1)
+	created := run(local, "create")
+	var p struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(created), &p); err != nil {
+		t.Fatal(err)
+	}
+	for args, want := range map[[3]string]string{
+		{"list", "repository=mirror.example/o/a"}: `"scope":"local"`,
+		{"list", "repository=github.com/o/b"}:     `{"procedures":[]}`,
+		{"list", "q=GO DEP", "scope=local"}:       p.ID,
+	} {
+		if got := run("", slices.DeleteFunc(args[:], func(s string) bool { return s == "" })...); !strings.Contains(got, want) {
+			t.Fatalf("%v = %s, want %s", args, got, want)
+		}
+	}
+	origin := run(`{"repository_id":"`+repo.ID+`","reason":"Written for A."}`, "origin", p.ID)
+	if !strings.Contains(origin, `"origin":{"repository_id":"`+repo.ID+`","reason":"Written for A."`) {
+		t.Fatalf("origin = %s", origin)
+	}
+	if r := cli(`{"repository_id":"`+repo.ID+`","reason":"Again."}`, nil, "-server", server, "origin", p.ID); r.code != exitFailure || !strings.Contains(r.stdout, `"code":"origin_exists"`) {
+		t.Fatalf("second origin: exit %d, stdout %s", r.code, r.stdout)
+	}
 }
 
 func TestFailedRequestsExitOne(t *testing.T) {
@@ -348,8 +406,10 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		{"bind", "a", "b"},
 		{"record", "a", "b"},
 		{"get-execution"},
-		{"executions"},
+		{"executions", "limit=1", "a"},
 		{"executions", "a", "b", "c"},
+		{"list", "=x"},
+		{"list", "a"},
 		{"verification"},
 		{"verification", "a", "b"},
 		{"verifications", "a"},

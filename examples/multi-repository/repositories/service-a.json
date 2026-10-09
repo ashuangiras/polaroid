@@ -1,0 +1,7 @@
+{
+  "identifier": "example.com/fixtures/service-a",
+  "name": "Service A (fixture)",
+  "aliases": [
+    { "identifier": "mirror.example.com/fixtures/service-a", "reason": "Fixture: the same repository served from a mirror host. Registered explicitly; Polaroid never infers it from the spelling." }
+  ]
+}

@@ -105,6 +105,9 @@ func (s *Service) CreateBinding(ctx context.Context, in NewBinding) (BindingHist
 	if err != nil {
 		return BindingHistory{}, err
 	}
+	if err := s.checkBindingScope(ctx, in.ProcedureID, in.Repository, cfg.VersionPolicy, "procedure_id"); err != nil {
+		return BindingHistory{}, err
+	}
 	now := timestamp()
 	b := Binding{ID: uuid.NewV7().String(), Repository: in.Repository, Name: in.Name, ProcedureID: in.ProcedureID, CreatedAt: now, LatestRevision: 1}
 	r := BindingRevision{BindingID: b.ID, Number: 1, CreatedAt: now, BindingConfig: cfg}
@@ -130,6 +133,13 @@ func (s *Service) ReviseBinding(ctx context.Context, bindingID string, in Bindin
 	if err != nil {
 		return BindingRevision{}, err
 	}
+	h, err := s.store.BindingHistory(ctx, bindingID)
+	if err != nil {
+		return BindingRevision{}, describeLookup(err, fmt.Sprintf("binding %q", bindingID))
+	}
+	if err := s.checkBindingScope(ctx, h.Binding.ProcedureID, h.Binding.Repository, cfg.VersionPolicy, "revision.version_policy"); err != nil {
+		return BindingRevision{}, err
+	}
 	r := BindingRevision{BindingID: bindingID, Number: in.BaseRevision + 1, CreatedAt: timestamp(), BindingConfig: cfg}
 	if err := s.store.AppendBindingRevision(ctx, in.BaseRevision, r); err != nil {
 		var conflict *RevisionConflictError
@@ -146,18 +156,57 @@ func (s *Service) ReviseBinding(ctx context.Context, bindingID string, in Bindin
 	return r, nil
 }
 
-// ListBindings returns the bindings of one repository ordered by local name.
-func (s *Service) ListBindings(ctx context.Context, repository string) ([]Binding, error) {
+// ListBindings returns the bindings of one repository ordered by local name,
+// and the cursor of the next page if there is one. A registered identifier
+// lists the bindings of every identifier of its repository (ADR-0019).
+func (s *Service) ListBindings(ctx context.Context, repository string, page Page) ([]Binding, string, error) {
 	var p problems
 	checkRepository(&p, "repository", repository)
+	after := page.keyPosition(&p)
 	if err := p.err(); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	bindings, err := s.store.ListBindings(ctx, repository)
+	identifiers, _, err := s.sameRepository(ctx, repository)
 	if err != nil {
-		return nil, fmt.Errorf("list bindings: %w", err)
+		return nil, "", err
 	}
-	return bindings, nil
+	bindings, err := s.store.ListBindings(ctx, identifiers, after, page.Limit)
+	if err != nil {
+		return nil, "", fmt.Errorf("list bindings: %w", err)
+	}
+	bindings, next := trim(page, bindings, func(b Binding) string { return keyCursor(b.Name, b.ID) })
+	return bindings, next, nil
+}
+
+// checkBindingScope rejects a binding policy that contradicts applicability
+// (ADR-0020): a pinned version must be applicable in the repository, and so
+// must the latest version for a contextual policy, which follows the
+// procedure forward. field names the contextual case. A missing procedure or
+// pinned version is left to the store, which reports it as before.
+func (s *Service) checkBindingScope(ctx context.Context, procedureID, repository string, policy VersionPolicy, field string) error {
+	h, err := s.store.History(ctx, procedureID)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read bound procedure: %w", err)
+	}
+	number := h.Procedure.LatestVersion
+	if policy.Kind == PolicyPin {
+		if policy.Pin > number {
+			return nil
+		}
+		number, field = policy.Pin, "revision.version_policy.pin"
+	}
+	repositoryID, err := s.identityID(ctx, repository)
+	if err != nil {
+		return err
+	}
+	if a := h.Versions[number-1].Applicability; !a.ApplicableIn(repositoryID) {
+		return &ValidationError{Problems: []FieldProblem{{Field: field,
+			Message: fmt.Sprintf("version %d of procedure %q is %s, so it does not apply in repository %q", number, procedureID, a.describe(), repository)}}}
+	}
+	return nil
 }
 
 // Binding returns a binding and its full revision history.

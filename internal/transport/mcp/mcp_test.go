@@ -166,8 +166,10 @@ func (b *syncBuffer) String() string {
 }
 
 var (
-	readTools  = []string{"get_binding", "get_binding_revision", "get_execution", "get_feedback", "get_graph", "get_procedure", "get_verification", "get_version", "list_bindings", "list_executions", "list_feedback", "list_procedures", "list_verifications", "resolve_binding"}
-	writeTools = []string{"create_binding", "create_procedure", "record_execution", "report_feedback", "revise_binding", "revise_procedure"}
+	readTools = []string{"get_binding", "get_binding_revision", "get_execution", "get_feedback", "get_graph", "get_procedure", "get_repository", "get_verification", "get_version",
+		"list_bindings", "list_executions", "list_feedback", "list_procedures", "list_repositories", "list_verifications", "resolve_binding"}
+	writeTools = []string{"add_repository_alias", "create_binding", "create_procedure", "record_execution", "record_procedure_origin", "register_repository",
+		"report_feedback", "revise_binding", "revise_procedure"}
 )
 
 func TestToolsAndResourcesAreAdvertised(t *testing.T) {
@@ -361,6 +363,73 @@ func TestFeedbackThroughTools(t *testing.T) {
 
 	if got := h.ok(t, "get_procedure", `{"canonical_key":"demo.fb"}`); got != p {
 		t.Fatalf("reporting feedback changed the procedure:\n%s\n%s", got, p)
+	}
+}
+
+// The ADR-0019 to ADR-0021 tools have the HTTP API's names, rules and errors.
+func TestRepositoriesScopesAndPagesThroughTools(t *testing.T) {
+	h := newHarness(t)
+	repo := h.ok(t, "register_repository", `{"identifier":"github.com/o/a","name":"A"}`)
+	a := field(t, repo, "id")
+	h.fail(t, "register_repository", `{"identifier":"github.com/o/a","name":"Again"}`, "repository_identifier_exists")
+	aliased := h.ok(t, "add_repository_alias", `{"repository_id":"`+a+`","identifier":"mirror.example/o/a","reason":"A's mirror."}`)
+	if got := h.ok(t, "get_repository", `{"identifier":"mirror.example/o/a"}`); got != aliased {
+		t.Fatalf("get_repository by alias = %s, want %s", got, aliased)
+	}
+	if e := h.fail(t, "get_repository", `{"id":"`+a+`","identifier":"github.com/o/a"}`, "invalid_request"); !slices.Equal(e.fields(), []string{"identifier"}) {
+		t.Fatalf("id and identifier: %+v", e)
+	}
+	if got := h.ok(t, "list_repositories", `{"limit":1}`); got != `{"repositories":[`+aliased+`]}` {
+		t.Fatalf("list_repositories = %s", got)
+	}
+
+	shared := field(t, h.ok(t, "create_procedure", `{"canonical_key":"go.build","philosophy":"p","method":"m","goal":"Build a Go module.",`+
+		`"applicability":{"shared":{}},"contract":{},"instructions":{},"revision_reason":"r"}`), "id")
+	local := h.ok(t, "create_procedure", `{"canonical_key":"a.release","origin":{"repository_id":"`+a+`","reason":"Written for A."},`+
+		`"philosophy":"p","method":"m","applicability":{"repository":"`+a+`"},"contract":{},"instructions":{},`+
+		`"references":[{"name":"build","procedure_id":"`+shared+`","version_policy":{"contextual":{}},"inputs":{}}],"revision_reason":"r"}`)
+	if !strings.Contains(local, `"scope":"local","applicability":{"repository":"`+a+`"},"origin":{"repository_id":"`+a+`","reason":"Written for A."`) {
+		t.Fatalf("create_procedure local = %s", local)
+	}
+	if e := h.fail(t, "create_procedure", `{"canonical_key":"x.y","philosophy":"p","method":"m","applicability":{"shared":{}},"contract":{},"instructions":{},`+
+		`"references":[{"name":"r","procedure_id":"`+field(t, local, "id")+`","version_policy":{"pin":1},"inputs":{}}],"revision_reason":"r"}`, "invalid_request"); !slices.Equal(e.fields(), []string{"references[0].procedure_id"}) {
+		t.Fatalf("shared parent of a local child: %+v", e)
+	}
+	h.fail(t, "record_procedure_origin", `{"procedure_id":"`+field(t, local, "id")+`","repository_id":"`+a+`","reason":"Again."}`, "origin_exists")
+	if e := h.fail(t, "record_procedure_origin", `{"procedure_id":"`+shared+`","repository_id":"missing","reason":"r"}`, "invalid_request"); !slices.Equal(e.fields(), []string{"repository_id"}) {
+		t.Fatalf("origin in an unregistered repository: %+v", e)
+	}
+	if e := h.fail(t, "create_binding", `{"repository":"github.com/o/b","name":"release","procedure_id":"`+field(t, local, "id")+`",`+
+		`"inputs":{},"version_policy":{"contextual":{}},"revision_reason":"r"}`, "invalid_request"); !slices.Equal(e.fields(), []string{"procedure_id"}) {
+		t.Fatalf("binding a local procedure elsewhere: %+v", e)
+	}
+
+	inB := h.ok(t, "list_procedures", `{"repository":"github.com/o/b"}`)
+	if !strings.Contains(inB, `"canonical_key":"go.build"`) || strings.Contains(inB, `"canonical_key":"a.release"`) {
+		t.Fatalf("list_procedures in B = %s", inB)
+	}
+	first := h.ok(t, "list_procedures", `{"limit":1}`)
+	next := field(t, first, "next")
+	if next == "" || !strings.Contains(first, `"canonical_key":"a.release"`) {
+		t.Fatalf("first page = %s", first)
+	}
+	if second := h.ok(t, "list_procedures", `{"limit":1,"after":"`+next+`"}`); !strings.Contains(second, `"canonical_key":"go.build"`) || strings.Contains(second, `"next"`) {
+		t.Fatalf("second page = %s", second)
+	}
+	if e := h.fail(t, "list_procedures", `{"after":"`+next+`"}`, "invalid_request"); !slices.Equal(e.fields(), []string{"after"}) {
+		t.Fatalf("after without limit: %+v", e)
+	}
+
+	report := h.ok(t, "report_feedback", `{"kind":"problem","summary":"s","details":"d","reporter":"copilot.vscode",`+
+		`"subject":{"type":"procedure","procedure_id":"`+shared+`","version":1},"repository":"mirror.example/o/a"}`)
+	if got := h.ok(t, "list_feedback", `{"subject_type":"procedure","subject_id":"`+shared+`","subject_version":1,"repository":"github.com/o/a"}`); got != `{"feedback":[`+report+`]}` {
+		t.Fatalf("list_feedback by subject and repository = %s", got)
+	}
+	if e := h.fail(t, "report_feedback", `{"kind":"problem","summary":"s","details":"d","reporter":"r","subject":{"type":"procedure","procedure_id":"missing"}}`, "invalid_request"); !slices.Equal(e.fields(), []string{"subject.procedure_id"}) {
+		t.Fatalf("unknown subject: %+v", e)
+	}
+	if got := h.ok(t, "list_executions", `{}`); got != `{"executions":[]}` {
+		t.Fatalf("list_executions without filters = %s", got)
 	}
 }
 

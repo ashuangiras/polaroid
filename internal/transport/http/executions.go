@@ -36,11 +36,15 @@ func (a *api) getExecution(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) listExecutions(w http.ResponseWriter, r *http.Request) {
-	query, ok := strictQuery(w, r, "procedure_id", "version", "repository")
+	query, ok := strictQuery(w, r, "procedure_id", "version", "repository", "commit", "limit", "after")
 	if !ok {
 		return
 	}
-	f := memory.ExecutionFilter{ProcedureID: query.Get("procedure_id"), Repository: query.Get("repository")}
+	page, ok := pageQuery(w, query)
+	if !ok || !nonEmpty(w, query, "procedure_id", "repository", "commit") {
+		return
+	}
+	f := memory.ExecutionFilter{ProcedureID: query.Get("procedure_id"), Repository: query.Get("repository"), Commit: query.Get("commit"), Page: page}
 	if v := query.Get("version"); query.Has("version") {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 1 {
@@ -53,12 +57,12 @@ func (a *api) listExecutions(w http.ResponseWriter, r *http.Request) {
 		}
 		f.Version = n
 	}
-	executions, err := a.svc.ListExecutions(r.Context(), f)
+	executions, next, err := a.svc.ListExecutions(r.Context(), f)
 	if err != nil {
 		a.fail(w, r, err)
 		return
 	}
-	a.respond(w, r, http.StatusOK, wire.NewExecutionList(executions))
+	a.respond(w, r, http.StatusOK, wire.NewExecutionList(executions, next))
 }
 
 func (a *api) getVerification(w http.ResponseWriter, r *http.Request) {
@@ -91,6 +95,38 @@ func (a *api) listVerifications(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.respond(w, r, http.StatusOK, wire.NewVerificationList(statuses))
+}
+
+// pageQuery parses the optional limit and after parameters (ADR-0021). On
+// failure it writes the error response.
+func pageQuery(w http.ResponseWriter, query url.Values) (memory.Page, bool) {
+	page := memory.Page{After: query.Get("after")}
+	if query.Has("limit") {
+		n, err := strconv.Atoi(query.Get("limit"))
+		if err != nil || n < 1 {
+			writeError(w, http.StatusBadRequest, wire.InvalidRequest("limit must be a number", "limit",
+				fmt.Sprintf("must be a number from 1 to %d", memory.MaxPageLimit)))
+			return memory.Page{}, false
+		}
+		page.Limit = n
+	}
+	if query.Has("after") && page.After == "" {
+		writeError(w, http.StatusBadRequest, wire.InvalidRequest("after must not be empty", "after", "must be the next cursor of an earlier page"))
+		return memory.Page{}, false
+	}
+	return page, true
+}
+
+// nonEmpty rejects a given but empty filter parameter, so it is never
+// mistaken for an absent one. On failure it writes the error response.
+func nonEmpty(w http.ResponseWriter, query url.Values, names ...string) bool {
+	for _, name := range names {
+		if query.Has(name) && query.Get(name) == "" {
+			writeError(w, http.StatusBadRequest, wire.InvalidRequest(name+" must not be empty", name, "must not be empty"))
+			return false
+		}
+	}
+	return true
 }
 
 // targetQuery returns a resolution's optional target: commit and inputs (a

@@ -17,20 +17,28 @@ import (
 
 // Procedure is the stable identity of a reusable procedure. Its ID and
 // canonical key never change after creation and are independent of any
-// repository.
+// repository. Goal and Applicability are those of the latest version;
+// Origin is nil until recorded (ADR-0020).
 type Procedure struct {
 	ID            string
 	CanonicalKey  string
 	CreatedAt     time.Time
 	LatestVersion int
+	Goal          string
+	Applicability Applicability
+	Origin        *Origin
 }
 
 // Definition is the author-supplied content of one procedure version.
 // Contract and Instructions are JSON objects whose members are task knowledge.
 // References, in submission order, name the procedures this version composes.
+// Goal is optional single-line text; Applicability is unspecified when not
+// declared (ADR-0020).
 type Definition struct {
 	Philosophy     string
 	Method         string
+	Goal           string
+	Applicability  Applicability
 	Contract       jsontext.Value
 	Instructions   jsontext.Value
 	References     []Reference
@@ -61,9 +69,11 @@ type History struct {
 	Versions  []Version
 }
 
-// NewProcedure asks to create a procedure and its first version.
+// NewProcedure asks to create a procedure and its first version, and to
+// record its origin if Origin is set.
 type NewProcedure struct {
 	CanonicalKey string
+	Origin       *Origin
 	Definition   Definition
 }
 

@@ -45,6 +45,9 @@ func (p problems) err() error {
 func (n NewProcedure) validate() (Definition, error) {
 	var p problems
 	checkKey(&p, "canonical_key", n.CanonicalKey)
+	if n.Origin != nil {
+		checkOrigin(&p, "origin", *n.Origin)
+	}
 	def := checkDefinition(&p, n.Definition)
 	return def, p.err()
 }
@@ -62,6 +65,10 @@ func (r Revision) validate() (Definition, error) {
 func checkDefinition(p *problems, d Definition) Definition {
 	checkText(p, "version.philosophy", d.Philosophy)
 	checkText(p, "version.method", d.Method)
+	if d.Goal != "" {
+		checkLine(p, "version.goal", d.Goal)
+	}
+	checkApplicability(p, "version.applicability", d.Applicability)
 	d.Contract = checkObject(p, "version.contract", d.Contract)
 	d.Instructions = checkObject(p, "version.instructions", d.Instructions)
 	d.References = checkReferences(p, d.References)

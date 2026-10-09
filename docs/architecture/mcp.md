@@ -9,7 +9,7 @@
 - **Responses:** JSON (`application/json`), never SSE. There is no `Mcp-Session-Id`, and `GET` and `DELETE` are not used.
 - **Limits and security:** bodies are limited to 1 MiB. `/mcp` sits behind the same loopback `Host` check and cross-origin protection as the API, with no authentication ([ADR-0006](decisions/0006-local-unauthenticated-api.md)).
 - **Caching:** every `server/discover`, list and `resources/read` result carries `ttlMs: 0`, the protocol's cache hint (SEP-2549) for "immediately stale". The tools change when `polaroidd` is upgraded and records change with every write, so a client must not answer from a cached result. `serverInfo.version` is informational and stays `v1`; it does not change with the tool catalogue.
-- **Server capabilities:** `tools` and `resources`, plus short instructions that describe the agent loop. They tell agents that `selection_evidence` explains why a version was selected and does not verify their checkout, that `commit` and `inputs` give `target_verification` for the exact run, and that an unverified target still has to be run and recorded ([ADR-0018](decisions/0018-selection-evidence-and-target-verification.md)). The last step asks agents to report problems with Polaroid, and suggestions for it, with `report_feedback` ([ADR-0015](decisions/0015-feedback-reports.md)).
+- **Server capabilities:** `tools` and `resources`, plus short instructions that describe the agent loop. They tell agents to find their repository's bindings and the procedures that apply there (`list_procedures` with `repository`, scope shared, local or unspecified), that `selection_evidence` explains why a version was selected and does not verify their checkout, that `commit` and `inputs` give `target_verification` for the exact run, and that an unverified target still has to be run and recorded ([ADR-0018](decisions/0018-selection-evidence-and-target-verification.md)). New procedures declare applicability and origin. The last step asks agents to report problems with Polaroid, and suggestions for it, with `report_feedback`, naming the subject ([ADR-0015](decisions/0015-feedback-reports.md), [ADR-0021](decisions/0021-targeted-feedback-and-bounded-lists.md)).
 
 ## Tools
 
@@ -20,13 +20,18 @@ Arguments are flat JSON objects, named after the record fields in [records.md](r
 
 | Tool | Read-only | Arguments | Result |
 | --- | --- | --- | --- |
-| `list_procedures` | yes | none | `{"procedures":[…]}` |
+| `list_procedures` | yes | `repository`, `scope`, `q`, `limit` and `after`, all optional | `{"procedures":[…]}`, with `next` when more remain |
 | `get_procedure` | yes | `id` or `canonical_key` (exactly one) | procedure history |
 | `get_version` | yes | `procedure_id`, `version` | version |
 | `get_graph` | yes | `procedure_id`, `version`; `repository` and `environment` together, optional; `commit` and `inputs` together, optional, with a context | graph node, [resolved from evidence](records.md#contextual-resolution-implemented) when given a context, with [target verification](records.md#selection-evidence-and-target-verification-implemented) when given a target |
-| `create_procedure` | no | `canonical_key`, `philosophy`, `method`, `contract`, `instructions`, `references` (optional), `revision_reason` | procedure history |
+| `create_procedure` | no | `canonical_key`, `origin` (optional), `philosophy`, `method`, `goal` and `applicability` (optional), `contract`, `instructions`, `references` (optional), `revision_reason` | procedure history |
 | `revise_procedure` | no | `procedure_id`, `base_version`, then the same version fields | version |
-| `list_bindings` | yes | `repository` | `{"bindings":[…]}` |
+| `record_procedure_origin` | no | `procedure_id`, `repository_id`, `reason` | procedure history |
+| `register_repository` | no | `identifier`, `name` | repository |
+| `add_repository_alias` | no | `repository_id`, `identifier`, `reason` | repository |
+| `get_repository` | yes | `id` or `identifier` (exactly one; canonical or alias) | repository |
+| `list_repositories` | yes | `limit` and `after`, optional | `{"repositories":[…]}`, with `next` when more remain |
+| `list_bindings` | yes | `repository`; `limit` and `after` optional | `{"bindings":[…]}`, with `next` when more remain |
 | `get_binding` | yes | `id` | binding history |
 | `get_binding_revision` | yes | `binding_id`, `revision` | binding revision |
 | `resolve_binding` | yes | `binding_id`, `environment`; `commit` and `inputs` together, optional | binding resolution, with target verification when given a target |
@@ -34,12 +39,14 @@ Arguments are flat JSON objects, named after the record fields in [records.md](r
 | `revise_binding` | no | `binding_id`, `base_revision`, `inputs`, `version_policy`, `revision_reason` | binding revision |
 | `record_execution` | no | the execution fields: `procedure_id`, `version`, `binding_id` and `binding_revision` (optional), `repository`, `commit`, `environment`, `inputs`, `outcome`, `evidence`, `children` (optional) | execution |
 | `get_execution` | yes | `id` | execution |
-| `list_executions` | yes | `procedure_id`; `version` and `repository` optional | `{"executions":[…]}` |
+| `list_executions` | yes | `procedure_id`, `version` (with `procedure_id`), `repository`, `commit`, `limit` and `after`, all optional | `{"executions":[…]}`, with `next` when more remain |
 | `get_verification` | yes | `execution_id` | verification |
 | `list_verifications` | yes | `procedure_id`, `version`; `repository`, `commit` and `environment` optional | `{"verifications":[…]}` |
-| `report_feedback` | no | `kind`, `summary`, `details`, `reporter`, `context` (optional) | feedback report |
-| `list_feedback` | yes | `kind` optional | `{"feedback":[…]}` |
+| `report_feedback` | no | `kind`, `summary`, `details`, `reporter`; `context`, `subject`, `repository` and `execution_id` optional | feedback report |
+| `list_feedback` | yes | `kind`, `subject_type`, `subject_id`, `subject_version`, `repository`, `limit` and `after`, all optional | `{"feedback":[…]}`, with `next` when more remain |
 | `get_feedback` | yes | `id` | feedback report |
+
+There are 25 tools: 16 read-only, and 9 that only append. The repository, scope and paging rules are those of the HTTP API ([ADR-0019](decisions/0019-repository-registry.md), [ADR-0020](decisions/0020-procedure-origin-and-applicability.md), [ADR-0021](decisions/0021-targeted-feedback-and-bounded-lists.md)).
 
 ### Results
 
@@ -50,7 +57,7 @@ A successful result carries the record exactly as the HTTP API returns it ([http
 
 ### Errors
 
-A failed call is a tool error (`isError: true`). It carries the HTTP API's error body, `{"error":{"code","message",…}}`, as text and as structured content, with the same codes: `invalid_request`, `not_found`, `version_conflict` (with `latest_version`), `revision_conflict`, `canonical_key_exists`, `binding_exists`, `reference_cycle`, `graph_too_large` and `internal`.
+A failed call is a tool error (`isError: true`). It carries the HTTP API's error body, `{"error":{"code","message",…}}`, as text and as structured content, with the same codes: `invalid_request`, `not_found`, `version_conflict` (with `latest_version`), `revision_conflict`, `canonical_key_exists`, `binding_exists`, `repository_identifier_exists`, `origin_exists`, `reference_cycle`, `graph_too_large` and `internal`.
 
 Field names in `fields` are the flat argument names. For example, a missing `philosophy` is reported as `philosophy`, not `version.philosophy`. A reference is still reported as `references[i]…`. An unexpected failure is logged, and only `internal` is returned.
 

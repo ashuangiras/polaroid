@@ -30,13 +30,13 @@ const ProtocolVersion = "2026-07-28"
 const HandshakeProtocolVersion = "2025-11-25"
 
 const instructions = `Polaroid stores procedures: versioned, shared instructions for tasks. Typical loop:
-1. Find a procedure with list_procedures or get_procedure (by id or canonical_key).
+1. Find what applies to your repository: list_bindings for its bindings, and list_procedures with repository for the procedures that apply there. Each procedure's scope is shared, local (to one registered repository) or unspecified; q searches canonical keys and goals; get_procedure reads one by id or canonical_key. get_repository finds a registered repository by any of its identifiers.
 2. Resolve what to run: resolve_binding for a repository's binding, or get_graph with repository and environment. Every edge says how its version was selected (pin, evidence or latest). selection_evidence names the execution, and the commit, that made a version a candidate; it does not verify your checkout. Pass commit and inputs to see target_verification for the exact commit and inputs you will run.
 3. Follow the selected versions' instructions with your own tools. If target_verification is false or absent, the work is not verified there until you run it and record it.
 4. Record each run with record_execution, children first, then the parent with "children" linking them.
-5. Improve a procedure with revise_procedure, passing the version you read as base_version; a version_conflict means re-read and try again.
-6. When Polaroid itself gets in your way (a confusing error, a missing capability, a tool that misbehaved) or you see how it could serve you better, say so with report_feedback.
-Tool errors carry an error object with a stable code (invalid_request, not_found, version_conflict, ...).`
+5. Improve a procedure with revise_procedure, passing the version you read as base_version; a version_conflict means re-read and try again. A new procedure declares its applicability (shared, or local to a repository) and origin.
+6. When Polaroid itself gets in your way (a confusing error, a missing capability, a tool that misbehaved) or you see how it could serve you better, say so with report_feedback, naming its subject (the service, a repository, procedure version, binding or execution).
+Lists take limit and return next to continue after. Tool errors carry an error object with a stable code (invalid_request, not_found, version_conflict, ...).`
 
 // NewHandler returns the MCP endpoint over svc. It applies the same
 // cross-origin protection as the HTTP API; wrap it with a loopback-host

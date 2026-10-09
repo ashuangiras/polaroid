@@ -24,12 +24,12 @@ func (g fakeGraph) LatestVersion(_ context.Context, id string) (int, error) {
 	return latest, nil
 }
 
-func (g fakeGraph) VersionNode(_ context.Context, id string, version int) (string, []Reference, error) {
+func (g fakeGraph) VersionNode(_ context.Context, id string, version int) (NodeVersion, error) {
 	refs, ok := g[id][version]
 	if !ok {
-		return "", nil, ErrNotFound
+		return NodeVersion{}, ErrNotFound
 	}
-	return "key." + id, refs, nil
+	return NodeVersion{CanonicalKey: "key." + id, References: refs}, nil
 }
 
 func pin(name, target string, n int) Reference {

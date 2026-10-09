@@ -258,8 +258,9 @@ func TestListExecutionsQuery(t *testing.T) {
 	}
 
 	for _, query := range []string{
-		"",
-		"?repository=scratch",
+		"?procedure_id=",
+		"?version=1",
+		"?commit=0123abc",
 		"?procedure_id=" + f.procedure + "&procedure_id=x",
 		"?procedure_id=" + f.procedure + "&outcome=failed",
 		"?procedure_id=" + f.procedure + "&version=latest",

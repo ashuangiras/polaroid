@@ -1,0 +1,21 @@
+{
+  "canonical_key": "go.test.run",
+  "version": {
+    "philosophy": "Tests are evidence only for the packages and state they ran against, so the run names both.",
+    "method": "Run the repository's chosen packages' tests from the module root without cached results, and keep the exit status and the package lines.",
+    "goal": "Run a Go module's tests for a chosen set of packages.",
+    "applicability": { "shared": {} },
+    "contract": {
+      "inputs": { "packages": "Go package patterns, for example \"./...\"." },
+      "expected_outcome": "go test exits 0 for the packages.",
+      "verification": ["Evidence lists the command, its exit status and each ok package line."]
+    },
+    "instructions": {
+      "steps": [
+        { "id": "test", "action": "Run `GOFLAGS=-count=1 go test` with the packages input from the module root." },
+        { "id": "record", "action": "Record succeeded only if the command exited 0." }
+      ]
+    },
+    "revision_reason": "Fixture for #35: a procedure shared by repositories A and B, which bind it with different packages."
+  }
+}

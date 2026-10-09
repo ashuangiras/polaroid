@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json/jsontext"
+	json "encoding/json/v2"
 	"errors"
 	"fmt"
 
@@ -12,12 +13,16 @@ import (
 
 // CreateExecution implements memory.Store. Child links go first: the schema
 // accepts them only for a parent that does not exist yet (ADR-0011).
-func (s *Store) CreateExecution(ctx context.Context, e memory.Execution) error {
+func (s *Store) CreateExecution(ctx context.Context, e *memory.Execution) error {
 	var bindingID, bindingRevision any
 	if e.BindingID != "" {
 		bindingID, bindingRevision = e.BindingID, e.BindingRevision
 	}
 	return s.write(ctx, func(tx *sql.Tx) error {
+		at, err := appendTime(ctx, tx, latestExecutionTime, e.CreatedAt)
+		if err != nil {
+			return err
+		}
 		for i, c := range e.Children {
 			var parent string
 			err := tx.QueryRowContext(ctx,
@@ -38,17 +43,18 @@ func (s *Store) CreateExecution(ctx context.Context, e memory.Execution) error {
 				return fmt.Errorf("insert child %d: %w", i, err)
 			}
 		}
-		_, err := tx.ExecContext(ctx, `
+		_, err = tx.ExecContext(ctx, `
 			INSERT INTO executions
 				(id, procedure_id, version, binding_id, binding_revision, repository, commit_hash,
 				 environment_name, environment_attributes, inputs, outcome, evidence, created_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			e.ID, e.ProcedureID, e.Version, bindingID, bindingRevision, e.Repository, e.Commit,
 			e.Environment.Name, string(e.Environment.Attributes), string(e.Inputs), string(e.Outcome),
-			string(e.Evidence), formatTime(e.CreatedAt))
+			string(e.Evidence), formatTime(at))
 		if err != nil {
 			return fmt.Errorf("insert execution: %w", err)
 		}
+		e.CreatedAt = at
 		return nil
 	})
 }
@@ -107,10 +113,27 @@ func readExecution(ctx context.Context, q querier, id string, withEvidence bool)
 
 // ListExecutions implements memory.Store.
 func (s *Store) ListExecutions(ctx context.Context, f memory.ExecutionFilter) ([]memory.Execution, error) {
+	at, id := "", ""
+	if f.After != nil {
+		at, id = formatTime(f.After.At), f.After.ID
+	}
+	var repositories any // NULL selects every repository
+	if f.Repositories != nil {
+		list, err := json.Marshal(f.Repositories)
+		if err != nil {
+			return nil, fmt.Errorf("encode repositories: %w", err)
+		}
+		repositories = string(list)
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT `+executionColumns+` FROM executions
-		WHERE procedure_id = ? AND (? = 0 OR version = ?) AND (? = '' OR repository = ?)
-		ORDER BY created_at, id`,
-		f.ProcedureID, f.Version, f.Version, f.Repository, f.Repository)
+		WHERE (? = '' OR procedure_id = ?) AND (? = 0 OR version = ?)
+		  AND (? IS NULL OR repository IN (SELECT value FROM json_each(?)))
+		  AND (? = '' OR commit_hash = ?)
+		  AND (? = '' OR created_at > ? OR (created_at = ? AND id > ?))
+		ORDER BY created_at, id
+		LIMIT ?`,
+		f.ProcedureID, f.ProcedureID, f.Version, f.Version, repositories, repositories,
+		f.Commit, f.Commit, at, at, at, id, fetchLimit(f.Page.Limit))
 	if err != nil {
 		return nil, fmt.Errorf("query executions: %w", err)
 	}
