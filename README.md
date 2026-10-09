@@ -79,6 +79,7 @@ The server's instructions describe the agent loop. The tools, their arguments an
 | `make demo` | Runs the live demonstration against a real daemon. |
 | `make run ARGS="..."` | Builds and runs `polaroidd`. |
 | `make ci` | Runs `check`, `vuln` and `demo`, which is exactly what GitHub Actions runs. |
+| `make e2e` / `make e2e-mcp` | Runs the end-to-end scripts against a real daemon and writes a report of every command, its output and each check to `bin/e2e/`. They need bash 4+, `curl` and `jq` (`e2e` also needs `sqlite3` and golangci-lint). `e2e-mcp` tries the TypeScript SDK and MCP Inspector when npm is available. They are not part of `make ci`. |
 
 ## Configuration
 
