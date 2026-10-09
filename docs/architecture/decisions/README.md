@@ -10,5 +10,6 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0004](0004-append-only-versions-with-expected-base.md) | Append-only versions guarded by an expected base version | Accepted |
 | [0005](0005-strict-json-with-encoding-json-v2.md) | Strict JSON decoding with `encoding/json/v2` | Accepted |
 | [0006](0006-local-unauthenticated-api.md) | A loopback-only, unauthenticated API until access control exists | Accepted |
+| [0007](0007-repository-identity-for-bindings.md) | Repositories are identified by a canonical path, and bindings by repository and local name | Accepted |
 
 Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.
