@@ -5,12 +5,12 @@ How a Copilot session, or any contributor, takes one work item from selection to
 ## 1. Select
 
 1. Read [status.md](status.md). It names the next work item and any blockers.
-2. Open the work item. Use the GitHub issue once the repository is published. Until then, use the issue-ready draft in [roadmap.md](roadmap.md). Take one work item per branch and pull request.
-3. Confirm that the acceptance criteria are testable. If they are not, rewrite them in the issue or draft first. Settle any open decision in the item before you write code, and record it as an ADR if it is consequential.
+2. Open the work item: a [GitHub issue](https://github.com/ashuangiras/polaroid/issues). [roadmap.md](roadmap.md) gives the order. Items there that are not yet filed must be refined and filed as issues first. Take one work item per branch and pull request.
+3. Confirm that the acceptance criteria are testable. If they are not, rewrite them in the issue first. Settle any open decision in the item before you write code, and record it as an ADR if it is consequential.
 
 ## 2. Implement
 
-1. Create a branch before you edit anything. Name it `issue-<number>-<slug>`, or `roadmap-<item>-<slug>` while issues do not exist.
+1. Create a branch from an up-to-date `main` before you edit anything. Name it `issue-<number>-<slug>`.
 2. Read the code and the tests for every package you will touch. Follow the existing patterns, and keep the change to what the acceptance criteria require.
 3. Write a test that captures each criterion: real SQLite and real HTTP, barriers instead of sleeps. Watch the test fail before you make it pass.
 4. In the same change, update the contracts that change: [records.md](../architecture/records.md), [http-api.md](../architecture/http-api.md), the README, and a new migration if the schema changes.
@@ -37,11 +37,3 @@ A gate counts only if you ran it. If a tool or the network is unavailable, write
 ## Commits
 
 Keep each commit focused, with an imperative subject line, for example "Add binding revisions". Reference the issue in the body. Never rewrite published history. If a commit message contains backticks, write it with `git commit -F <file>`, so the shell does not expand them.
-
-## Publishing the repository (owner action, pending)
-
-There is no remote yet. When the owner creates one:
-
-1. Replace the provisional module path, as [ADR-0002](../architecture/decisions/0002-go-toolchain-and-provisional-module-path.md) describes.
-2. Push, and confirm that the `ci` workflow passes.
-3. File the roadmap items as issues with the work item template, and replace the drafts in the roadmap with links.

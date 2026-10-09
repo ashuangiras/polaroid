@@ -9,7 +9,7 @@ Polaroid is a versioned procedural memory service for agents, written in Go, wit
    - [docs/architecture/records.md](docs/architecture/records.md): records, identity and versioning.
    - [docs/architecture/http-api.md](docs/architecture/http-api.md): endpoints, errors and limits.
    - [docs/architecture/overview.md](docs/architecture/overview.md): boundaries and dependency direction.
-3. Identify the work item and its acceptance criteria. Work items are GitHub issues. Until the repository has a remote, they are the issue-ready items in [docs/development/roadmap.md](docs/development/roadmap.md). If the criteria are missing or ambiguous, settle them before writing code.
+3. Identify the work item and its acceptance criteria. Work items are [GitHub issues](https://github.com/ashuangiras/polaroid/issues); [docs/development/roadmap.md](docs/development/roadmap.md) gives their order. If the criteria are missing or ambiguous, settle them before writing code.
 4. Inspect the implementation and its tests before proposing a change. Do not design from the docs alone.
 
 ## Rules
