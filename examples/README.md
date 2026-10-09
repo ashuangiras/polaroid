@@ -26,13 +26,13 @@ The `contract` and `instructions` members are free-form JSON objects. The shapes
 
 ## Polaroid's development procedures
 
-[development/](development) holds the procedures used to develop Polaroid itself ([ADR-0017](../docs/architecture/decisions/0017-development-procedures-as-records.md)): `go.module.build`, `go.module.checks` and `dev.change.verify`, which references the other two, plus bindings in `github.com/ashuangiras/polaroid` and in a fixture-only second repository. Version 1 of `go.module.checks` is a labelled demonstration seed with one deliberately stale instruction; version 2 is the correction an agent appended. [procedural-loop.md](../docs/development/procedural-loop.md) has the story and the evidence.
+[development/](development) holds the procedures used to develop Polaroid itself ([ADR-0017](../docs/architecture/decisions/0017-development-procedures-as-records.md)): `go.module.build`, `go.module.checks` and `dev.change.verify`, which references the other two, plus bindings in `github.com/ashuangiras/polaroid` and in a fixture-only second repository. Version 1 of `go.module.checks` is a labelled demonstration seed with one deliberately stale instruction; version 2 is the correction an agent appended. Version 2 of `dev.change.verify` teaches target verification ([#33](https://github.com/ashuangiras/polaroid/issues/33)): it was appended through MCP and exported here verbatim. [procedural-loop.md](../docs/development/procedural-loop.md) has the story and the evidence.
 
 These fixtures name referenced procedures by canonical key instead of ID, so they are loaded with the loader rather than the commands above:
 
 ```sh
 scripts/load-fixtures.sh examples/development        # every version
-scripts/load-fixtures.sh -n 1 examples/development   # version 1 only: the seed, before the correction
+scripts/load-fixtures.sh -n 1 examples/development   # version 1 of each: the seed, before the corrections
 ```
 
 The loader reuses existing identities, appends missing versions with the right `base_version`, refuses to overwrite a stored version that differs, and prints the IDs it used. `make demo` loads these fixtures and checks the results.

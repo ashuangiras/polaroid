@@ -29,7 +29,7 @@ Run the gates and keep their real output:
 
 A gate counts only if you ran it. If a tool or the network is unavailable, write "not run", with the reason. A check you have only ever seen pass is unproven. For a new check, show that it fails on a deliberate violation before you rely on it.
 
-With a Polaroid store that holds the [development procedures](../../examples/development) on `/mcp`, you can run the gates by resolving the `verify-change` binding of `github.com/ashuangiras/polaroid` and following the selected versions, recording each execution ([procedural-loop.md](procedural-loop.md)). If an instruction is wrong, append a corrected version rather than working around it. Report the gates in the pull request either way.
+With a Polaroid store that holds the [development procedures](../../examples/development) on `/mcp`, you can run the gates by resolving the `verify-change` binding of `github.com/ashuangiras/polaroid` at the commit you verify (`commit` and `inputs`) and following the selected versions, recording each execution ([procedural-loop.md](procedural-loop.md)). Evidence from another commit selects versions; it does not verify yours. If an instruction is wrong, append a corrected version rather than working around it. Report the gates in the pull request either way.
 
 ## 4. Hand off
 

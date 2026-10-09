@@ -7,7 +7,7 @@ This page records how Polaroid's development procedures were used through Polaro
 | What | `make demo` replays the loop with scripted outcomes in a temporary store | An agent retrieved procedures over MCP, ran real commands, reasoned about a failure and wrote the records below |
 | Proves | Polaroid's lifecycle: loading, MCP calls, conflicts, composition, verification transitions, history, persistence | That the loop works in practice for a real development task |
 | Runs | In CI on every push, without an LLM | Once per session; IDs come from one local store |
-| Where | [scripts/demo.sh](../../scripts/demo.sh), steps 9 to 17 | This page |
+| Where | [scripts/demo.sh](../../scripts/demo.sh), steps 9 to 18 | This page |
 
 ## The procedures
 
@@ -17,7 +17,7 @@ Fixtures in [examples/development](../../examples/development), loaded with [scr
 | --- | --- | --- |
 | `go.module.build` | 1 | Build a Go module through the repository's own entry point, checking the toolchain and the artifacts. |
 | `go.module.checks` | 1, 2 | Run a Go repository's package tests and gate commands, keeping exit statuses and deterministic excerpts. **Version 1 is a demonstration seed**: its step `unit` is deliberately stale (`go test ./test/...`, with the claim that tests live in a top-level `test/` directory). Its `revision_reason` says it is a seed, without naming the step. Version 2 is the agent's correction. |
-| `dev.change.verify` | 1 | Verify a change: establish the commit, working-tree state and environment, then run `build` (→ `go.module.build`) and `checks` (→ `go.module.checks`), both contextual, and record children before the parent. |
+| `dev.change.verify` | 1, 2 | Verify a change: establish the commit, working-tree state and environment, then run `build` (→ `go.module.build`) and `checks` (→ `go.module.checks`), both contextual, and record children before the parent. **Version 2** ([#33](https://github.com/ashuangiras/polaroid/issues/33)) resolves at the explicit target (`commit` and `inputs`), keeps selection evidence apart from target verification, always performs a fresh run, records the binding revision, and confirms target verification afterwards; see [below](#target-aware-procedure-33). |
 
 Bindings of `dev.change.verify`, by the same procedure ID:
 - `github.com/ashuangiras/polaroid`, name `verify-change`: `make build`, artifacts `bin/polaroidd` and `bin/polaroid`, and the gate `make check`, `make vuln`, `make demo`, `make e2e`, `make e2e-mcp E2E_INTEROP=0`.
@@ -132,6 +132,20 @@ version and outcome; the parent's verification; and the resolution after.
 | Other targets | `ebe54c7` and `d306ae9` stay verified by their own runs (`01a12181-83fb…`, `01a1216f-564c…`). An unseen commit (`cccc…`) is unverified with evidence from `2b2dea6`. The same commit with `working_tree: modified:demo` is unverified. |
 
 **Automated evidence** for the same rules: `make demo` step 17 (two scripted commits), `TestTargetVerificationIsCommitSpecific`, `TestTargetVerificationNeedsTheExactScope`, `TestTargetVerificationFollowsTheSelectedCombination` (domain), `TestTargetVerificationAcrossCommits`, `TestTargetOnTheGraphEndpoint`, `TestTargetRequestsAreChecked` (real SQLite and HTTP), and the MCP and CLI tests.
+
+## Target-aware procedure (#33)
+
+After #31 the capability existed, but `dev.change.verify` version 1 still resolved without a target and confirmed only with `get_verification`. [#33](https://github.com/ashuangiras/polaroid/issues/33) changed the procedural knowledge, not the code: version 2 was appended through MCP (`revise_procedure`, `base_version: 1`) and exported verbatim to [v2.revise.json](../../examples/development/procedures/dev-change-verify/v2.revise.json). Its `revision_reason` names the capability change and what version 1 got wrong.
+
+**What version 2 asks for.** The full commit; working-tree state and the effective inputs (the binding revision's plus `working_tree`); the environment; `resolve_binding` with `commit` and `inputs`; reading each selected version, mapping, `selection_evidence` and `target_verification`; following `build` then `checks` and judging each against its contract; rechecking the context before each record; recording children, then the parent with `binding_id`, `binding_revision` and `children`; and resolving again at the same target. Its boundaries state that selection evidence never certifies the target, that a missing or `false` `target_verification` is unverified, that a child's success does not establish its parent, that a rebase makes a new, unverified target even with an identical tree, and that Polaroid derives verification from what agents record without checking that the commands ran. The philosophy, the contract inputs, both references and the failure rule are unchanged.
+
+**Existing target evidence.** No reuse policy existed: AGENTS.md, workflow.md, the binding and the procedures say nothing about it, and `go.module.checks` already reports a reused result as reused. Version 2 makes the default explicit: each invocation is a fresh run whose outcome is recorded. An already verified target is reported as context and never as evidence that this invocation ran the checks. Looking up verification (a resolution with a target, or `list_verifications`) is read-only and records nothing.
+
+**Repeated checks.** The parent runs no commands, and its final confirmation is a lookup. The overlap inside the children is kept: `go.module.checks` v2 runs `go test ./...` for fast feedback before `make check`, which runs the tests again with and without `-race`, and `make demo`, `make e2e` and `make e2e-mcp` each run `make build`. That is the established acceptance of those records and of the binding; changing it would be a revision of them, not of this procedure.
+
+**Selection after the append.** Version 2 has no evidence, and version 1 has a verified execution in `darwin-arm64.local`, so contextual resolution keeps selecting version 1, by evidence. That is the resolver working as designed (ADR-0013), not a defect. The resolver, the binding and the evidence were left alone; the first run of version 2 chooses it explicitly, as the version itself allows: `get_graph` for version 2 with the repository, environment, commit and inputs, stated as such in the parent's evidence.
+
+**Automated evidence.** `make demo` step 18 loads version 2 with the loader (version 1 unchanged, references unchanged, the stored instructions resolve with `commit` and `inputs`), shows that a second load changes nothing and that a differing version 2 is refused without writing, and then, over MCP at a new scripted commit: nothing verified; after the children only, the children verified and the parent not; after the parent, all three verified; and at a later commit with the same inputs, nothing verified. The #28 replay in steps 12 to 16 loads the fixtures as they were then, without this version.
 
 ## Reproduce
 

@@ -15,6 +15,9 @@
 # scripted: this is a regression check of Polaroid, not agent evidence.
 # A two-commit scenario then shows that evidence from commit A selects a
 # candidate at commit B without verifying B, until a run at B is recorded.
+# Then the loader appends dev.change.verify version 2 (#33), which teaches
+# target verification, and a scripted run at a new commit shows children-only
+# success leaving the parent unverified there until the parent is recorded.
 # Finally it restarts the daemon and confirms every record is unchanged.
 #
 # Usage: scripts/demo.sh   (run `make build` first, or use `make demo`)
@@ -272,7 +275,11 @@ jq -e --arg c "$checks1" '.verified == false and [.problems[] | [.code, .referen
 jq -c '{verified, problems}' <<<"$verification"
 
 step "12. Append the correction (exported fixture v2.revise.json, replayed by the loader); a stale base is refused over MCP"
-scripts/load-fixtures.sh "$dev" >/dev/null 2>&1 || fail "the loader did not append version 2"
+# The fixtures as they were for #28: without dev.change.verify version 2, which step 18 loads.
+dev28="$work/development-28"
+cp -R "$dev" "$dev28"
+rm "$dev28/procedures/dev-change-verify/v2.revise.json"
+scripts/load-fixtures.sh "$dev28" >/dev/null 2>&1 || fail "the loader did not append version 2"
 jq -e '.latest_version == 2' <<<"$(bin/polaroid get "$checks_id")" >/dev/null || fail "go.module.checks has no version 2"
 [[ "$(bin/polaroid get-version "$checks_id" 1)" == "$checks_v1" ]] || fail "version 1 changed"
 conflict="$(mcp_tool revise_procedure "$(jq -c --arg id "$checks_id" '{procedure_id: $id, base_version: 1} + .version' "$dev/procedures/go-module-checks/v2.revise.json")")"
@@ -356,6 +363,61 @@ got="$(at_target "$commit_a")"
 jq -e --arg c "$commit_a" '.commit == $c and .outcome == "succeeded"' <<<"$(bin/polaroid get-execution "$run_a")" >/dev/null || fail "A's execution changed"
 echo "target A, still verified by its own run: $got"
 
+step "18. The loader appends dev.change.verify version 2 (#33); a new commit is verified only by its own parent run"
+verify_v1="$(bin/polaroid get-version "$verify_id" 1)"
+appended="$(scripts/load-fixtures.sh "$dev" 2>&1 >/dev/null)" || fail "the loader did not append dev.change.verify version 2: $appended"
+grep -q 'dev.change.verify: appended version 2' <<<"$appended" || fail "the loader did not report appending version 2: $appended"
+[[ "$(bin/polaroid get-version "$verify_id" 1)" == "$verify_v1" ]] || fail "dev.change.verify version 1 changed"
+verify_v2="$(bin/polaroid get-version "$verify_id" 2)"
+jq -e '[.instructions.steps[] | select(.id == "resolve") | .action | contains("`commit`") and contains("`inputs`")] == [true]
+	and any(.instructions.steps[]; .id == "confirm" and (.action | contains("target_verification")))
+	and any(.contract.boundaries[]; contains("never certifies the target"))' <<<"$verify_v2" >/dev/null ||
+	fail "dev.change.verify version 2 does not teach target verification"
+jq -e --argjson r "$(jq -c .references <<<"$verify_v1")" '.references == $r' <<<"$verify_v2" >/dev/null || fail "version 2 changed the references"
+store="$(bin/polaroid get "$verify_id")"
+scripts/load-fixtures.sh "$dev" >/dev/null 2>&1 || fail "a second load failed"
+[[ "$(bin/polaroid get "$verify_id")" == "$store" ]] || fail "loading the fixtures again changed dev.change.verify"
+conflicting="$work/development-conflict"
+cp -R "$dev" "$conflicting"
+jq '.version.method += " Edited."' "$dev/procedures/dev-change-verify/v2.revise.json" >"$conflicting/procedures/dev-change-verify/v2.revise.json"
+if refused="$(scripts/load-fixtures.sh "$conflicting" 2>&1 >/dev/null)"; then fail "a fixture that differs from stored version 2 was loaded"; fi
+grep -q 'version 2 in the store differs' <<<"$refused" || fail "unexpected refusal: $refused"
+[[ "$(bin/polaroid get "$verify_id")" == "$store" ]] || fail "a refused load changed dev.change.verify"
+echo "versions 1 and 2 stored; a second load changed nothing; a differing version 2 was refused: $(tail -1 <<<"$refused")"
+dev_commit=cccccccccccccccccccccccccccccccccccccccc
+at_dev_target() { # at_dev_target COMMIT: one line per node, "name@version verified latest"
+	mcp_tool resolve_binding "$(jq -cn --arg b "$dev_binding" --arg c "$1" --argjson in "$dev_inputs" '{binding_id: $b, environment: "demo.ci", commit: $c, inputs: $in}')" |
+		jq -r '"root@\(.graph.version) \(.graph.target_verification.verified) \(.graph.target_verification.latest_execution_id // "-")",
+			(.graph.references[] | "\(.name)@\(.node.version) \(.node.target_verification.verified) \(.node.target_verification.latest_execution_id // "-")")'
+}
+expect_dev_target() { # expect_dev_target COMMIT WANT
+	local got
+	got="$(at_dev_target "$1")"
+	[[ "$got" == "$2" ]] || fail "target verification at ${1:0:7} is
+$got
+want
+$2"
+	printf '%s\n' "$got"
+}
+expect_dev_target "$dev_commit" "root@2 false -
+build@1 false -
+checks@2 false -"
+build_c="$(record_dev "$build_id" 1 succeeded "$build_inputs")"
+checks_c="$(record_dev "$checks_id" 2 succeeded "$checks_inputs")"
+echo "children recorded at ${dev_commit:0:7}:"
+expect_dev_target "$dev_commit" "root@2 false -
+build@1 true $build_c
+checks@2 true $checks_c"
+parent_c="$(record_dev "$verify_id" 2 succeeded "$dev_inputs" "$(children "$build_c" "$checks_c")")"
+echo "parent recorded at ${dev_commit:0:7}:"
+expect_dev_target "$dev_commit" "root@2 true $parent_c
+build@1 true $build_c
+checks@2 true $checks_c"
+echo "a later commit with the same inputs (for example after a rebase):"
+expect_dev_target dddddddddddddddddddddddddddddddddddddddd "root@2 false -
+build@1 false -
+checks@2 false -"
+
 dev_snapshot() {
 	bin/polaroid get "$verify_id"
 	bin/polaroid get "$checks_id"
@@ -365,7 +427,7 @@ dev_snapshot() {
 }
 dev_before="$(dev_snapshot)"
 
-step "18. Restart polaroidd and confirm every record persisted"
+step "19. Restart polaroidd and confirm every record persisted"
 stop_daemon
 start_daemon
 [[ "$(bin/polaroid get-by-key "$key")" == "$history" ]] || fail "history differs after restart"
