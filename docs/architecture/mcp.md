@@ -8,6 +8,7 @@
 - **Older clients:** a client that cannot negotiate 2026-07-28 is refused during the handshake.
 - **Responses:** JSON (`application/json`), never SSE. There is no `Mcp-Session-Id`, and `GET` and `DELETE` are not used.
 - **Limits and security:** bodies are limited to 1 MiB. `/mcp` sits behind the same loopback `Host` check and cross-origin protection as the API, with no authentication ([ADR-0006](decisions/0006-local-unauthenticated-api.md)).
+- **Caching:** every `server/discover`, list and `resources/read` result carries `ttlMs: 0`, the protocol's cache hint (SEP-2549) for "immediately stale". The tools change when `polaroidd` is upgraded and records change with every write, so a client must not answer from a cached result. `serverInfo.version` is informational and stays `v1`; it does not change with the tool catalogue.
 - **Server capabilities:** `tools` and `resources`, plus short instructions that describe the agent loop. The last step asks agents to report problems with Polaroid, and suggestions for it, with `report_feedback` ([ADR-0015](decisions/0015-feedback-reports.md)).
 
 ## Tools
@@ -72,6 +73,8 @@ Start the daemon (`bin/polaroidd`), then point the client at the URL. This repos
 ```json
 {"servers": {"polaroid": {"type": "http", "url": "http://127.0.0.1:7417/mcp"}}}
 ```
+
+**After upgrading `polaroidd`, restart the server in the client.** Some clients cache the tool list despite `ttlMs: 0`. VS Code Copilot chat (VS Code 1.137) keeps it until **MCP: List Servers → polaroid → Restart**, and the new tools appear from the next chat request on.
 
 Verified clients (2026-10-09):
 
