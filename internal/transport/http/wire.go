@@ -349,9 +349,20 @@ type recordExecutionBody struct {
 	Inputs          jsontext.Value  `json:"inputs"`
 	Outcome         string          `json:"outcome"`
 	Evidence        jsontext.Value  `json:"evidence"`
+	Children        []childBody     `json:"children"`
+}
+
+// childBody links a child execution to the reference it fulfilled.
+type childBody struct {
+	Reference   string `json:"reference"`
+	ExecutionID string `json:"execution_id"`
 }
 
 func (b recordExecutionBody) record() memory.ExecutionRecord {
+	children := make([]memory.ChildExecution, len(b.Children))
+	for i, c := range b.Children {
+		children[i] = memory.ChildExecution{Reference: c.Reference, ExecutionID: c.ExecutionID}
+	}
 	return memory.ExecutionRecord{
 		ProcedureID:     b.ProcedureID,
 		Version:         b.Version,
@@ -363,6 +374,7 @@ func (b recordExecutionBody) record() memory.ExecutionRecord {
 		Inputs:          b.Inputs,
 		Outcome:         memory.Outcome(b.Outcome),
 		Evidence:        b.Evidence,
+		Children:        children,
 	}
 }
 
@@ -408,11 +420,18 @@ type executionBody struct {
 	Inputs          jsontext.Value  `json:"inputs"`
 	Outcome         string          `json:"outcome"`
 	Evidence        jsontext.Value  `json:"evidence"`
-	CreatedAt       time.Time       `json:"created_at"`
+	// Children is omitted when there are none, so executions recorded before
+	// child links existed are served unchanged.
+	Children  []childBody `json:"children,omitzero"`
+	CreatedAt time.Time   `json:"created_at"`
 }
 
 func newExecutionBody(e memory.Execution) executionBody {
 	s := newExecutionSummaryBody(e)
+	var children []childBody
+	for _, c := range e.Children {
+		children = append(children, childBody{Reference: c.Reference, ExecutionID: c.ExecutionID})
+	}
 	return executionBody{
 		ID:              s.ID,
 		ProcedureID:     s.ProcedureID,
@@ -425,6 +444,7 @@ func newExecutionBody(e memory.Execution) executionBody {
 		Inputs:          e.Inputs,
 		Outcome:         s.Outcome,
 		Evidence:        e.Evidence,
+		Children:        children,
 		CreatedAt:       s.CreatedAt,
 	}
 }

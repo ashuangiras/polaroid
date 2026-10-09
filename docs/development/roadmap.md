@@ -4,7 +4,7 @@ Increments are ordered. Issue-ready items are filed as [GitHub issues](https://g
 
 > **Work-item authority.** GitHub Issues are the source of truth for scope and acceptance criteria. This roadmap keeps only order and links for filed items, never a second copy. Items not yet issue-ready stay here until they are refined and filed.
 
-Increments 1 and 2, and the first item of increment 3, are implemented. Nothing else below is.
+Increments 1 and 2, and the first two items of increment 3, are implemented. Nothing else below is.
 
 ## Increment 1 — Procedure identity and immutable versions (done)
 
@@ -19,10 +19,10 @@ Create, list, retrieve and revise procedures with stable IDs, unique canonical k
 ## Increment 3 — Execution evidence and resolution
 
 1. [#7 Execution records](https://github.com/ashuangiras/polaroid/issues/7) — **done**
+2. [#9 Subprocedure executions](https://github.com/ashuangiras/polaroid/issues/9) (depends on #7) — **done**
 
 The items below are ordered and scoped, but not yet issue-ready. Refine each one into an issue before starting it.
 
-- **3.2 Subprocedure executions.** Child executions linked to a parent through the named reference they fulfil; the child's procedure and version must satisfy the reference's policy.
 - **3.3 Context-specific verification.** Verification computed per (repository, commit, environment, effective inputs, child-version combination); a successful parent is validated against its children's evidence; a changed child-version combination requires fresh parent verification while historical evidence stays with its original combination; retrieval of historical combinations.
 - **3.4 Contextual resolution from evidence.** Resolve contextual references using verification evidence for the requesting context, always reporting the exact versions selected.
 
