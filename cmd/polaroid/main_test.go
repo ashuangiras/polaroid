@@ -101,6 +101,61 @@ func TestCommandsReachTheAPI(t *testing.T) {
 	mustSucceed(t, cli("", map[string]string{"POLAROID_URL": server}, "get", h.ID))
 }
 
+func TestBindingCommands(t *testing.T) {
+	server := newServer(t)
+	created := cli(createJSON, nil, "-server", server, "create")
+	mustSucceed(t, created)
+	var p struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(created.stdout), &p); err != nil {
+		t.Fatal(err)
+	}
+
+	bindJSON := `{"repository":"github.com/ashuangiras/polaroid","name":"add-dependency","procedure_id":"` + p.ID +
+		`","revision":{"inputs":{},"version_policy":{"pin":1},"revision_reason":"Bind."}}`
+	bound := cli("", nil, "-server", server, "bind", writeFile(t, bindJSON))
+	mustSucceed(t, bound)
+	var b struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(bound.stdout), &b); err != nil || b.ID == "" {
+		t.Fatalf("bind output is not a binding: %q (%v)", bound.stdout, err)
+	}
+
+	const reviseBindingJSON = `{"base_revision":1,"revision":{"inputs":{"x":1},"version_policy":{"contextual":{}},"revision_reason":"Go contextual."}}`
+	revised := cli(reviseBindingJSON, nil, "-server", server, "revise-binding", b.ID)
+	mustSucceed(t, revised)
+	if !strings.Contains(revised.stdout, `"revision":2`) {
+		t.Fatalf("revise-binding output = %s", revised.stdout)
+	}
+
+	list := cli("", nil, "-server", server, "bindings", "github.com/ashuangiras/polaroid")
+	mustSucceed(t, list)
+	if !strings.Contains(list.stdout, b.ID) {
+		t.Fatalf("bindings output = %s", list.stdout)
+	}
+	for _, args := range [][]string{
+		{"get-binding", b.ID},
+		{"get-binding-revision", b.ID, "2"},
+	} {
+		r := cli("", nil, append([]string{"-server", server}, args...)...)
+		mustSucceed(t, r)
+		if !jsontext.Value(r.stdout).IsValid() || r.stderr != "" {
+			t.Fatalf("%v: stdout %q, stderr %q", args, r.stdout, r.stderr)
+		}
+	}
+
+	stale := cli(reviseBindingJSON, nil, "-server", server, "revise-binding", b.ID)
+	if stale.code != exitFailure || !strings.Contains(stale.stdout, `"code":"revision_conflict"`) {
+		t.Fatalf("stale revise-binding: exit %d, stdout %s", stale.code, stale.stdout)
+	}
+	duplicate := cli(bindJSON, nil, "-server", server, "bind")
+	if duplicate.code != exitFailure || !strings.Contains(duplicate.stdout, `"code":"binding_exists"`) {
+		t.Fatalf("duplicate bind: exit %d, stdout %s", duplicate.code, duplicate.stdout)
+	}
+}
+
 func TestFailedRequestsExitOne(t *testing.T) {
 	server := newServer(t)
 	created := cli("", nil, "-server", server, "create", writeFile(t, createJSON))
@@ -169,6 +224,11 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		{"get", "a", "b"},
 		{"get-version", "a"},
 		{"revise"},
+		{"bindings"},
+		{"get-binding"},
+		{"get-binding-revision", "a"},
+		{"revise-binding"},
+		{"bind", "a", "b"},
 		{"-server", "ftp://example.com", "list"},
 		{"-server", "127.0.0.1:7417", "list"},
 		{"-no-such-flag", "list"},

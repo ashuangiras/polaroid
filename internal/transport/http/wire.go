@@ -38,6 +38,63 @@ type reviseProcedureBody struct {
 	Version     definitionBody `json:"version"`
 }
 
+// versionPolicyBody is {"pin": N} or {"contextual": {}}. It is used both
+// ways, so a response returns a policy exactly as it was accepted.
+type versionPolicyBody struct {
+	Pin        *int                  `json:"pin,omitzero"`
+	Contextual *contextualPolicyBody `json:"contextual,omitzero"`
+}
+
+// contextualPolicyBody has no members yet; any member is rejected.
+type contextualPolicyBody struct{}
+
+// policy maps the wire form to the domain form. Anything other than exactly
+// one member becomes a zero policy, which validation rejects.
+func (p versionPolicyBody) policy() memory.VersionPolicy {
+	switch {
+	case p.Pin != nil && p.Contextual == nil:
+		return memory.VersionPolicy{Kind: memory.PolicyPin, Pin: *p.Pin}
+	case p.Contextual != nil && p.Pin == nil:
+		return memory.VersionPolicy{Kind: memory.PolicyContextual}
+	default:
+		return memory.VersionPolicy{}
+	}
+}
+
+func newVersionPolicyBody(p memory.VersionPolicy) versionPolicyBody {
+	if p.Kind == memory.PolicyPin {
+		pin := p.Pin
+		return versionPolicyBody{Pin: &pin}
+	}
+	return versionPolicyBody{Contextual: &contextualPolicyBody{}}
+}
+
+type bindingConfigBody struct {
+	Inputs         jsontext.Value    `json:"inputs"`
+	VersionPolicy  versionPolicyBody `json:"version_policy"`
+	RevisionReason string            `json:"revision_reason"`
+}
+
+func (c bindingConfigBody) config() memory.BindingConfig {
+	return memory.BindingConfig{
+		Inputs:         c.Inputs,
+		VersionPolicy:  c.VersionPolicy.policy(),
+		RevisionReason: c.RevisionReason,
+	}
+}
+
+type createBindingBody struct {
+	Repository  string            `json:"repository"`
+	Name        string            `json:"name"`
+	ProcedureID string            `json:"procedure_id"`
+	Revision    bindingConfigBody `json:"revision"`
+}
+
+type reviseBindingBody struct {
+	BaseRevision int               `json:"base_revision"`
+	Revision     bindingConfigBody `json:"revision"`
+}
+
 // Response bodies.
 
 type procedureBody struct {
@@ -101,6 +158,76 @@ type procedureListBody struct {
 	Procedures []procedureBody `json:"procedures"`
 }
 
+type bindingBody struct {
+	ID             string    `json:"id"`
+	Repository     string    `json:"repository"`
+	Name           string    `json:"name"`
+	ProcedureID    string    `json:"procedure_id"`
+	CreatedAt      time.Time `json:"created_at"`
+	LatestRevision int       `json:"latest_revision"`
+}
+
+func newBindingBody(b memory.Binding) bindingBody {
+	return bindingBody{
+		ID:             b.ID,
+		Repository:     b.Repository,
+		Name:           b.Name,
+		ProcedureID:    b.ProcedureID,
+		CreatedAt:      b.CreatedAt,
+		LatestRevision: b.LatestRevision,
+	}
+}
+
+type bindingRevisionBody struct {
+	BindingID      string            `json:"binding_id"`
+	Revision       int               `json:"revision"`
+	Inputs         jsontext.Value    `json:"inputs"`
+	VersionPolicy  versionPolicyBody `json:"version_policy"`
+	RevisionReason string            `json:"revision_reason"`
+	CreatedAt      time.Time         `json:"created_at"`
+}
+
+func newBindingRevisionBody(r memory.BindingRevision) bindingRevisionBody {
+	return bindingRevisionBody{
+		BindingID:      r.BindingID,
+		Revision:       r.Number,
+		Inputs:         r.Inputs,
+		VersionPolicy:  newVersionPolicyBody(r.VersionPolicy),
+		RevisionReason: r.RevisionReason,
+		CreatedAt:      r.CreatedAt,
+	}
+}
+
+type bindingHistoryBody struct {
+	ID             string                `json:"id"`
+	Repository     string                `json:"repository"`
+	Name           string                `json:"name"`
+	ProcedureID    string                `json:"procedure_id"`
+	CreatedAt      time.Time             `json:"created_at"`
+	LatestRevision int                   `json:"latest_revision"`
+	Revisions      []bindingRevisionBody `json:"revisions"`
+}
+
+func newBindingHistoryBody(h memory.BindingHistory) bindingHistoryBody {
+	body := bindingHistoryBody{
+		ID:             h.Binding.ID,
+		Repository:     h.Binding.Repository,
+		Name:           h.Binding.Name,
+		ProcedureID:    h.Binding.ProcedureID,
+		CreatedAt:      h.Binding.CreatedAt,
+		LatestRevision: h.Binding.LatestRevision,
+		Revisions:      make([]bindingRevisionBody, len(h.Revisions)),
+	}
+	for i, r := range h.Revisions {
+		body.Revisions[i] = newBindingRevisionBody(r)
+	}
+	return body
+}
+
+type bindingListBody struct {
+	Bindings []bindingBody `json:"bindings"`
+}
+
 type healthBody struct {
 	Status string `json:"status"`
 }
@@ -117,6 +244,9 @@ type errorDetail struct {
 	// LatestVersion is the procedure's latest version for version_conflict
 	// errors, so the client can re-read it and revise again.
 	LatestVersion int `json:"latest_version,omitzero"`
+	// LatestRevision is the binding's latest revision for revision_conflict
+	// errors.
+	LatestRevision int `json:"latest_revision,omitzero"`
 }
 
 type fieldProblem struct {

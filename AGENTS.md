@@ -15,7 +15,7 @@ Polaroid is a versioned procedural memory service for agents, written in Go, wit
 ## Rules
 
 - **Task knowledge lives in records, not code.** Adding or changing a task must never require a code change. Do not add task-specific fields, endpoints or branches, and do not interpret the members of `contract` or `instructions`. They are free-form JSON objects.
-- **History is immutable and identities are stable.** Never update or delete a stored version. Never change a procedure ID or canonical key. Never edit an applied migration; add a new one. To change these rules, write an ADR first.
+- **History is immutable and identities are stable.** Never update or delete a stored version or binding revision. Never change a procedure ID or canonical key, or a binding's ID, repository, name or procedure. Never edit an applied migration; add a new one. To change these rules, write an ADR first.
 - **Concurrent writes resolve explicitly.** A revision names the version it was based on. A stale base is a conflict. It is never merged or overwritten.
 - **Keep the boundaries.** `internal/memory` must not depend on HTTP, SQL or any storage package. `internal/archtest` enforces this.
 - **Implement only what is built.** Do not add endpoints, fields or no-op code for planned capabilities. Planned behavior belongs in the roadmap, marked as planned.
@@ -42,7 +42,7 @@ Polaroid is a versioned procedural memory service for agents, written in Go, wit
 | `make test` / `make race` | Runs the tests, or the tests with the race detector. |
 | `make build` | Builds `bin/polaroidd` and `bin/polaroid`. |
 | `make vuln` | Runs govulncheck. Needs network. |
-| `make demo` | Runs the live create, revise, conflict and restart demonstration. Needs `jq`. |
+| `make demo` | Runs the live create, revise, conflict, two-repository binding and restart demonstration. Needs `jq`. |
 | `make run ARGS="-db x.db"` | Runs the daemon. |
 
 ## Layout

@@ -2,6 +2,8 @@
 
 This page defines Polaroid's records, how they are identified and how they are versioned. Each section is marked as **implemented** or **planned**. The [HTTP API](http-api.md) serves the implemented records with exactly these field names.
 
+Summary: a **procedure** is a shared identity with immutable **versions**. A **binding** lets one repository use a procedure under a local name, with immutable **binding revisions** that hold the repository's inputs and version policy.
+
 ## Implemented records
 
 ### Procedure (implemented)
@@ -46,14 +48,44 @@ The established design also gives a version **references** to other procedures. 
 4. Versions are never modified or deleted, and their numbers have no gaps. The database rejects violations with triggers, even for clients that bypass `polaroidd`.
 5. The intended agent loop is: read the latest version, edit it, and submit it with `base_version` set to that version. On a conflict, re-read, re-apply the change and submit again.
 
+### Repository binding (implemented)
+
+A binding records that a repository uses a shared procedure under a repository-local name. It refers to the procedure by ID and never copies its content, so the procedure's history is the same for every repository that binds it. Identity rules are in [ADR-0007](decisions/0007-repository-identity-for-bindings.md).
+
+| Field | Type | Set by | Rules |
+| --- | --- | --- | --- |
+| `id` | string | server | A UUIDv7, opaque to clients. Never changes. |
+| `repository` | string | client, at creation | A canonical path: 1–255 bytes of `/`-separated segments, each of lowercase ASCII letters, digits, `.`, `_` and `-`. No empty, `.` or `..` segment, and no `.git` suffix. For example `github.com/ashuangiras/polaroid`, or a chosen name such as `scratch`. Never changes. |
+| `name` | string | client, at creation | The repository-local name, in the canonical-key format. `(repository, name)` is unique. Never changes. |
+| `procedure_id` | string | client, at creation | An existing procedure. Never changes. |
+| `created_at` | RFC 3339 timestamp, UTC | server | |
+| `latest_revision` | integer ≥ 1 | derived | The highest revision number. |
+
+For a repository with a remote, clients derive `repository` from the remote: host and path, lowercase, without scheme, user, port or `.git`. Polaroid validates the format and never rewrites it. A duplicate `(repository, name)` gets `409 binding_exists`. The same procedure may be bound under several names in one repository. Polaroid has no repository records: a repository is the identifier its bindings share.
+
+### Binding revision (implemented)
+
+A binding revision is one immutable configuration of a binding.
+
+| Field | Type | Set by | Rules |
+| --- | --- | --- | --- |
+| `binding_id` | string | server | The owning binding. |
+| `revision` | integer ≥ 1 | server | 1 at creation. Each revision gets the latest revision plus 1. |
+| `inputs` | JSON object | client | Required, and may be `{}`. The repository's local input values. The members are free-form, and they are not checked against the procedure's `contract`. |
+| `version_policy` | JSON object | client | Exactly one of `{"pin": N}` or `{"contextual": {}}`. |
+| `revision_reason` | string | client | Required and not blank. |
+| `created_at` | RFC 3339 timestamp, UTC | server | |
+
+- **`{"pin": N}`** selects version `N` of the bound procedure. `N` must be an integer of at least 1, and the procedure must have that version when the revision is stored; otherwise the request gets `400` naming `revision.version_policy.pin`.
+- **`{"contextual": {}}`** asks for contextual resolution. It is stored and returned exactly as given. Contextual resolution is **not implemented** (increment 3): no endpoint resolves it, and no response names a selected version. The `contextual` object accepts no members yet. Any member is rejected, so parameters can be added later without changing the meaning of stored policies.
+
+`inputs` is stored like `contract`: insignificant whitespace removed, everything else exactly as submitted.
+
+Binding revisions follow the [versioning rules](#versioning-rules-implemented) with `base_revision` in place of `base_version`. A binding and its revision 1 are created in one atomic write. A revision is stored only if `base_revision` is the latest revision; any other base gets `409 revision_conflict` with `latest_revision`. Database triggers reject `UPDATE` and `DELETE` of bindings and revisions, gaps in revision numbers, and a pin to a version the procedure does not have.
+
 ## Planned records (not implemented)
 
 These follow the established design. None of them exist in code, storage or the API yet. Their fields and rules are settled in the [roadmap](../development/roadmap.md) work items, and the open questions below must be answered before implementation.
-
-### Repository binding and binding revision (increment 2)
-
-- A **repository binding** is a repository-local reference to a shared procedure. It holds the repository identity, the procedure, local input values and a version-selection policy.
-- A **binding revision** is an immutable snapshot of the binding's configuration. Revisions are guarded by a base revision, as procedure versions are, so concurrent edits conflict instead of overwriting each other.
 
 ### Subprocedure reference (increment 2)
 
@@ -77,7 +109,7 @@ A procedure version may refer to other procedures through **named references**. 
 ### Open questions
 
 - What does contextual resolution select before any evidence exists: the latest version, or the latest version verified in a matching context?
-- How are a repository and an environment identified? For example, by remote URL or by a canonical name, and with which environment attributes?
+- How is an environment identified, and with which attributes? (Repositories are identified by canonical path; see [ADR-0007](decisions/0007-repository-identity-for-bindings.md).)
 - How is evidence stored, inline or by reference, and with what size limits?
 
 ## Compatibility

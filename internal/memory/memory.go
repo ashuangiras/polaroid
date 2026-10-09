@@ -1,9 +1,11 @@
-// Package memory defines Polaroid's generic procedure records, their identity
-// and versioning rules, and the operations agents perform on them.
+// Package memory defines Polaroid's generic procedure and binding records,
+// their identity and versioning rules, and the operations agents perform on
+// them.
 //
 // The package knows nothing about HTTP or the storage engine. Task knowledge
-// lives in record content (philosophy, method, contract, instructions); this
-// package validates the shape of that content but never interprets it.
+// lives in record content (philosophy, method, contract, instructions, binding
+// inputs); this package validates the shape of that content but never
+// interprets it.
 package memory
 
 import (

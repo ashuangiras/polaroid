@@ -3,7 +3,8 @@
 // Every write runs in one transaction that takes SQLite's write lock when it
 // begins, so concurrent writers queue instead of interleaving. Every read is a
 // single statement, so it observes one consistent snapshot. Schema triggers
-// reject updates and deletes of stored records, and gaps in version numbers.
+// reject updates and deletes of stored records, and gaps in version and
+// revision numbers.
 package sqlite
 
 import (

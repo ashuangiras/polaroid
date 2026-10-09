@@ -142,7 +142,36 @@ type errorJSON struct {
 		Field   string `json:"field"`
 		Message string `json:"message"`
 	} `json:"fields"`
-	LatestVersion int `json:"latest_version"`
+	LatestVersion  int `json:"latest_version"`
+	LatestRevision int `json:"latest_revision"`
+}
+
+type bindingJSON struct {
+	ID             string    `json:"id"`
+	Repository     string    `json:"repository"`
+	Name           string    `json:"name"`
+	ProcedureID    string    `json:"procedure_id"`
+	CreatedAt      time.Time `json:"created_at"`
+	LatestRevision int       `json:"latest_revision"`
+}
+
+type bindingRevisionJSON struct {
+	BindingID      string         `json:"binding_id"`
+	Revision       int            `json:"revision"`
+	Inputs         jsontext.Value `json:"inputs"`
+	VersionPolicy  jsontext.Value `json:"version_policy"`
+	RevisionReason string         `json:"revision_reason"`
+	CreatedAt      time.Time      `json:"created_at"`
+}
+
+type bindingHistoryJSON struct {
+	ID             string           `json:"id"`
+	Repository     string           `json:"repository"`
+	Name           string           `json:"name"`
+	ProcedureID    string           `json:"procedure_id"`
+	CreatedAt      time.Time        `json:"created_at"`
+	LatestRevision int              `json:"latest_revision"`
+	Revisions      []jsontext.Value `json:"revisions"`
 }
 
 func decodeStrict[T any](t *testing.T, b []byte) T {

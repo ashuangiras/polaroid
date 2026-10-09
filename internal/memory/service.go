@@ -8,10 +8,10 @@ import (
 	"uuid"
 )
 
-// Store persists procedures and their versions.
+// Store persists procedures, bindings and their histories.
 //
 // Implementations must make every write atomic, must never modify or delete a
-// stored procedure or version, and must enforce canonical-key uniqueness.
+// stored record, and must enforce canonical-key and binding-name uniqueness.
 type Store interface {
 	// CreateProcedure stores p together with its first version. It returns an
 	// error wrapping ErrCanonicalKeyExists if p.CanonicalKey is already used.
@@ -34,6 +34,32 @@ type Store interface {
 
 	// Version returns one version, or an error wrapping ErrNotFound.
 	Version(ctx context.Context, procedureID string, number int) (Version, error)
+
+	// CreateBinding stores b together with its first revision. It returns an
+	// error wrapping ErrNotFound if b.ProcedureID does not exist,
+	// ErrPinnedVersionNotFound if first pins a version the procedure does not
+	// have, and ErrBindingExists if b.Repository already has a binding named
+	// b.Name.
+	CreateBinding(ctx context.Context, b Binding, first BindingRevision) error
+
+	// AppendBindingRevision stores next if, and only if, baseRevision is the
+	// latest revision of next.BindingID; the check and the write are one
+	// atomic step. Callers set next.Number to baseRevision+1. It returns a
+	// *RevisionConflictError when baseRevision is not the latest revision, an
+	// error wrapping ErrNotFound when the binding does not exist, and
+	// ErrPinnedVersionNotFound when next pins a version the bound procedure
+	// does not have.
+	AppendBindingRevision(ctx context.Context, baseRevision int, next BindingRevision) error
+
+	// ListBindings returns the bindings of one repository ordered by name.
+	ListBindings(ctx context.Context, repository string) ([]Binding, error)
+
+	// BindingHistory returns a consistent snapshot of a binding and all of its
+	// revisions, or an error wrapping ErrNotFound.
+	BindingHistory(ctx context.Context, id string) (BindingHistory, error)
+
+	// BindingRevision returns one revision, or an error wrapping ErrNotFound.
+	BindingRevision(ctx context.Context, bindingID string, number int) (BindingRevision, error)
 
 	// Ping reports whether the store can serve requests.
 	Ping(ctx context.Context) error

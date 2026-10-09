@@ -14,14 +14,15 @@ Agents use Polaroid in a loop:
 
 Polaroid does not run an LLM, and it does not execute instructions. Its code manages generic records, versions, relationships, resolution and evidence. Task knowledge lives in the records, so adding a task never requires a code change.
 
-> **Status: increment 1 of the [roadmap](docs/development/roadmap.md).** Procedure identity and immutable version storage work end to end. Repository bindings, subprocedure composition, execution evidence and contextual resolution are planned and **not implemented**. The current state and the verification evidence are in [docs/development/status.md](docs/development/status.md).
+> **Status: increment 2 of the [roadmap](docs/development/roadmap.md) is in progress.** Procedure identity, immutable version storage and repository bindings work end to end. Subprocedure composition, execution evidence and contextual resolution are planned and **not implemented**. The current state and the verification evidence are in [docs/development/status.md](docs/development/status.md).
 
 ## What works today
 
 - Create a procedure. It gets a stable ID and a unique canonical key, such as `go.dependency.add`. Its version 1 holds philosophy, method, contract (a JSON object), instructions (a JSON object) and a revision reason.
 - List procedures. Retrieve a procedure with its full version history, by ID or by canonical key. Retrieve a single version.
 - Append a version against an expected base version. A stale base is rejected with `409`, and history is never overwritten. Of several concurrent revisions from the same base, exactly one succeeds.
-- Records persist in SQLite. Stored versions are immutable, which the database itself enforces.
+- Bind a procedure in a repository under a local name, without copying it. A binding's immutable revisions hold the repository's inputs and a version policy: a pinned version, or a contextual policy that is stored but not resolved yet. Binding revisions use the same expected-base rule.
+- Records persist in SQLite. Stored versions and binding revisions are immutable, which the database itself enforces.
 - `GET /healthz`, a JSON HTTP API ([contract](docs/architecture/http-api.md)) and a generic CLI.
 
 ## Prerequisites
@@ -46,7 +47,7 @@ bin/polaroid revise <id> examples/procedures/go-dependency-add/v2.revise.json   
 kill %1                                      # graceful shutdown
 ```
 
-Or run the scripted version, which also restarts the daemon and checks that history persisted: `make demo`.
+Or run the scripted version, which also binds the procedure in two repositories, restarts the daemon and checks that every history persisted: `make demo`.
 
 ## Commands
 
