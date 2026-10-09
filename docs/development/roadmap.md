@@ -48,10 +48,11 @@ No new product capability: the loop that increments 1 to 4 built is used on real
 ## Increment 6 — Several repositories in one catalog (done)
 
 1. [#35 Organize procedural knowledge, execution history and feedback for use by several repositories](https://github.com/ashuangiras/polaroid/issues/35) — **done** ([ADR-0019](../architecture/decisions/0019-repository-registry.md), [ADR-0020](../architecture/decisions/0020-procedure-origin-and-applicability.md), [ADR-0021](../architecture/decisions/0021-targeted-feedback-and-bounded-lists.md), [procedural-loop.md](procedural-loop.md#several-repositories-35))
+2. [#37 Consolidate repository identity in verification, pagination guarantees and applicability discovery](https://github.com/ashuangiras/polaroid/issues/37) (depends on #35) — **done** ([ADR-0022](../architecture/decisions/0022-repository-identity-in-evidence.md), [ADR-0023](../architecture/decisions/0023-pagination-guarantees-and-scope-labels.md), [procedural-loop.md](procedural-loop.md#identity-pages-and-first-runs-of-the-shared-versions-37))
 
 ## Later (unordered, not yet scoped)
 
-- Onboard a second real repository: register it, bind the shared development procedures with its own commands, and verify one of its commits through them.
+- Onboard a second real repository: register it, bind the shared development procedures with its own commands, and verify one of its commits through them. It can rely on the identity, pagination and discovery contracts of #37.
 - Semantic discovery and duplicate suggestions for procedures.
 - Merging two registered repositories (identity consolidation); aliases exist since #35, but a merge does not.
 - Access control for reads and writes ([ADR-0006](../architecture/decisions/0006-local-unauthenticated-api.md)).
