@@ -63,9 +63,9 @@ Version 1 of `go.module.checks` and the failed executions remain readable. Versi
 
 ## Fresh-session check
 
-**Status: pending.** A session that has not seen this conversation must retrieve the corrected procedure from Polaroid, follow it, record new evidence and confirm the result. Its evidence goes here and on #28.
+**Status: done, by a fresh-context subagent.** The check below was run by a Copilot subagent started from the authoring session. It had no access to that conversation; its only input was the prompt below, which names the goal, the repository, the service and generic operating rules, but no procedure steps. It is not a chat session started by a person. Anyone can repeat the check with the same prompt in a new Copilot chat, and add the evidence here.
 
-Prompt to give a new Copilot chat session in this workspace, with `polaroidd -db bin/dogfood/polaroid.db` running on `127.0.0.1:7417`:
+Prompt, for a new session in this workspace with `polaroidd -db bin/dogfood/polaroid.db` running on `127.0.0.1:7417`:
 
 ```text
 Goal: verify the change on branch issue-28-procedural-loop of this repository
@@ -106,7 +106,13 @@ Finish with: the commit verified; the binding resolution before you ran
 version and outcome; the parent's verification; and the resolution after.
 ```
 
-Evidence: _pending._
+**Evidence** (2026-10-09, same store; checked afterwards over MCP by the authoring session):
+- **Commit verified:** `ebe54c7d89026fe9f332d63b6b6e1149866f1a98`, the head of `issue-28-procedural-loop` at the time, in a detached worktree at `/tmp/polaroid-verify-ebe54c7`, `working_tree: clean` before and after.
+- **Resolution before the run** (`darwin-arm64.local`): `dev.change.verify` v1, `go.module.build` v1 and **`go.module.checks` v2**, all `selected_by: evidence`, `verified_by` `01a1216f-564c…`, `01a1216f-1c23…` and `01a1216e-7790…`, the records of the corrected run above. The session read the selected versions from Polaroid; v2 is the corrected one.
+- **Executions:** `go.module.build` v1 `01a1217e-2ea6-72e5-869e-3052ac0e71ad` succeeded; `go.module.checks` v2 `01a12181-53c9-7ed4-9f8a-171d1de61b92` succeeded (`go test ./...` 7 packages `ok`; `make check` `0 issues.`, `deps-check: PASS`, no cached results; `make vuln` `No vulnerabilities found.`; `make demo` `demo: PASS`; `make e2e` `passed=192 failed=0`; `make e2e-mcp E2E_INTEROP=0` `passed=81 failed=0`, interop recorded as not run); `dev.change.verify` v1 `01a12181-83fb-73be-96a4-670443fcbe1b` succeeded, linking both.
+- **Verification:** `get_verification` on `01a12181-83fb…` is **verified**, combination `{build: 1, checks: 2}` at `ebe54c7`. `list_verifications` for `dev.change.verify` v1 now lists three combinations: `d306ae9` with `checks` v1 (unverified), `d306ae9` with `checks` v2 (verified) and `ebe54c7` with `checks` v2 (verified). The earlier ones are unchanged.
+- **Resolution after:** the same versions, all `selected_by: evidence`, now `verified_by` the session's three executions.
+- **No instruction was wrong**, so the session appended no version; `go.module.checks` is still at version 2.
 
 ## Reproduce
 
