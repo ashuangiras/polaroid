@@ -117,6 +117,24 @@ func pageQuery(w http.ResponseWriter, query url.Values) (memory.Page, bool) {
 	return page, true
 }
 
+// snapshotPageQuery is pageQuery plus the snapshot parameter, true or false
+// (ADR-0023), of the lists that offer it.
+func snapshotPageQuery(w http.ResponseWriter, query url.Values) (memory.Page, bool) {
+	page, ok := pageQuery(w, query)
+	if !ok || !query.Has("snapshot") {
+		return page, ok
+	}
+	switch query.Get("snapshot") {
+	case "true":
+		page.Snapshot = true
+	case "false":
+	default:
+		writeError(w, http.StatusBadRequest, wire.InvalidRequest("snapshot must be true or false", "snapshot", "must be true or false"))
+		return memory.Page{}, false
+	}
+	return page, true
+}
+
 // nonEmpty rejects a given but empty filter parameter, so it is never
 // mistaken for an absent one. On failure it writes the error response.
 func nonEmpty(w http.ResponseWriter, query url.Values, names ...string) bool {

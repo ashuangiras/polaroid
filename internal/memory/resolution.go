@@ -28,13 +28,16 @@ type Target struct {
 	Inputs jsontext.Value
 }
 
-// SelectionEvidence is the execution that selected a node, and where it ran.
-// It says nothing about any other commit, inputs or environment.
+// SelectionEvidence is the execution that selected a node, and where it ran:
+// the identifier it was recorded with and that identifier's registered
+// repository, if any. It says nothing about any other commit, inputs or
+// environment.
 type SelectionEvidence struct {
-	ExecutionID string
-	Repository  string
-	Commit      string
-	Environment string
+	ExecutionID  string
+	Repository   string
+	RepositoryID string
+	Commit       string
+	Environment  string
 }
 
 // check validates c. With optional, an empty context is accepted. A valid
@@ -87,8 +90,11 @@ type ResolutionReader interface {
 	GraphReader
 	VerificationReader
 	// LatestRuns returns the latest execution of each version of a procedure
-	// in c, highest version first.
+	// in c, highest version first. c.Repository matches by identity.
 	LatestRuns(ctx context.Context, procedureID string, c ResolutionContext) ([]VersionRun, error)
+	// Identity returns the registered repository identifier belongs to, or
+	// the zero value if it is not registered.
+	Identity(ctx context.Context, identifier string) (RepositoryIdentity, error)
 }
 
 // Resolution is the version selected for a policy and its resolved graph.
@@ -149,7 +155,7 @@ func (e *evidence) annotate(ctx context.Context, node *GraphNode, inputs jsontex
 		if err != nil {
 			return fmt.Errorf("read evidence %q: %w", node.VerifiedBy, err)
 		}
-		node.Evidence = &SelectionEvidence{ExecutionID: run.ID, Repository: run.Repository, Commit: run.Commit, Environment: run.Environment.Name}
+		node.Evidence = &SelectionEvidence{ExecutionID: run.ID, Repository: run.Repository, RepositoryID: run.Identity.ID, Commit: run.Commit, Environment: run.Environment.Name}
 	}
 	if e.c.Target != nil {
 		status, err := e.targetStatus(ctx, node, inputs)
@@ -182,16 +188,22 @@ func (e *evidence) targetStatus(ctx context.Context, node *GraphNode, inputs jso
 	if err := canonical.Canonicalize(jsontext.CanonicalizeRawInts(false)); err != nil {
 		return CombinationStatus{}, fmt.Errorf("canonicalize target inputs: %w", err)
 	}
+	identity, err := e.r.Identity(ctx, e.c.Repository)
+	if err != nil {
+		return CombinationStatus{}, err
+	}
+	repository, repositoryID := combinationRepository(e.c.Repository, identity)
 	want := Combination{
-		Repository:  e.c.Repository,
-		Commit:      e.c.Target.Commit,
-		Environment: e.c.Environment,
-		Inputs:      canonical,
-		Children:    selectedChildren(node),
+		Repository:   repository,
+		RepositoryID: repositoryID,
+		Commit:       e.c.Target.Commit,
+		Environment:  e.c.Environment,
+		Inputs:       canonical,
+		Children:     selectedChildren(node),
 	}
 	statuses, err := ListCombinations(ctx, e.r, VerificationFilter{
 		ProcedureID: node.ProcedureID, Version: node.Version,
-		Repository: want.Repository, Commit: want.Commit, Environment: want.Environment,
+		Repository: e.c.Repository, Commit: want.Commit, Environment: want.Environment,
 	})
 	if err != nil {
 		return CombinationStatus{}, err

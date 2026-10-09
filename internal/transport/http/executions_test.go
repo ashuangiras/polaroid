@@ -22,6 +22,7 @@ type executionJSON struct {
 	BindingID       string `json:"binding_id"`
 	BindingRevision int    `json:"binding_revision"`
 	Repository      string `json:"repository"`
+	RepositoryID    string `json:"repository_id"`
 	Commit          string `json:"commit"`
 	Environment     struct {
 		Name       string         `json:"name"`

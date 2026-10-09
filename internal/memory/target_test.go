@@ -84,7 +84,7 @@ func TestTargetVerificationIsCommitSpecific(t *testing.T) {
 	c := linux
 	c.Target = &Target{Commit: commitB, Inputs: jsontext.Value(rootInputs)}
 	res := resolve(t, w, "root", pinned(1), c)
-	if ev := res.Graph.Evidence; res.Graph.VerifiedBy != "root-a" || ev == nil || *ev != (SelectionEvidence{"root-a", "github.com/o/r", commitA, "ci.linux"}) {
+	if ev := res.Graph.Evidence; res.Graph.VerifiedBy != "root-a" || ev == nil || *ev != (SelectionEvidence{ExecutionID: "root-a", Repository: "github.com/o/r", Commit: commitA, Environment: "ci.linux"}) {
 		t.Fatalf("selection evidence at B = %+v", ev)
 	}
 	if e := edge(res.Graph.Edges[0]); e != "leaf=2/evidence/leaf2-a" {

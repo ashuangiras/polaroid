@@ -36,6 +36,22 @@ func (r Repository) Identifiers() []string {
 	return ids
 }
 
+// RepositoryIdentity is the registered repository an identifier belongs to:
+// its ID and canonical identifier (ADR-0022). The zero value means the
+// identifier is not registered, and is its own identity.
+type RepositoryIdentity struct {
+	ID         string
+	Identifier string
+}
+
+// identity returns r's identity, or the zero value for nil.
+func (r *Repository) identity() RepositoryIdentity {
+	if r == nil {
+		return RepositoryIdentity{}
+	}
+	return RepositoryIdentity{ID: r.ID, Identifier: r.Identifier}
+}
+
 // NewRepository asks to register a repository under its canonical identifier.
 type NewRepository struct {
 	Identifier string
@@ -131,7 +147,8 @@ func (s *Service) RepositoryByIdentifier(ctx context.Context, identifier string)
 // ListRepositories returns registered repositories, oldest first.
 func (s *Service) ListRepositories(ctx context.Context, page Page) ([]Repository, string, error) {
 	var p problems
-	after := page.timePosition(&p)
+	g := newPager("repositories", true, page)
+	after := g.start(&p)
 	if err := p.err(); err != nil {
 		return nil, "", err
 	}
@@ -139,7 +156,7 @@ func (s *Service) ListRepositories(ctx context.Context, page Page) ([]Repository
 	if err != nil {
 		return nil, "", fmt.Errorf("list repositories: %w", err)
 	}
-	repos, next := trim(page, repos, func(r Repository) string { return timeCursor(r.CreatedAt, r.ID) })
+	repos, next := trim(page, repos, func(r Repository) string { return g.next("", r.CreatedAt, r.ID) })
 	return repos, next, nil
 }
 

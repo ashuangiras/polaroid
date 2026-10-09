@@ -32,8 +32,13 @@ type Store interface {
 	AppendVersion(ctx context.Context, baseVersion int, next Version) error
 
 	// ListProcedures returns the procedures f selects ordered by canonical
-	// key, with one extra item when f.Page.Limit is set and more exist.
+	// key, with one extra item when f.Page.Limit is set and more exist. With
+	// f.Snapshot it reads only what the boundary includes, and returns
+	// ErrInvalidSnapshot for a boundary ProcedureSnapshot did not issue.
 	ListProcedures(ctx context.Context, f ProcedureFilter) ([]Procedure, error)
+
+	// ProcedureSnapshot returns the current boundary of the procedure list.
+	ProcedureSnapshot(ctx context.Context) (Snapshot, error)
 
 	// SetOrigin records a procedure's origin. It returns an error wrapping
 	// ErrNotFound if the procedure does not exist, ErrOriginExists if an
@@ -89,10 +94,15 @@ type Store interface {
 	// does not have.
 	AppendBindingRevision(ctx context.Context, baseRevision int, next BindingRevision) error
 
-	// ListBindings returns the bindings whose repository is one of
-	// identifiers, ordered by name and ID, after the position: all of them
-	// without a limit, else at most limit+1.
-	ListBindings(ctx context.Context, identifiers []string, after *Position, limit int) ([]Binding, error)
+	// ListBindings returns the bindings in f.Repository, by identity, ordered
+	// by name and ID, after the position: all of them without a limit, else
+	// at most limit+1. With f.Snapshot it reads only what the boundary
+	// includes, and returns ErrInvalidSnapshot for a boundary BindingSnapshot
+	// did not issue.
+	ListBindings(ctx context.Context, f BindingFilter) ([]Binding, error)
+
+	// BindingSnapshot returns the current boundary of the binding list.
+	BindingSnapshot(ctx context.Context) (Snapshot, error)
 
 	// BindingHistory returns a consistent snapshot of a binding and all of its
 	// revisions, or an error wrapping ErrNotFound.
@@ -214,14 +224,15 @@ func (s *Service) ReviseProcedure(ctx context.Context, procedureID string, in Re
 // keeps those whose latest version is applicable in that repository; Scope
 // (shared, local or unspecified) those whose latest version declares it;
 // Query those whose canonical key or latest goal contains it, ignoring ASCII
-// case. RepositoryID and After are set by the service for the store.
+// case. After and Snapshot are set by the service for the store: with a
+// Snapshot, "latest" and registration are as of its boundary (ADR-0023).
 type ProcedureFilter struct {
-	Repository   string
-	Scope        string
-	Query        string
-	Page         Page
-	RepositoryID string
-	After        *Position
+	Repository string
+	Scope      string
+	Query      string
+	Page       Page
+	After      *Position
+	Snapshot   Snapshot
 }
 
 // ListProcedures returns the procedures f selects, ordered by canonical key,
@@ -239,23 +250,24 @@ func (s *Service) ListProcedures(ctx context.Context, f ProcedureFilter) ([]Proc
 	if f.Query != "" && strings.TrimSpace(f.Query) == "" {
 		p.add("q", "must not be blank")
 	}
-	f.After = f.Page.keyPosition(&p)
+	f.Query = strings.ToLower(f.Query)
+	g := newPager("procedures", false, f.Page, f.Repository, f.Scope, f.Query)
+	f.After = g.start(&p)
 	if err := p.err(); err != nil {
 		return nil, "", err
 	}
-	if f.Repository != "" {
-		id, err := s.identityID(ctx, f.Repository)
-		if err != nil {
-			return nil, "", err
+	if f.Page.Snapshot && f.After == nil {
+		var err error
+		if g.Snapshot, err = s.store.ProcedureSnapshot(ctx); err != nil {
+			return nil, "", fmt.Errorf("read snapshot boundary: %w", err)
 		}
-		f.RepositoryID = id
 	}
-	f.Query = strings.ToLower(f.Query)
+	f.Snapshot = g.Snapshot
 	procedures, err := s.store.ListProcedures(ctx, f)
 	if err != nil {
-		return nil, "", fmt.Errorf("list procedures: %w", err)
+		return nil, "", listError("procedures", err)
 	}
-	procedures, next := trim(f.Page, procedures, func(p Procedure) string { return keyCursor(p.CanonicalKey, p.ID) })
+	procedures, next := trim(f.Page, procedures, func(p Procedure) string { return g.next(p.CanonicalKey, time.Time{}, p.ID) })
 	return procedures, next, nil
 }
 

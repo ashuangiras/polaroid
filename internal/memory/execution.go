@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"time"
 	"uuid"
 )
@@ -60,10 +61,12 @@ func (e *LinkedChildError) Error() string {
 	return fmt.Sprintf("child %d is already linked to execution %q", e.Index, e.ParentID)
 }
 
-// Execution is an immutable record of one finished run (ADR-0010).
+// Execution is an immutable record of one finished run (ADR-0010). Identity
+// is derived when it is read, never stored (ADR-0022).
 type Execution struct {
 	ID        string
 	CreatedAt time.Time
+	Identity  RepositoryIdentity
 	ExecutionRecord
 }
 
@@ -168,6 +171,11 @@ func (s *Service) RecordExecution(ctx context.Context, in ExecutionRecord) (Exec
 		}
 		return Execution{}, fmt.Errorf("record execution: %w", err)
 	}
+	r, err := s.identity(ctx, e.Repository)
+	if err != nil {
+		return Execution{}, err
+	}
+	e.Identity = r.identity()
 	return e, nil
 }
 
@@ -296,7 +304,8 @@ func (s *Service) ListExecutions(ctx context.Context, f ExecutionFilter) ([]Exec
 	if f.Commit != "" && !commitPattern.MatchString(f.Commit) {
 		p.add("commit", "must be a full commit hash: 40 or 64 lowercase hex characters")
 	}
-	f.After = f.Page.timePosition(&p)
+	g := newPager("executions", true, f.Page, f.ProcedureID, strconv.Itoa(f.Version), f.Repository, f.Commit)
+	f.After = g.start(&p)
 	if err := p.err(); err != nil {
 		return nil, "", err
 	}
@@ -310,6 +319,6 @@ func (s *Service) ListExecutions(ctx context.Context, f ExecutionFilter) ([]Exec
 	if err != nil {
 		return nil, "", fmt.Errorf("list executions: %w", err)
 	}
-	executions, next := trim(f.Page, executions, func(e Execution) string { return timeCursor(e.CreatedAt, e.ID) })
+	executions, next := trim(f.Page, executions, func(e Execution) string { return g.next("", e.CreatedAt, e.ID) })
 	return executions, next, nil
 }

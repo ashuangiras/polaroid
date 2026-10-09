@@ -11,31 +11,36 @@ import (
 
 // graphNodeJSON and bindingResolutionJSON restate the documented shapes.
 type graphNodeJSON struct {
-	ProcedureID       string `json:"procedure_id"`
-	CanonicalKey      string `json:"canonical_key"`
-	Version           int    `json:"version"`
-	VerifiedBy        string `json:"verified_by"`
+	ProcedureID       string         `json:"procedure_id"`
+	CanonicalKey      string         `json:"canonical_key"`
+	Version           int            `json:"version"`
+	Scope             string         `json:"scope"`
+	Applicability     jsontext.Value `json:"applicability"`
+	VerifiedBy        string         `json:"verified_by"`
 	SelectionEvidence *struct {
-		ExecutionID string `json:"execution_id"`
-		Repository  string `json:"repository"`
-		Commit      string `json:"commit"`
-		Environment struct {
+		ExecutionID  string `json:"execution_id"`
+		Repository   string `json:"repository"`
+		RepositoryID string `json:"repository_id"`
+		Commit       string `json:"commit"`
+		Environment  struct {
 			Name string `json:"name"`
 		} `json:"environment"`
 	} `json:"selection_evidence"`
-	TargetVerification *struct {
-		Combination       combinationJSON `json:"combination"`
-		Verified          bool            `json:"verified"`
-		LatestExecutionID string          `json:"latest_execution_id"`
-		ExecutionIDs      []string        `json:"execution_ids"`
-	} `json:"target_verification"`
-	References []struct {
+	TargetVerification *targetVerificationJSON `json:"target_verification"`
+	References         []struct {
 		Name          string         `json:"name"`
 		VersionPolicy jsontext.Value `json:"version_policy"`
 		SelectedBy    string         `json:"selected_by"`
 		Inputs        jsontext.Value `json:"inputs"`
 		Node          graphNodeJSON  `json:"node"`
 	} `json:"references"`
+}
+
+type targetVerificationJSON struct {
+	Combination       combinationJSON `json:"combination"`
+	Verified          bool            `json:"verified"`
+	LatestExecutionID string          `json:"latest_execution_id"`
+	ExecutionIDs      []string        `json:"execution_ids"`
 }
 
 type bindingResolutionJSON struct {

@@ -675,6 +675,25 @@ show 'n=0; after=""; while :; do out="$(bin/polaroid feedbacks limit=2 ${after:+
 check "paging returns every report" equal "$(cut -d" " -f1 <<<"$LAST")" "$(cut -d" " -f2 <<<"$LAST")"
 
 ########################################################################
+section "Identity in evidence, snapshot pages and scope labels" \
+    "Evidence matches by registered repository identity: a run recorded under an alias counts for the canonical identifier, and keeps its own identifier (ADR-0022). Lists are live traversals whose cursors are bound to their parameters; the procedure and binding lists can page a snapshot fixed at the first page. Every version and graph node names its own scope (ADR-0023)." \
+    "\`bin/polaroid record\`, \`verifications ID N\`, \`list limit=… snapshot=true after=…\`, \`get-version ID N\`."
+E2E_COMMIT=2222222222222222222222222222222222222222
+show 'bin/polaroid record <<<"{\"procedure_id\": \"$LOCAL\", \"version\": 1, \"repository\": \"mirror.example/service-a\", \"commit\": \"$E2E_COMMIT\", \"environment\": {\"name\": \"e2e\", \"attributes\": {}}, \"inputs\": {}, \"outcome\": \"succeeded\", \"evidence\": {\"note\": \"e2e\"}}" | jq -c "{repository, repository_id}"'
+check "a run under the alias keeps its identifier and reports the repository" json_has --arg r "$REPO_A" '.repository == "mirror.example/service-a" and .repository_id == $r'
+show 'bin/polaroid verifications "$LOCAL" 1 github.com/example/service-a | jq -c "[.verifications[] | {repository: .combination.repository, verified}]"'
+check "the canonical identifier's combination is verified by it" json_has '. == [{repository: "github.com/example/service-a", verified: true}]'
+show 'bin/polaroid verifications "$LOCAL" 1 github.com/example/service-b | jq -c ".verifications"'
+check "another repository sees none of it" equal "$LAST" '[]'
+show 'first="$(bin/polaroid list limit=1 snapshot=true)"; bin/polaroid create <<<"{\"canonical_key\": \"aaa.e2e.before\", \"version\": {\"philosophy\": \"p\", \"method\": \"m\", \"contract\": {}, \"instructions\": {}, \"revision_reason\": \"e2e\"}}" >/dev/null; n=1; after="$(jq -r .next <<<"$first")"; while [[ -n "$after" ]]; do out="$(bin/polaroid list limit=1 snapshot=true "after=$after")"; n=$((n + 1)); after="$(jq -r ".next // empty" <<<"$out")"; done; echo "$n $(($(bin/polaroid list | jq ".procedures | length") - 1))"'
+check "a snapshot returns the procedures of its first page, not one created meanwhile" equal "$(cut -d" " -f1 <<<"$LAST")" "$(cut -d" " -f2 <<<"$LAST")"
+show 'bin/polaroid list limit=1 scope=shared "after=$(bin/polaroid list limit=1 | jq -r .next)" 2>/dev/null | jq -c "[.error.code, .error.fields[0].field]"'
+check "a cursor reused with other parameters is refused" equal "$LAST" '["invalid_request","after"]'
+show 'bin/polaroid get-version "$ID" 1 | jq -r .scope; bin/polaroid get-version "$LOCAL" 1 | jq -r .scope'
+check "every version names its own scope" equal "$LAST" 'unspecified
+local'
+
+########################################################################
 section "The database enforces immutability itself" \
 	"Even a client that bypasses polaroidd cannot rewrite history: schema triggers reject UPDATE/DELETE of procedures, versions, bindings, binding revisions, references, executions and execution links, feedback reports, repositories, repository identifiers and procedure origins, gaps in numbering, and pins to missing versions. \`PRAGMA user_version\` records the schema version (7 migrations)." \
 	"Open the database with \`sqlite3 polaroid.db\` and try the statements below."

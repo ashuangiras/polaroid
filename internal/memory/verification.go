@@ -20,7 +20,8 @@ type VerificationReader interface {
 }
 
 // VerificationFilter selects the executions of one procedure version,
-// optionally only those in one repository, commit or environment.
+// optionally only those in one repository (by identity, ADR-0022), commit or
+// environment.
 type VerificationFilter struct {
 	ProcedureID string
 	Version     int
@@ -46,14 +47,26 @@ type VerificationProblem struct {
 	ExecutionID string
 }
 
-// Combination is the context an execution verifies (ADR-0012). Inputs are
-// canonical, and Children follow the version's reference order.
+// Combination is the context an execution verifies (ADR-0012). Repository
+// is the identity's canonical identifier when RepositoryID is set, else the
+// unregistered identifier itself (ADR-0022). Inputs are canonical, and
+// Children follow the version's reference order.
 type Combination struct {
-	Repository  string
-	Commit      string
-	Environment string
-	Inputs      jsontext.Value
-	Children    []ChildVersion
+	Repository   string
+	RepositoryID string
+	Commit       string
+	Environment  string
+	Inputs       jsontext.Value
+	Children     []ChildVersion
+}
+
+// combinationRepository returns the repository components of a combination
+// for identifier, whose identity is id.
+func combinationRepository(identifier string, id RepositoryIdentity) (string, string) {
+	if id.ID == "" {
+		return identifier, ""
+	}
+	return id.Identifier, id.ID
 }
 
 // ChildVersion is the version a linked child ran, with its own children.
@@ -147,11 +160,12 @@ func (v *verifier) verify(ctx context.Context, id string) (Verification, error) 
 	if err := inputs.Canonicalize(jsontext.CanonicalizeRawInts(false)); err != nil {
 		return Verification{}, fmt.Errorf("canonicalize inputs of execution %q: %w", id, err)
 	}
+	repository, repositoryID := combinationRepository(e.Repository, e.Identity)
 	out := Verification{
 		ExecutionID: id,
 		ProcedureID: e.ProcedureID,
 		Version:     e.Version,
-		Combination: Combination{Repository: e.Repository, Commit: e.Commit, Environment: e.Environment.Name, Inputs: inputs},
+		Combination: Combination{Repository: repository, RepositoryID: repositoryID, Commit: e.Commit, Environment: e.Environment.Name, Inputs: inputs},
 	}
 	if e.Outcome != OutcomeSucceeded {
 		out.Problems = append(out.Problems, VerificationProblem{Code: ProblemOutcomeFailed})
@@ -194,11 +208,17 @@ func (v *verifier) referenceNames(ctx context.Context, procedureID string, versi
 	return names, nil
 }
 
-// key identifies c. Repositories, commits, environment names and reference
-// names cannot contain NUL, '@', '(', ')' or ',', and inputs are canonical.
+// key identifies c. A registered identity is keyed by its ID, behind a byte
+// no identifier contains; repositories, commits, environment names and
+// reference names cannot contain NUL, '@', '(', ')' or ',', and inputs are
+// canonical.
 func (c Combination) key() string {
 	var b strings.Builder
-	for _, s := range []string{c.Repository, c.Commit, c.Environment, string(c.Inputs)} {
+	repository := c.Repository
+	if c.RepositoryID != "" {
+		repository = "\x01" + c.RepositoryID
+	}
+	for _, s := range []string{repository, c.Commit, c.Environment, string(c.Inputs)} {
 		b.WriteString(s)
 		b.WriteByte(0)
 	}

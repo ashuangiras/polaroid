@@ -23,6 +23,10 @@
 # targeted feedback and pagination (#35), all with scripted outcomes, and the
 # loader replays #35's development records: Polaroid's registration, the
 # origins, the shared classification and a procedure local to Polaroid.
+# Scripted #37 cases show a run under a registered alias verifying the
+# canonical identifier's combination, a later failure deciding it, a
+# snapshot traversal ignoring concurrent creations, a cursor bound to its
+# parameters, and resolution reporting the selected version's own scope.
 # Finally it restarts the daemon and confirms every record is unchanged, and
 # upgrades a database written at schema version 6.
 #
@@ -560,6 +564,45 @@ expect_dev_target "$dev_commit" "root@2 true $parent_c
 build@1 true $build_c
 checks@2 true $checks_c"
 
+step "21. Repository identity in evidence, snapshot pages and per-version scope (#37; scripted regression evidence)"
+c37=1111111111111111111111111111111111111111
+record37() { # record37 REPOSITORY OUTCOME: a scripted run of go.test.run v1 at c37 with A's inputs
+	jq -n --arg p "$test_id" --arg r "$1" --arg o "$2" --arg c "$c37" --argjson in "$fa_inputs" --arg s "$scripted" \
+		'{procedure_id: $p, version: 1, repository: $r, commit: $c, environment: {name: "demo.ci", attributes: {}},
+		  inputs: $in, outcome: $o, evidence: {scripted: $s}}' | bin/polaroid record | jq -r .id
+}
+at37() { bin/polaroid resolve "$1" demo.ci "$c37" "$2" | jq -r '"verified=\(.graph.target_verification.verified) latest=\(.graph.target_verification.latest_execution_id // "-")"'; }
+mirror_run="$(record37 "$mirror_fa" succeeded)"
+jq -e --arg r "$mirror_fa" --arg id "$fa_id" '.repository == $r and .repository_id == $id' <<<"$(bin/polaroid get-execution "$mirror_run")" >/dev/null ||
+	fail "the mirror's run does not keep its identifier beside A's identity"
+[[ "$(at37 "$fa_test" "$fa_inputs")" == "verified=true latest=$mirror_run" ]] || fail "a run under A's alias does not verify A: $(at37 "$fa_test" "$fa_inputs")"
+[[ "$(at37 "$fb_test" "$fa_inputs")" == "verified=false latest=-" ]] || fail "a run under A's alias verifies B"
+failed_run="$(record37 "$repo_fa" failed)"
+[[ "$(at37 "$fa_test" "$fa_inputs")" == "verified=false latest=$failed_run" ]] || fail "a later failure under A's canonical identifier does not decide: $(at37 "$fa_test" "$fa_inputs")"
+jq -e '.outcome == "succeeded"' <<<"$(bin/polaroid get-execution "$mirror_run")" >/dev/null || fail "the mirror's run changed"
+echo "1. a run under $mirror_fa verifies A's combination at ${c37:0:7} (not B's); a later failure under $repo_fa decides it; the run keeps its identifier and outcome"
+
+before37="$(bin/polaroid list | jq -c '[.procedures[].canonical_key]')"
+first37="$(bin/polaroid list limit=1 snapshot=true)"
+for new37 in aaa.demo.before zzz.demo.after; do
+	jq -n --arg k "$new37" --arg s "$scripted" '{canonical_key: $k, version: {philosophy: "p", method: "m", contract: {}, instructions: {}, revision_reason: $s}}' |
+		bin/polaroid create >/dev/null
+done
+seen37="$(jq -c '[.procedures[].canonical_key]' <<<"$first37")" after37="$(jq -r .next <<<"$first37")"
+while [[ -n "$after37" ]]; do
+	page37="$(bin/polaroid list limit=1 snapshot=true after="$after37")"
+	seen37="$(jq -c --argjson s "$seen37" '$s + [.procedures[].canonical_key]' <<<"$page37")" after37="$(jq -r '.next // empty' <<<"$page37")"
+done
+[[ "$seen37" == "$before37" ]] || fail "the snapshot traversal is not the list at its first page: $seen37"
+if refused37="$(bin/polaroid list limit=1 scope=shared after="$(jq -r .next <<<"$first37")" 2>/dev/null)"; then fail "a cursor was accepted with other parameters"; fi
+jq -e '.error.fields[0].field == "after"' <<<"$refused37" >/dev/null || fail "unexpected refusal: $refused37"
+echo "2. a snapshot traversal returned the $(jq length <<<"$before37") procedures of its first page, though two were created meanwhile (one before its cursor); a cursor reused with other parameters is refused"
+
+[[ "$(bin/polaroid get "$verify_id" | jq -c '[.scope] + [.versions[].scope]')" == '["shared","unspecified","unspecified","shared"]' ]] || fail "dev.change.verify scope labels"
+[[ "$(bin/polaroid resolve "$dev_binding" demo.ci "$dev_commit" "$dev_inputs" | jq -r '"\(.graph.version) \(.graph.scope)"')" == "2 unspecified" ]] ||
+	fail "resolution does not report the selected version's own scope"
+echo "3. dev.change.verify is listed as shared (version 3), but resolution selects version 2, whose own scope is unspecified"
+
 dev_snapshot() {
 	bin/polaroid get "$verify_id"
 	bin/polaroid get "$checks_id"
@@ -574,7 +617,7 @@ dev_snapshot() {
 }
 dev_before="$(dev_snapshot)"
 
-step "21. Restart polaroidd and confirm every record persisted"
+step "22. Restart polaroidd and confirm every record persisted"
 stop_daemon
 start_daemon
 [[ "$(bin/polaroid get-by-key "$key")" == "$history" ]] || fail "history differs after restart"
@@ -585,7 +628,7 @@ start_daemon
 echo "every history, binding, execution and verification is byte-for-byte identical after restart"
 stop_daemon
 
-step "22. Upgrade a database written at schema version 6 (#35): history reads back, and registration associates it without rewriting it"
+step "23. Upgrade a database written at schema version 6 (#35): history reads back, and registration associates it without rewriting it"
 legacy="$work/schema-6.db"
 for f in internal/storage/sqlite/migrations/000[1-6]_*.sql; do sqlite3 "$legacy" <"$f"; done
 sqlite3 "$legacy" <<'SQL'
@@ -600,7 +643,7 @@ SQL
 demo_db=$db
 db=$legacy
 start_daemon
-legacy_procedure='{"id":"legacy-p","canonical_key":"legacy.build","created_at":"2026-10-01T12:00:00Z","latest_version":1,"scope":"unspecified","versions":[{"procedure_id":"legacy-p","version":1,"philosophy":"p","method":"m","contract":{},"instructions":{"steps":["build"]},"revision_reason":"Written before #35.","created_at":"2026-10-01T12:00:00Z"}]}'
+legacy_procedure='{"id":"legacy-p","canonical_key":"legacy.build","created_at":"2026-10-01T12:00:00Z","latest_version":1,"scope":"unspecified","versions":[{"procedure_id":"legacy-p","version":1,"philosophy":"p","method":"m","scope":"unspecified","contract":{},"instructions":{"steps":["build"]},"revision_reason":"Written before #35.","created_at":"2026-10-01T12:00:00Z"}]}'
 [[ "$(bin/polaroid get legacy-p)" == "$legacy_procedure" ]] || fail "the legacy procedure reads back differently: $(bin/polaroid get legacy-p)"
 legacy_run="$(bin/polaroid get-execution legacy-e)"
 jq -e '.evidence == {exit: 0} and .binding_id == "legacy-b" and .repository == "example.com/legacy/service"' <<<"$legacy_run" >/dev/null || fail "the legacy execution changed: $legacy_run"
@@ -611,12 +654,17 @@ legacy_repo="$(bin/polaroid register <<<'{"identifier":"example.com/legacy/servi
 bin/polaroid alias "$legacy_repo" <<<'{"identifier":"example.com/legacy/service","reason":"The repository was renamed; this is its old identifier."}' >/dev/null || fail "the old identifier could not be added as an alias"
 [[ "$(bin/polaroid bindings example.com/legacy/service-renamed | jq -r '.bindings[] | .id + " " + .repository')" == "legacy-b example.com/legacy/service" ]] ||
 	fail "the renamed repository does not list the legacy binding under its original identifier"
-[[ "$(bin/polaroid get-execution legacy-e)" == "$legacy_run" ]] || fail "registration rewrote the legacy execution"
+[[ "$(bin/polaroid get-execution legacy-e | jq -c 'del(.repository_id)')" == "$(jq -c . <<<"$legacy_run")" ]] || fail "registration rewrote the legacy execution"
+jq -e --arg r "$legacy_repo" '.repository == "example.com/legacy/service" and .repository_id == $r' <<<"$(bin/polaroid get-execution legacy-e)" >/dev/null ||
+	fail "the legacy execution does not report its registered repository beside its own identifier"
+jq -e --arg r "$legacy_repo" '.verified and .combination.repository == "example.com/legacy/service-renamed" and .combination.repository_id == $r' <<<"$(bin/polaroid verification legacy-e)" >/dev/null ||
+	fail "the legacy combination is not under the renamed repository's identity (ADR-0022)"
+legacy_run="$(bin/polaroid get-execution legacy-e)"
 stop_daemon
 start_daemon
 [[ "$(bin/polaroid get legacy-p)" == "$legacy_procedure" && "$(bin/polaroid get-execution legacy-e)" == "$legacy_run" ]] || fail "the upgraded database differs after a restart"
 stop_daemon
 db=$demo_db
-echo "a schema-6 store upgraded: its procedure, execution, verification and report read back; registering a new identifier with the old one as alias lists the binding without rewriting it"
+echo "a schema-6 store upgraded: its procedure, execution, verification and report read back; registering a new identifier with the old one as alias lists the binding and moves its combination to the new identity, without rewriting the execution"
 
 printf '\ndemo: PASS\n'

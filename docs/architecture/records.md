@@ -16,8 +16,8 @@ A procedure is a stable identity. It does not belong to any repository, so many 
 | `canonical_key` | string | client, at creation | 1–128 bytes, matching `^[a-z0-9]+([._-][a-z0-9]+)*$`, for example `go.dependency.add`. Unique across all procedures. Never changes. |
 | `created_at` | RFC 3339 timestamp, UTC | server | |
 | `latest_version` | integer ≥ 1 | derived | The highest version number. |
-| `scope` | string | derived | The latest version's [applicability](#applicability-and-origin-implemented): `shared`, `local` or `unspecified`. |
-| `goal`, `applicability` | string, JSON object | derived | The latest version's, omitted when it has none. |
+| `scope` | string | derived | Version `latest_version`'s [applicability](#applicability-and-origin-implemented): `shared`, `local` or `unspecified`. It describes that version only; resolution may select another, whose own `scope` its graph node reports ([ADR-0023](decisions/0023-pagination-guarantees-and-scope-labels.md)). |
+| `goal`, `applicability` | string, JSON object | derived | Version `latest_version`'s, omitted when it has none. |
 | `origin` | `{repository_id, reason, created_at}` | client, once | Where and why the procedure was first created. Omitted until recorded. |
 
 The canonical key has exactly one accepted spelling: lowercase, with single separators. So exact-match uniqueness also rules out duplicates that differ only by case or separator. The storage layer enforces uniqueness, and a duplicate gets `409 canonical_key_exists`. Canonical keys stay unique across the whole catalog, not per repository.
@@ -35,6 +35,7 @@ A version is one immutable definition of a procedure.
 | `philosophy` | string | client | Required and not blank. Why the procedure works the way it does. |
 | `method` | string | client | Required and not blank. The approach in brief. |
 | `goal` | string | client | Optional, single-line and not blank when given. What the procedure achieves; searched by discovery. Omitted from responses when absent. |
+| `scope` | string | derived | This version's own declaration: `shared`, `local` or `unspecified`. Always present in responses. |
 | `applicability` | JSON object | client | Optional: `{"shared": {}}`, or `{"repository": "<repository id>"}` for a version local to one registered repository. Absent means *unspecified*, and is omitted from responses. See [applicability and origin](#applicability-and-origin-implemented). |
 | `contract` | JSON object | client | Required. For example inputs, outputs, preconditions and postconditions. The members are free-form. |
 | `instructions` | JSON object | client | Required. The members are free-form, for example `steps`. |
@@ -93,7 +94,7 @@ A repository is a registered identity ([ADR-0019](decisions/0019-repository-regi
 - **Identifiers are unique and permanent.** An identifier belongs to at most one repository, as its canonical identifier or as an alias, and is never moved or removed. Registering a taken identifier, either way, is `409 repository_identifier_exists`; of two racing registrations, exactly one succeeds.
 - **Normalization is not identity.** Polaroid validates the one accepted spelling and never rewrites it. It never decides that two identifiers are the same repository: a fork, a rename or a mirror is a different repository until someone adds its identifier as an alias.
 - **Association is derived.** Bindings, executions and feedback keep the identifier they were written with. Which repository they belong to is read through the registry, so a later registration or alias associates earlier records without changing them. Unregistered identifiers stay valid wherever they were valid.
-- **Where identity counts:** repository filters on lists (bindings, executions, feedback, and procedure discovery) cover every identifier of the registered repository; applicability compares repository IDs; and a binding's local name is unique across the repository's identifiers, so an alias that would bring a second binding of a name is refused with `409 binding_exists`. Verification combinations and resolution evidence still compare identifier strings exactly, so an alias never merges or changes evidence. Record runs with the canonical identifier.
+- **Where identity counts:** repository filters on lists (bindings, executions, feedback, and procedure discovery) cover every identifier of the registered repository; applicability compares repository IDs; a binding's local name is unique across the repository's identifiers, so an alias that would bring a second binding of a name is refused with `409 binding_exists`; and verification combinations and resolution evidence match by identity ([below](#verification-implemented), [ADR-0022](decisions/0022-repository-identity-in-evidence.md)). Writes still compare identifiers exactly: a child execution names its parent's identifier, and an execution under a binding names the binding's. Prefer the canonical identifier, which lookups by alias return.
 
 ### Applicability and origin (implemented)
 
@@ -107,6 +108,7 @@ A repository is a registered identity ([ADR-0019](decisions/0019-repository-regi
 - **Resolution:** a binding's contextual policy selects among applicable versions. The graph endpoint with a repository refuses a version that is not applicable there (`400` on `repository`).
 - **Executions:** the version must be applicable in the execution's repository, and each linked child must be admitted by the parent's version (`400`). Executions recorded earlier are unchanged.
 - **Existing versions** are unspecified. Nothing is classified by migration; a version that declares applicability is appended by someone who has read the contract and its bindings.
+- **Declaration, admissibility and verification are separate** ([ADR-0023](decisions/0023-pagination-guarantees-and-scope-labels.md)). `shared` declares a contract intended for reuse and `local` one for a single repository; `unspecified` declares nothing, stays admissible everywhere for compatibility, and is no claim of general reuse. None of them says a version was verified anywhere. Every version and graph node reports its own `scope`; a procedure's `scope` is that of `latest_version` only. Before reusing a procedure, resolve it in your repository, read the selected node's `version` and `scope`, and read that version's contract.
 
 ### Repository binding (implemented)
 
@@ -152,7 +154,8 @@ An execution is an immutable record of one finished run, written once after the 
 | `id` | string | server | A UUIDv7. |
 | `procedure_id`, `version` | string, integer ≥ 1 | client | The exact version that ran. It must exist. |
 | `binding_id`, `binding_revision` | string, integer ≥ 1 | client | Optional. Give both or neither. The binding must be for this procedure and repository, and a pinned revision must pin `version`. Both fields are omitted from responses when no binding was used. |
-| `repository` | string | client | The canonical path ([ADR-0007](decisions/0007-repository-identity-for-bindings.md)). |
+| `repository` | string | client | The canonical path ([ADR-0007](decisions/0007-repository-identity-for-bindings.md)), exactly as submitted, forever. |
+| `repository_id` | string | derived | The registered repository `repository` belongs to, read from the registry on every response; omitted while it is not registered ([ADR-0022](decisions/0022-repository-identity-in-evidence.md)). |
 | `commit` | string | client | A full commit hash: 40 or 64 lowercase hex characters. |
 | `environment` | object | client | `{"name": ..., "attributes": {...}}`. `name` uses the canonical-key format and is the environment's identity. `attributes` is a free-form JSON object, which may be `{}` and is never interpreted. |
 | `inputs` | JSON object | client | The effective inputs. Free-form, and may be `{}`. |
@@ -182,18 +185,19 @@ Verification is derived from executions and their links on every read. Nothing i
 
 - **Verified execution.** An execution is verified when it succeeded **and** every reference of its version is fulfilled by a linked child that is itself verified, recursively. An execution of a version without references is verified when it succeeded. A parent without a child for some reference is never verified. Each direct reason is reported as `outcome_failed`, `missing_child` or `child_not_verified`.
 - **Combination.** An execution verifies one combination, made of these parts:
-  - its `repository`, `commit` and `environment.name`. `environment.attributes` is not part of it;
+  - its repository **identity**, `commit` and `environment.name`. `environment.attributes` is not part of it. The identity of a registered identifier, canonical or alias, is its repository; an unregistered identifier is its own identity and matches only itself. Similar names, forks, equal commits or identical trees never make two identifiers one. A combination reports `repository` (the canonical identifier, or the unregistered identifier) and `repository_id` when registered ([ADR-0022](decisions/0022-repository-identity-in-evidence.md));
   - its `inputs` in canonical form: object members sorted, insignificant whitespace removed, and strings and non-integer numbers canonicalized as in RFC 8785. Integers are kept exact, so `1.0`, `1e0` and `1` are equal, but distinct large integers never are. Member order never matters, so equivalent inputs that arrive with their members in a different order, as some MCP clients send them, are the same combination. Array elements keep their order, so `[1, 2]` and `[2, 1]` are different inputs;
   - its **child-version tree**: each linked child's reference name and version, with that child's own tree, in the version's reference order.
 
   Success in one combination says nothing about another. Changing any child's version anywhere in the tree makes a new combination, which needs a fresh parent execution. Earlier executions stay with the combination they were recorded in.
-- **Status of a combination.** It is the verification of its **latest** execution, by `created_at` and then `id`. A failure after a success therefore makes the combination unverified until a newer execution succeeds. Every execution remains listed in `execution_ids`.
+- **Status of a combination.** It is the verification of its **latest** execution, by `created_at` and then `id`, across every identifier of the identity. A failure after a success therefore makes the combination unverified until a newer execution succeeds, under whichever identifier either was recorded. Every execution remains listed in `execution_ids`.
+- **Registering an alias later** is retroactive for derived verification: from then on, executions recorded earlier under the alias belong to the same combinations as those under the canonical identifier, and the latest execution across both decides each status, so a status can change in either direction. No execution changes, and identifiers are never removed, so registration only ever merges combinations.
 
 ### Contextual resolution (implemented)
 
 Contextual references and contextual binding policies resolve from verification evidence in a requesting context ([ADR-0013](decisions/0013-evidence-based-resolution.md)). Nothing is stored for a resolution.
 
-- **Context:** a `repository` and an `environment` name. The commit and inputs are not part of it.
+- **Context:** a `repository` and an `environment` name. The commit and inputs are not part of it. The repository matches by identity.
 - **Verified in the context:** a version is verified in a context when its latest execution with that repository and environment is verified, whatever its commit and inputs. That execution is the version's *evidence*: selection evidence, not verification at any particular commit ([below](#selection-evidence-and-target-verification-implemented)).
 - **Selection:** the walk starts at the root, which carries its own evidence if it has any.
   - **Under a node with evidence:** every reference selects the version of the child execution that the evidence linked for it, and that child execution becomes the child node's evidence. A verified combination is thus followed as a whole.
@@ -209,7 +213,7 @@ Contextual references and contextual binding policies resolve from verification 
 
 Resolution answers two different questions, and reports them separately ([ADR-0018](decisions/0018-selection-evidence-and-target-verification.md)).
 
-- **Selection evidence** says why a version, or a whole child combination, was selected: an earlier verified execution in the context, at **any commit and with any inputs**. Each such node reports `selection_evidence`: `execution_id`, `repository`, `commit` and `environment`. It is a reason to try the version, not verification of anything else. `verified_by` repeats the execution ID, for compatibility, and means the same.
+- **Selection evidence** says why a version, or a whole child combination, was selected: an earlier verified execution in the context, at **any commit and with any inputs**. Each such node reports `selection_evidence`: `execution_id`, `repository` (the identifier that execution was recorded with), `repository_id` when registered, `commit` and `environment`. It is a reason to try the version, not verification of anything else. `verified_by` repeats the execution ID, for compatibility, and means the same.
 - **Target verification** says whether the selected combination is verified at one exact target. It is reported only when the request names a target: a `commit` and the root's effective `inputs`, given together, in the context's repository and environment. Each node then reports `target_verification` for its own selected combination at that target:
   - the repository, the target commit and the environment name;
   - its effective inputs: the root's are the target's `inputs`; a child's come from its reference's input mapping applied to its parent's effective inputs (`{"input": p}` takes the parent's member `p`, `{"value": v}` takes `v`, and a child input whose parent member is absent is left out);
@@ -251,3 +255,4 @@ No records are planned in the current increments. Later work (semantic discovery
 - Field names and rules on this page are part of the `/v1` API contract. Adding an optional field is backward-compatible. Renaming or removing a field, or tightening a rule, needs a new API version and an ADR.
 - Schema changes are new migrations, and they never rewrite stored records. A column added later must give existing rows a value that means "absent", not an invented one.
 - Migration 7 ([#35](https://github.com/ashuangiras/polaroid/issues/35)) adds the repository registry, origins, `goal` and `applicability`, and the feedback subject columns. Existing versions read back unspecified, existing reports without a subject, and nothing is registered. Responses gain `scope` on procedures, and omit every absent new field, so existing versions, bindings, executions and reports are served as before. Requests that do not use the new fields behave as before, except that recording an execution, creating or revising a binding, or writing a version is refused where a declared applicability forbids it, which no stored version could declare before.
+- [#37](https://github.com/ashuangiras/polaroid/issues/37) has no migration. Responses add `scope` on every version and graph node, and `repository_id` on executions, selection evidence and combinations of registered identifiers. Derived verification and resolution now match evidence by repository identity: nothing changes for unregistered identifiers or repositories without aliases, while executions recorded under an alias join their repository's combinations, which may change those combinations' status, and whose `combination.repository` becomes the canonical identifier. No stored record changes.

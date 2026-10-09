@@ -119,6 +119,7 @@ type versionJSON struct {
 	Version        int            `json:"version"`
 	Philosophy     string         `json:"philosophy"`
 	Method         string         `json:"method"`
+	Scope          string         `json:"scope"`
 	Goal           string         `json:"goal"`
 	Applicability  jsontext.Value `json:"applicability"`
 	Contract       jsontext.Value `json:"contract"`

@@ -152,7 +152,7 @@ func TestBindingNamesAreUniqueAcrossARepositorysIdentifiers(t *testing.T) {
 	if (errs[0] == nil) == (errs[1] == nil) || !errors.Is(errors.Join(errs...), memory.ErrBindingExists) {
 		t.Fatalf("racing bindings: %v, want exactly one binding_exists", errs)
 	}
-	list, err := s.ListBindings(ctx, []string{"github.com/o/a", "old.example/o/a"}, nil, 0)
+	list, err := s.ListBindings(ctx, memory.BindingFilter{Repository: "old.example/o/a"})
 	if err != nil || len(list) != 2 {
 		t.Fatalf("bindings of the repository = %+v, %v", list, err)
 	}

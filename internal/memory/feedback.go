@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"time"
 	"uuid"
 )
@@ -353,7 +354,8 @@ func (s *Service) ListFeedback(ctx context.Context, f FeedbackFilter) ([]Feedbac
 	if f.Repository != "" {
 		checkRepository(&p, "repository", f.Repository)
 	}
-	f.After = f.Page.timePosition(&p)
+	g := newPager("feedback", true, f.Page, string(f.Kind), string(f.SubjectType), f.SubjectID, strconv.Itoa(f.SubjectVersion), f.Repository)
+	f.After = g.start(&p)
 	if err := p.err(); err != nil {
 		return nil, "", err
 	}
@@ -367,6 +369,6 @@ func (s *Service) ListFeedback(ctx context.Context, f FeedbackFilter) ([]Feedbac
 	if err != nil {
 		return nil, "", fmt.Errorf("list feedback: %w", err)
 	}
-	reports, next := trim(f.Page, reports, func(r Feedback) string { return timeCursor(r.CreatedAt, r.ID) })
+	reports, next := trim(f.Page, reports, func(r Feedback) string { return g.next("", r.CreatedAt, r.ID) })
 	return reports, next, nil
 }

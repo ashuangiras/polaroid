@@ -42,6 +42,12 @@ func (w fakeWorld) LatestRuns(_ context.Context, procedureID string, c Resolutio
 	return runs, nil
 }
 
+// Identity registers nothing: the domain tests match identifiers exactly;
+// identity matching is tested against SQLite.
+func (fakeWorld) Identity(context.Context, string) (RepositoryIdentity, error) {
+	return RepositoryIdentity{}, nil
+}
+
 var linux = ResolutionContext{Repository: "github.com/o/r", Environment: "ci.linux"}
 
 func resolve(t *testing.T, w fakeWorld, id string, policy VersionPolicy, c ResolutionContext) Resolution {

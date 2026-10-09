@@ -20,16 +20,21 @@ type (
 	byID struct {
 		ID string `json:"id"`
 	}
-	// pageArgs ask for one page of a list (ADR-0021).
+	// pageArgs ask for one page of a list (ADR-0021, ADR-0023).
 	pageArgs struct {
 		Limit int    `json:"limit,omitzero" jsonschema:"return at most this many items (1 to 500) and a next cursor if there are more; omit for the complete list"`
-		After string `json:"after,omitzero" jsonschema:"the next cursor of the previous page; requires limit"`
+		After string `json:"after,omitzero" jsonschema:"the next cursor of the previous page; requires limit and the same other arguments as the first page"`
+	}
+	// snapshotArgs ask for a snapshot traversal (ADR-0023).
+	snapshotArgs struct {
+		Snapshot bool `json:"snapshot,omitzero" jsonschema:"page a snapshot fixed at the first page: every item that existed then, exactly once, as it was then, and nothing created later; requires limit; pass it on every page"`
 	}
 	listProceduresArgs struct {
 		Repository string `json:"repository,omitzero" jsonschema:"only procedures whose latest version applies in this repository identifier: shared, unspecified, or local to it"`
-		Scope      string `json:"scope,omitzero" jsonschema:"only shared, local or unspecified procedures"`
+		Scope      string `json:"scope,omitzero" jsonschema:"only procedures whose latest version is shared, local or unspecified"`
 		Q          string `json:"q,omitzero" jsonschema:"only procedures whose canonical key or goal contains this text, ignoring ASCII case"`
 		pageArgs
+		snapshotArgs
 	}
 	procedureRef struct {
 		ID           string `json:"id,omitzero" jsonschema:"the procedure ID; give this or canonical_key"`
@@ -69,6 +74,7 @@ type (
 	repositoryArgs struct {
 		Repository string `json:"repository"`
 		pageArgs
+		snapshotArgs
 	}
 	repositoryRef struct {
 		ID         string `json:"id,omitzero" jsonschema:"the repository ID; give this or identifier"`
@@ -129,6 +135,14 @@ func (a pageArgs) page() memory.Page {
 	return memory.Page{Limit: a.Limit, After: a.After}
 }
 
+func (a listProceduresArgs) page() memory.Page {
+	return memory.Page{Limit: a.Limit, After: a.After, Snapshot: a.Snapshot}
+}
+
+func (a repositoryArgs) page() memory.Page {
+	return memory.Page{Limit: a.Limit, After: a.After, Snapshot: a.Snapshot}
+}
+
 func (a targetArgs) target() *memory.Target {
 	if a.Commit == "" && a.Inputs == nil {
 		return nil
@@ -139,8 +153,9 @@ func (a targetArgs) target() *memory.Target {
 func (t *tools) register(s *sdk.Server) {
 	const read, write = true, false
 
-	add(s, t, "list_procedures", "List procedures, ordered by canonical key, with each one's scope (shared, local or unspecified), goal and origin. "+
-		"Pass repository to see only the procedures that apply in it, scope or q to narrow further, and limit to page.", read,
+	add(s, t, "list_procedures", "List procedures, ordered by canonical key, with origin and the scope (shared, local or unspecified), goal and applicability of version latest_version only. "+
+		"Unspecified declares nothing: admissible everywhere, not a claim of reuse. Before reusing one, resolve it and read the selected version's scope and contract. "+
+		"Pass repository to see only the procedures that apply in it, scope or q to narrow further, limit to page, and snapshot to page a fixed snapshot.", read,
 		func(ctx context.Context, in listProceduresArgs) (any, error) {
 			ps, next, err := t.svc.ListProcedures(ctx, memory.ProcedureFilter{Repository: in.Repository, Scope: in.Scope, Query: in.Q, Page: in.page()})
 			return wire.NewProcedureList(ps, next), err
@@ -228,7 +243,7 @@ func (t *tools) register(s *sdk.Server) {
 			rs, next, err := t.svc.ListRepositories(ctx, in.page())
 			return wire.NewRepositoryList(rs, next), err
 		})
-	add(s, t, "list_bindings", "List a repository's bindings, ordered by name. A registered identifier lists the bindings of every identifier of its repository.", read,
+	add(s, t, "list_bindings", "List a repository's bindings, ordered by name. A registered identifier lists the bindings of every identifier of its repository. Pass limit to page, and snapshot to page a fixed snapshot.", read,
 		func(ctx context.Context, in repositoryArgs) (any, error) {
 			bs, next, err := t.svc.ListBindings(ctx, in.Repository, in.page())
 			return wire.NewBindingList(bs, next), err
