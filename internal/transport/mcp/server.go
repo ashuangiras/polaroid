@@ -31,8 +31,8 @@ const HandshakeProtocolVersion = "2025-11-25"
 
 const instructions = `Polaroid stores procedures: versioned, shared instructions for tasks. Typical loop:
 1. Find a procedure with list_procedures or get_procedure (by id or canonical_key).
-2. Resolve what to run: resolve_binding for a repository's binding, or get_graph with repository and environment. Every edge says how its version was selected (pin, evidence or latest).
-3. Follow the selected versions' instructions with your own tools.
+2. Resolve what to run: resolve_binding for a repository's binding, or get_graph with repository and environment. Every edge says how its version was selected (pin, evidence or latest). selection_evidence names the execution, and the commit, that made a version a candidate; it does not verify your checkout. Pass commit and inputs to see target_verification for the exact commit and inputs you will run.
+3. Follow the selected versions' instructions with your own tools. If target_verification is false or absent, the work is not verified there until you run it and record it.
 4. Record each run with record_execution, children first, then the parent with "children" linking them.
 5. Improve a procedure with revise_procedure, passing the version you read as base_version; a version_conflict means re-read and try again.
 6. When Polaroid itself gets in your way (a confusing error, a missing capability, a tool that misbehaved) or you see how it could serve you better, say so with report_feedback.

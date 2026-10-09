@@ -322,13 +322,34 @@ func NewBindingHistory(h memory.BindingHistory) BindingHistory {
 }
 
 // GraphNode is one node of a composition graph. References is always
-// present, empty for a leaf. verified_by is omitted without evidence.
+// present, empty for a leaf. verified_by and selection_evidence are omitted
+// without evidence, target_verification without a target (ADR-0018).
 type GraphNode struct {
-	ProcedureID  string      `json:"procedure_id"`
-	CanonicalKey string      `json:"canonical_key"`
-	Version      int         `json:"version"`
-	VerifiedBy   string      `json:"verified_by,omitzero"`
-	References   []GraphEdge `json:"references"`
+	ProcedureID        string              `json:"procedure_id"`
+	CanonicalKey       string              `json:"canonical_key"`
+	Version            int                 `json:"version"`
+	VerifiedBy         string              `json:"verified_by,omitzero"`
+	SelectionEvidence  *SelectionEvidence  `json:"selection_evidence,omitzero"`
+	TargetVerification *TargetVerification `json:"target_verification,omitzero"`
+	References         []GraphEdge         `json:"references"`
+}
+
+// SelectionEvidence is the execution that selected a node, and where it ran.
+type SelectionEvidence struct {
+	ExecutionID string          `json:"execution_id"`
+	Repository  string          `json:"repository"`
+	Commit      string          `json:"commit"`
+	Environment EnvironmentName `json:"environment"`
+}
+
+// TargetVerification is a verification-list entry for the node's selected
+// combination at the target. latest_execution_id is omitted, and
+// execution_ids empty, when nothing has run there.
+type TargetVerification struct {
+	Combination       Combination `json:"combination"`
+	Verified          bool        `json:"verified"`
+	LatestExecutionID string      `json:"latest_execution_id,omitzero"`
+	ExecutionIDs      []string    `json:"execution_ids"`
 }
 
 type GraphEdge struct {
@@ -346,6 +367,17 @@ func NewGraphNode(n memory.GraphNode) GraphNode {
 		Version:      n.Version,
 		VerifiedBy:   n.VerifiedBy,
 		References:   make([]GraphEdge, len(n.Edges)),
+	}
+	if e := n.Evidence; e != nil {
+		body.SelectionEvidence = &SelectionEvidence{ExecutionID: e.ExecutionID, Repository: e.Repository, Commit: e.Commit, Environment: EnvironmentName{Name: e.Environment}}
+	}
+	if s := n.Target; s != nil {
+		body.TargetVerification = &TargetVerification{
+			Combination:       newCombination(s.Combination),
+			Verified:          s.Verified,
+			LatestExecutionID: s.LatestExecutionID,
+			ExecutionIDs:      s.ExecutionIDs,
+		}
 	}
 	for i, e := range n.Edges {
 		body.References[i] = GraphEdge{

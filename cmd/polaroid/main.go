@@ -53,14 +53,18 @@ var commands = []command{
 		func(c *client, args []string) error {
 			return c.do(http.MethodGet, procedurePath(args[0])+"/versions/"+url.PathEscape(args[1]), nil)
 		}},
-	{"graph", "ID N [REPO ENV]", "show version N's composition graph, resolved in REPO and ENV if given", 2, 4,
+	{"graph", "ID N [REPO ENV [COMMIT INPUTS]]", "show version N's composition graph, resolved in REPO and ENV if given, and verified at COMMIT with INPUTS (a JSON object) if given", 2, 6,
 		func(c *client, args []string) error {
 			path := procedurePath(args[0]) + "/versions/" + url.PathEscape(args[1]) + "/graph"
 			switch len(args) {
 			case 3:
 				return usageError("graph needs both REPO and ENV, or neither")
+			case 5:
+				return usageError("graph needs both COMMIT and INPUTS, or neither")
 			case 4:
 				path += "?" + url.Values{"repository": {args[2]}, "environment": {args[3]}}.Encode()
+			case 6:
+				path += "?" + url.Values{"repository": {args[2]}, "environment": {args[3]}, "commit": {args[4]}, "inputs": {args[5]}}.Encode()
 			}
 			return c.do(http.MethodGet, path, nil)
 		}},
@@ -84,9 +88,17 @@ var commands = []command{
 		func(c *client, args []string) error {
 			return c.send(http.MethodPost, bindingPath(args[0])+"/revisions", args[1:])
 		}},
-	{"resolve", "BINDING_ID ENV", "resolve a binding's latest revision in environment ENV", 2, 2,
+	{"resolve", "BINDING_ID ENV [COMMIT INPUTS]", "resolve a binding's latest revision in environment ENV, and verify it at COMMIT with INPUTS (a JSON object) if given", 2, 4,
 		func(c *client, args []string) error {
-			return c.do(http.MethodGet, bindingPath(args[0])+"/resolution?"+url.Values{"environment": {args[1]}}.Encode(), nil)
+			query := url.Values{"environment": {args[1]}}
+			switch len(args) {
+			case 3:
+				return usageError("resolve needs both COMMIT and INPUTS, or neither")
+			case 4:
+				query.Set("commit", args[2])
+				query.Set("inputs", args[3])
+			}
+			return c.do(http.MethodGet, bindingPath(args[0])+"/resolution?"+query.Encode(), nil)
 		}},
 	{"record", "[FILE]", "record a finished execution from request JSON in FILE or stdin", 0, 1,
 		func(c *client, args []string) error { return c.send(http.MethodPost, "/v1/executions", args) }},

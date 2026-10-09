@@ -24,13 +24,17 @@ type GraphReader interface {
 }
 
 // GraphNode is one procedure version in a composition graph, with the exact
-// version selected for it. VerifiedBy is the execution that verifies it in
-// the resolution context, if any (ADR-0013).
+// version selected for it. VerifiedBy is the execution that selected it in
+// the resolution context, if any (ADR-0013), and Evidence says where that
+// execution ran. Target is the status of the node's selected combination at
+// a requested target (ADR-0018); nil without one.
 type GraphNode struct {
 	ProcedureID  string
 	CanonicalKey string
 	Version      int
 	VerifiedBy   string
+	Evidence     *SelectionEvidence
+	Target       *CombinationStatus
 	Edges        []GraphEdge
 }
 
@@ -206,6 +210,7 @@ func (s *Service) CompositionGraph(ctx context.Context, procedureID string, vers
 	if version < 1 {
 		p.add("version", "must be a version number of at least 1")
 	}
+	c = c.withOwnTarget()
 	c.check(&p, true)
 	if err := p.err(); err != nil {
 		return GraphNode{}, err

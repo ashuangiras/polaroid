@@ -1,6 +1,7 @@
 package http
 
 import (
+	"encoding/json/jsontext"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -90,6 +91,15 @@ func (a *api) listVerifications(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.respond(w, r, http.StatusOK, wire.NewVerificationList(statuses))
+}
+
+// targetQuery returns a resolution's optional target: commit and inputs (a
+// JSON object), which the service requires together.
+func targetQuery(query url.Values) *memory.Target {
+	if !query.Has("commit") && !query.Has("inputs") {
+		return nil
+	}
+	return &memory.Target{Commit: query.Get("commit"), Inputs: jsontext.Value(query.Get("inputs"))}
 }
 
 // strictQuery parses the query string, accepting only the allowed

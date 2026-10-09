@@ -52,11 +52,11 @@ func (a *api) getBinding(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) resolveBinding(w http.ResponseWriter, r *http.Request) {
-	query, ok := strictQuery(w, r, "environment")
+	query, ok := strictQuery(w, r, "environment", "commit", "inputs")
 	if !ok {
 		return
 	}
-	res, err := a.svc.ResolveBinding(r.Context(), r.PathValue("id"), query.Get("environment"))
+	res, err := a.svc.ResolveBinding(r.Context(), r.PathValue("id"), query.Get("environment"), targetQuery(query))
 	if err != nil {
 		a.fail(w, r, err)
 		return

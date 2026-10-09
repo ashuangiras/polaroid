@@ -184,7 +184,7 @@ func (a *api) getGraph(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	query, ok := strictQuery(w, r, "repository", "environment")
+	query, ok := strictQuery(w, r, "repository", "environment", "commit", "inputs")
 	if !ok {
 		return
 	}
@@ -200,7 +200,7 @@ func (a *api) getGraph(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	rc := memory.ResolutionContext{Repository: query.Get("repository"), Environment: query.Get("environment")}
+	rc := memory.ResolutionContext{Repository: query.Get("repository"), Environment: query.Get("environment"), Target: targetQuery(query)}
 	g, err := a.svc.CompositionGraph(r.Context(), r.PathValue("id"), number, rc)
 	if err != nil {
 		a.fail(w, r, err)

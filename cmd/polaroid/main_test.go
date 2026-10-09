@@ -182,7 +182,7 @@ func TestExecutionCommands(t *testing.T) {
 	}
 
 	const commit = "0123456789abcdef0123456789abcdef01234567"
-	for args, want := range map[[6]string]string{
+	for args, want := range map[[7]string]string{
 		{"get-execution", e.ID}:                                   `"evidence":{"exit":0}`,
 		{"executions", p.ID}:                                      e.ID,
 		{"executions", p.ID, "scratch"}:                           e.ID,
@@ -192,6 +192,7 @@ func TestExecutionCommands(t *testing.T) {
 		{"verifications", p.ID, "1", "scratch", commit, "laptop"}: `"execution_ids":["` + e.ID + `"]`,
 		{"verifications", p.ID, "1", "scratch", commit, "other"}:  `{"verifications":[]}`,
 		{"graph", p.ID, "1", "scratch", "laptop"}:                 `"verified_by":"` + e.ID + `"`,
+		{"graph", p.ID, "1", "scratch", "laptop", commit, "{}"}:   `"target_verification":{"combination":{"repository":"scratch","commit":"` + commit + `","environment":{"name":"laptop"},"inputs":{}},"verified":true,"latest_execution_id":"` + e.ID + `"`,
 	} {
 		r := cli("", nil, append([]string{"-server", server}, slices.DeleteFunc(args[:], func(s string) bool { return s == "" })...)...)
 		mustSucceed(t, r)
@@ -213,6 +214,11 @@ func TestExecutionCommands(t *testing.T) {
 	mustSucceed(t, resolved)
 	if !strings.Contains(resolved.stdout, `"selected_by":"evidence"`) {
 		t.Fatalf("resolve: %s", resolved.stdout)
+	}
+	elsewhere := cli("", nil, "-server", server, "resolve", b.ID, "laptop", strings.Repeat("b", 40), `{}`)
+	mustSucceed(t, elsewhere)
+	if !strings.Contains(elsewhere.stdout, `"verified":false,"execution_ids":[]`) || !strings.Contains(elsewhere.stdout, `"commit":"`+commit+`"`) {
+		t.Fatalf("resolve at an unseen commit: %s", elsewhere.stdout)
 	}
 
 	invalid := cli(strings.Replace(recordJSON, `"version":1`, `"version":5`, 1), nil, "-server", server, "record")
@@ -330,7 +336,10 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		{"graph", "a"},
 		{"graph", "a", "1", "repo"},
 		{"graph", "a", "1", "repo", "env", "x"},
+		{"graph", "a", "1", "repo", "env", "c", "{}", "x"},
 		{"resolve", "a"},
+		{"resolve", "a", "env", "c"},
+		{"resolve", "a", "env", "c", "{}", "x"},
 		{"revise"},
 		{"bindings"},
 		{"get-binding"},
