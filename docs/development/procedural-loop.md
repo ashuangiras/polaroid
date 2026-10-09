@@ -277,6 +277,29 @@ Contextual resolution moved to the new versions only after each of them had its 
 
 **Client.** This long-running chat still rejected the new `snapshot` argument, and `commit` and `inputs` on `resolve_binding`, client-side (`must NOT have additional properties`), although the client log reported 25 tools. Those calls, the registration-dependent reads and the version 3 revision went through raw JSON-RPC to `/mcp`. `get_graph`, `get_version`, `record_execution`, `get_verification`, `list_procedures` without new arguments and `list_feedback` went through the normal client. This is the problem already recorded in feedback `01a1224e-fe89…`.
 
+## Child inputs follow the reference mapping (#39)
+
+[#39](https://github.com/ashuangiras/polaroid/issues/39) closed a verification gap: a parent could be verified although a linked child ran with inputs other than its reference maps ([ADR-0024](../architecture/decisions/0024-child-inputs-follow-the-reference-mapping.md)). It was developed with Polaroid, in `bin/dogfood/polaroid.db`, by Copilot in the authoring session on 2026-10-09 and 2026-10-10.
+
+**Retrieved first.** `list_procedures` for `github.com/ashuangiras/polaroid` returned the four procedures. The one for this change is `polaroid.record-model.change` version 3: the change alters a rule on stored records and what existing records derive. No new procedure was needed, and no step proved wrong, so no version was appended. Its `parity` step asked for a `make demo` step, which was added (step 22) before verification.
+
+**Reproduced before the fix.** Binaries built from the code of `fe6c34a`, on a throwaway store: a parent whose reference maps `service` linked a successful build of service `b` while it ran for service `a`. It was accepted, verified (`{"verified":true}`), and at its commit target verification reported the parent verified while the build for service `a` was unverified. With the fix, the same request is refused: `children[0].execution_id: ran with inputs {"service":"b"}, but reference "build" maps the parent's inputs to {"service":"a"} (ADR-0024)`, and the target parent is unverified.
+
+**The development store was checked before deciding.** All 18 of its child links matched their mappings, so the rule changes none of its derived verification. The live upgrade confirmed it: 64 files read over HTTP before (`bin/dogfood/pre39/`, backup `bin/dogfood/pre39.db`) and after the new build opened the store were identical, verifications included; the schema is still 7. No migration: a trigger cannot reproduce the canonical comparison, so the database does not enforce the rule, and derived verification refuses to count a mismatched link.
+
+**Run at `0829a4c`** (the implementation `51f23a2` plus the demo step; worktree `/tmp/polaroid-verify-0829a4c`, empty porcelain, `darwin-arm64.local`, binding `01a12169-52ff…` revision 1):
+
+| Step | Result |
+| --- | --- |
+| `resolve_binding` at the target, before | Root `dev.change.verify` v3, build v2, checks v3, all by evidence from `2639d70`; nothing verified at `0829a4c`. Each child's `target_verification.combination.inputs` gave the inputs it had to run with. |
+| `go.module.build` v2 | `01a122bd-e703-7ad9-8bc8-034b4ccc2417` succeeded, with the build node's mapped inputs. |
+| `go.module.checks` v3 | `01a122c0-1974-7fdf-944f-ddd63b38a3f6` succeeded, with the checks node's mapped inputs: 7 `ok`, none cached; `0 issues.`; `deps-check: PASS`; `No vulnerabilities found.`; `demo: PASS`; `passed=210 failed=0`; `passed=98 failed=0`. |
+| `dev.change.verify` v3 | `01a122c0-55aa-7e14-8282-1edba016622b`, both children linked under the new rule: **verified**. |
+| `resolve_binding` at the target, after | Root, build and checks **verified** at `0829a4c`, with these executions as latest. |
+| `polaroid.record-model.change` v3 | `01a122c1-0a76-757c-ab28-00beba62ea20`, with that execution as its `verify` child: **verified**. Its evidence lists the reproduction, ADR-0024, why no migration, the tests, four mutation checks with what each broke, and the live upgrade. |
+
+The merge rebases these commits onto `main`, which gives them new SHAs. `0829a4c` is the verified commit; the merged commit with the same tree is unverified until a run there is recorded.
+
 ## Reproduce
 
 - **Regression replay:** `make demo` (needs `jq` and `sqlite3`).
