@@ -615,9 +615,37 @@ dev_snapshot() {
 	bin/polaroid executions
 	bin/polaroid feedbacks
 }
+
+step "22. A child must have run with the inputs its reference maps (#39, ADR-0024; scripted regression evidence)"
+c39=2222222222222222222222222222222222222222
+saved_commit="$dev_commit" dev_commit="$c39"
+dirty_build="$(record_dev "$build_id" 1 succeeded "$(jq -c '.working_tree = "dirty"' <<<"$build_inputs")")"
+checks39="$(record_dev "$checks_id" 2 succeeded "$checks_inputs")"
+req39="$(jq -n --arg p "$verify_id" --arg r "$dev_repo" --arg c "$c39" --argjson in "$dev_inputs" --argjson ch "$(children "$dirty_build" "$checks39")" --arg s "$scripted" \
+	'{procedure_id: $p, version: 2, repository: $r, commit: $c, environment: {name: "demo.ci", attributes: {runner: "scripts/demo.sh"}},
+	  inputs: $in, outcome: "succeeded", evidence: {scripted: $s}, children: $ch}')"
+if refused39="$(bin/polaroid record <<<"$req39" 2>/dev/null)"; then fail "a parent claiming a clean tree linked a build of a dirty one"; fi
+jq -e '[.error.fields[].field] == ["children[0].execution_id"] and (.error.fields[0].message | contains("\"working_tree\":\"dirty\"") and contains("maps the parent'\''s inputs to"))' \
+	<<<"$refused39" >/dev/null || fail "unexpected refusal: $refused39"
+jq -e '[.error.fields[].field] == ["children[0].execution_id"]' <<<"$(mcp_tool record_execution "$req39")" >/dev/null || fail "MCP accepted the mismatched child"
+echo "a parent with working_tree clean linking a build of a dirty tree is refused over HTTP and MCP:"
+jq -r '.error.fields[0].message' <<<"$refused39"
+echo "at ${c39:0:7}, the build its mapping implies (clean) has not run:"
+expect_dev_target "$c39" "root@2 false -
+build@1 false -
+checks@2 true $checks39"
+clean_build="$(record_dev "$build_id" 1 succeeded "$build_inputs")"
+parent39="$(record_dev "$verify_id" 2 succeeded "$dev_inputs" "$(children "$clean_build" "$checks39")")"
+echo "after a clean build and the parent linking it:"
+expect_dev_target "$c39" "root@2 true $parent39
+build@1 true $clean_build
+checks@2 true $checks39"
+jq -e '.outcome == "succeeded" and .inputs.working_tree == "dirty" and (has("children") | not)' <<<"$(bin/polaroid get-execution "$dirty_build")" >/dev/null ||
+	fail "the dirty build changed"
+dev_commit="$saved_commit"
 dev_before="$(dev_snapshot)"
 
-step "22. Restart polaroidd and confirm every record persisted"
+step "23. Restart polaroidd and confirm every record persisted"
 stop_daemon
 start_daemon
 [[ "$(bin/polaroid get-by-key "$key")" == "$history" ]] || fail "history differs after restart"
@@ -628,7 +656,7 @@ start_daemon
 echo "every history, binding, execution and verification is byte-for-byte identical after restart"
 stop_daemon
 
-step "23. Upgrade a database written at schema version 6 (#35): history reads back, and registration associates it without rewriting it"
+step "24. Upgrade a database written at schema version 6 (#35): history reads back, and registration associates it without rewriting it"
 legacy="$work/schema-6.db"
 for f in internal/storage/sqlite/migrations/000[1-6]_*.sql; do sqlite3 "$legacy" <"$f"; done
 sqlite3 "$legacy" <<'SQL'
