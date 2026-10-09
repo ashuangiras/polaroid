@@ -1,6 +1,6 @@
 # 0011. A parent execution links its already-recorded children, one per reference, from the same repository and commit
 
-**Status:** Accepted
+**Status:** Accepted; a child must also have run with its reference's mapped inputs ([ADR-0024](0024-child-inputs-follow-the-reference-mapping.md))
 **Date:** 2026-10-09
 
 ## Context
