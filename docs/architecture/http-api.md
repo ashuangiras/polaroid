@@ -85,21 +85,33 @@ A graph deeper than 32 references or larger than 2048 nodes is rejected with `42
 
 ### Composition graph
 
-`GET /v1/procedures/{id}/versions/{n}/graph` returns a nested tree.
+`GET /v1/procedures/{id}/versions/{n}/graph[?repository=…&environment=…]` returns a nested tree.
 
-- Each node has `procedure_id`, `canonical_key`, `version` (the exact version selected) and `references`, which is empty for a leaf.
-- Each reference has its stored `name`, `version_policy` and `inputs`, and the selected child `node`.
-- Pinned references select the pinned version. Contextual references select the target's latest version at the moment of the read.
+- Each node has `procedure_id`, `canonical_key`, `version` (the exact version selected), `verified_by` (only when the node has evidence in the context) and `references`, which is empty for a leaf.
+- Each reference has its stored `name` and `version_policy`, then `selected_by` (`pin`, `evidence` or `latest`), its stored `inputs`, and the selected child `node`.
+- Without `repository` and `environment`, pinned references select the pin and contextual references the target's latest version at the moment of the read.
+- With them, the graph is resolved from evidence in that repository and environment ([records.md](records.md#contextual-resolution-implemented)). They must be given together. Each may appear once, and any other query parameter is `400`.
 - The whole walk reads one consistent snapshot.
 
 ```json
-{"procedure_id":"…root","canonical_key":"compose.root","version":1,"references":[
-  {"name":"old-leaf","version_policy":{"pin":1},"inputs":{},"node":{"procedure_id":"…leaf","canonical_key":"go.dependency.add","version":1,"references":[]}},
-  {"name":"mid","version_policy":{"contextual":{}},"inputs":{"module":{"input":"driver"}},"node":{"procedure_id":"…mid","canonical_key":"compose.mid","version":1,"references":[
-    {"name":"leaf","version_policy":{"contextual":{}},"inputs":{},"node":{"procedure_id":"…leaf","canonical_key":"go.dependency.add","version":2,"references":[]}}]}}]}
+{"procedure_id":"…root","canonical_key":"compose.root","version":1,"verified_by":"…run","references":[
+  {"name":"old-leaf","version_policy":{"pin":1},"selected_by":"pin","inputs":{},"node":{"procedure_id":"…leaf","canonical_key":"go.dependency.add","version":1,"verified_by":"…leaf-run","references":[]}},
+  {"name":"mid","version_policy":{"contextual":{}},"selected_by":"evidence","inputs":{"module":{"input":"driver"}},"node":{"procedure_id":"…mid","canonical_key":"compose.mid","version":1,"verified_by":"…mid-run","references":[
+    {"name":"leaf","version_policy":{"contextual":{}},"selected_by":"evidence","inputs":{},"node":{"procedure_id":"…leaf","canonical_key":"go.dependency.add","version":2,"verified_by":"…leaf2-run","references":[]}}]}}]}
 ```
 
-A missing procedure or version is `404`. A cycle (possible only in versions stored before cycle checking existed) is `409 reference_cycle`, and a graph over the limits is `422 graph_too_large`. No partial graph is ever returned.
+A missing procedure or version is `404`. A cycle is `409 reference_cycle`. It is possible only in versions stored before cycle checking existed, or when evidence selects an older version whose references lead back. A graph over the limits is `422 graph_too_large`. No partial graph is ever returned.
+
+### Resolve a binding
+
+`GET /v1/bindings/{id}/resolution?environment=ci.ubuntu-latest` resolves the binding's latest revision in the binding's repository and that environment. A pin selects its version. A contextual policy selects the highest version verified there, or else the latest version.
+
+```json
+{"binding_id":"…","binding_revision":2,"repository":"github.com/ashuangiras/polaroid","environment":{"name":"ci.ubuntu-latest"},
+ "version_policy":{"contextual":{}},"selected_by":"evidence","graph":{"procedure_id":"…","canonical_key":"go.dependency.add","version":2,"verified_by":"…","references":[]}}
+```
+
+`environment` is required, must appear once and must be valid. Any other parameter is `400`. An unknown binding is `404`. Graph errors are as for the graph endpoint.
 
 ### Append a version
 
@@ -144,7 +156,7 @@ Location: /v1/bindings/01a12033-e0f1-7b6c-8f5e-3d1c2b4a5968
    "version_policy":{"pin":2},"revision_reason":"Use the shared dependency procedure.","created_at":"2026-10-09T14:02:11.418903Z"}]}
 ```
 
-A **binding history** has the fields `id`, `repository`, `name`, `procedure_id`, `created_at`, `latest_revision` and `revisions`. A list item has the same fields without `revisions`. A **binding revision** has the fields `binding_id`, `revision`, `inputs`, `version_policy`, `revision_reason` and `created_at`. `version_policy` is returned exactly as accepted: `{"pin":N}` or `{"contextual":{}}`. A contextual policy is not resolved, and no response names a selected version.
+A **binding history** has the fields `id`, `repository`, `name`, `procedure_id`, `created_at`, `latest_revision` and `revisions`. A list item has the same fields without `revisions`. A **binding revision** has the fields `binding_id`, `revision`, `inputs`, `version_policy`, `revision_reason` and `created_at`. `version_policy` is returned exactly as accepted: `{"pin":N}` or `{"contextual":{}}`. Binding reads never name a selected version; [resolving a binding](#resolve-a-binding) does.
 
 An unknown `procedure_id` gets `404 not_found`. A pinned version the procedure does not have gets `400 invalid_request` with the field `revision.version_policy.pin`. A repository that already has a binding with that `name` gets `409 binding_exists`.
 
@@ -282,13 +294,14 @@ Example `invalid_request` response:
 | `polaroid get ID` | `GET /v1/procedures/{id}` |
 | `polaroid get-by-key KEY` | `GET /v1/procedures/by-key/{key}` |
 | `polaroid get-version ID N` | `GET /v1/procedures/{id}/versions/{n}` |
-| `polaroid graph ID N` | `GET /v1/procedures/{id}/versions/{n}/graph` |
+| `polaroid graph ID N [REPO ENV]` | `GET /v1/procedures/{id}/versions/{n}/graph[?repository=…&environment=…]` |
 | `polaroid revise ID [FILE]` | `POST /v1/procedures/{id}/versions` |
 | `polaroid bindings REPOSITORY` | `GET /v1/bindings?repository={repository}` |
 | `polaroid bind [FILE]` | `POST /v1/bindings` |
 | `polaroid get-binding ID` | `GET /v1/bindings/{id}` |
 | `polaroid get-binding-revision ID N` | `GET /v1/bindings/{id}/revisions/{n}` |
 | `polaroid revise-binding ID [FILE]` | `POST /v1/bindings/{id}/revisions` |
+| `polaroid resolve BINDING_ID ENV` | `GET /v1/bindings/{id}/resolution?environment={env}` |
 | `polaroid record [FILE]` | `POST /v1/executions` |
 | `polaroid get-execution ID` | `GET /v1/executions/{id}` |
 | `polaroid executions PROCEDURE_ID [REPOSITORY]` | `GET /v1/executions?procedure_id={id}[&repository={repository}]` |

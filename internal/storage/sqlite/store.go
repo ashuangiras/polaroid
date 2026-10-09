@@ -274,16 +274,22 @@ func insertVersion(ctx context.Context, tx *sql.Tx, v memory.Version) error {
 	return err
 }
 
-// CompositionGraph implements memory.Store. The walk takes several queries,
-// so it runs in one transaction to read a single snapshot.
-func (s *Store) CompositionGraph(ctx context.Context, procedureID string, version int) (memory.GraphNode, error) {
-	var g memory.GraphNode
+// Resolve implements memory.Store. The walk takes several queries, so it
+// runs in one transaction to read a single snapshot.
+func (s *Store) Resolve(ctx context.Context, procedureID string, policy memory.VersionPolicy, c memory.ResolutionContext) (memory.Resolution, error) {
+	var res memory.Resolution
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		var err error
-		g, err = memory.ExpandGraph(ctx, txGraph{tx}, procedureID, version)
+		res, err = memory.ResolveGraph(ctx, txResolution{txGraph{tx}, txRuns{tx}}, procedureID, policy, c)
 		return err
 	})
-	return g, err
+	return res, err
+}
+
+// txResolution implements memory.ResolutionReader inside one transaction.
+type txResolution struct {
+	txGraph
+	txRuns
 }
 
 // txGraph implements memory.GraphReader inside one transaction.

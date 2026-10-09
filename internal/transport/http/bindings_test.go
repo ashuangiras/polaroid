@@ -199,9 +199,9 @@ func TestConcurrentBindingRevisionsFromSameBase(t *testing.T) {
 	}
 }
 
-// A contextual policy is stored and returned exactly as accepted. Nothing
-// resolves it, so no response carries a selected version.
-func TestContextualPolicyIsStoredNotResolved(t *testing.T) {
+// A contextual policy is stored and returned exactly as accepted. Binding
+// reads never carry a selected version; only /resolution resolves it.
+func TestContextualPolicyIsStoredVerbatim(t *testing.T) {
 	s := newTestServer(t)
 	p := s.create(t)
 	b := s.bind(t, repoA, "add-dependency", p.ID, `{"contextual": {}}`)
@@ -218,9 +218,7 @@ func TestContextualPolicyIsStoredNotResolved(t *testing.T) {
 			}
 		}
 	}
-	for _, path := range []string{"/v1/bindings/" + b.ID + "/resolve", "/v1/bindings/" + b.ID + "/resolution"} {
-		expect(t, s.call(t, http.MethodGet, path, ""), http.StatusNotFound, "not_found")
-	}
+	expect(t, s.call(t, http.MethodGet, "/v1/bindings/"+b.ID+"/resolve", ""), http.StatusNotFound, "not_found")
 }
 
 func TestInvalidBindingRequestsAreRejected(t *testing.T) {

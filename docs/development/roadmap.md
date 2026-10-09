@@ -4,7 +4,7 @@ Increments are ordered. Issue-ready items are filed as [GitHub issues](https://g
 
 > **Work-item authority.** GitHub Issues are the source of truth for scope and acceptance criteria. This roadmap keeps only order and links for filed items, never a second copy. Items not yet issue-ready stay here until they are refined and filed.
 
-Increments 1 and 2, and the first three items of increment 3, are implemented. Nothing else below is.
+Increments 1, 2 and 3 are implemented. Nothing else below is.
 
 ## Increment 1 — Procedure identity and immutable versions (done)
 
@@ -16,15 +16,12 @@ Create, list, retrieve and revise procedures with stable IDs, unique canonical k
 2. [#2 Named subprocedure references in procedure versions](https://github.com/ashuangiras/polaroid/issues/2) (depends on #1) — **done**
 3. [#3 Reference-graph validation and bounded traversal](https://github.com/ashuangiras/polaroid/issues/3) (depends on #2) — **done**
 
-## Increment 3 — Execution evidence and resolution
+## Increment 3 — Execution evidence and resolution (done)
 
 1. [#7 Execution records](https://github.com/ashuangiras/polaroid/issues/7) — **done**
 2. [#9 Subprocedure executions](https://github.com/ashuangiras/polaroid/issues/9) (depends on #7) — **done**
 3. [#11 Context-specific verification of executions](https://github.com/ashuangiras/polaroid/issues/11) (depends on #7, #9) — **done**
-
-The item below is ordered and scoped, but not yet issue-ready. Refine it into an issue before starting it.
-
-- **3.4 Contextual resolution from evidence.** Resolve contextual references using verification evidence for the requesting context, always reporting the exact versions selected.
+4. [#13 Resolve contextual references from verification evidence](https://github.com/ashuangiras/polaroid/issues/13) (depends on #11) — **done**
 
 ## Later (unordered, not yet scoped)
 

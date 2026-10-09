@@ -2,7 +2,7 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
-**As of 2026-10-09:** increments 1 and 2 are implemented, and so are the first three items of increment 3: [#7](https://github.com/ashuangiras/polaroid/issues/7) (execution records), [#9](https://github.com/ashuangiras/polaroid/issues/9) (subprocedure executions) and [#11](https://github.com/ashuangiras/polaroid/issues/11) (context-specific verification). Increment 2 covered [#1](https://github.com/ashuangiras/polaroid/issues/1) repository bindings, [#2](https://github.com/ashuangiras/polaroid/issues/2) named subprocedure references, and [#3](https://github.com/ashuangiras/polaroid/issues/3) reference-graph validation with bounded traversal. The repository is the private repository [ashuangiras/polaroid](https://github.com/ashuangiras/polaroid), and the local toolchain is Go 1.27.2.
+**As of 2026-10-09:** increments 1, 2 and 3 are implemented. Increment 3 covered [#7](https://github.com/ashuangiras/polaroid/issues/7) (execution records), [#9](https://github.com/ashuangiras/polaroid/issues/9) (subprocedure executions), [#11](https://github.com/ashuangiras/polaroid/issues/11) (context-specific verification) and [#13](https://github.com/ashuangiras/polaroid/issues/13) (contextual resolution from evidence). Increment 2 covered [#1](https://github.com/ashuangiras/polaroid/issues/1) repository bindings, [#2](https://github.com/ashuangiras/polaroid/issues/2) named subprocedure references, and [#3](https://github.com/ashuangiras/polaroid/issues/3) reference-graph validation with bounded traversal. The repository is the private repository [ashuangiras/polaroid](https://github.com/ashuangiras/polaroid), and the local toolchain is Go 1.27.2.
 
 ## Implemented
 
@@ -14,7 +14,7 @@ This page is a snapshot of the repository's current state, replaced at every han
   - a binding has a stable UUIDv7 ID, a repository identifier in canonical-path form, a local name, and the procedure ID. `(repository, name)` is unique (`409 binding_exists`);
   - binding revisions hold `inputs` (a free-form JSON object), a `version_policy` of `{"pin": N}` or `{"contextual": {}}`, and a reason. They are appended against `base_revision` (`409 revision_conflict` with `latest_revision`);
   - an unknown procedure gets `404`, and a pin to a missing version gets `400` naming `revision.version_policy.pin`;
-  - contextual policies are stored and returned verbatim, and nothing resolves them;
+  - contextual policies are stored and returned verbatim. `GET /v1/bindings/{id}/resolution?environment=…` resolves the latest revision from evidence (#13);
   - migration `0002` adds the tables with immutability, contiguity and pin-existence triggers. A schema-version-1 database is upgraded in place.
 - **Subprocedure references** ([#2](https://github.com/ashuangiras/polaroid/issues/2), [ADR-0008](../architecture/decisions/0008-subprocedure-references.md)):
   - a version may carry `references`, each with a unique `name`, a target `procedure_id`, a `version_policy` (the binding type), and `inputs` that map each child input to `{"input": "<parent input>"}` or `{"value": <JSON>}`;
@@ -22,7 +22,7 @@ This page is a snapshot of the repository's current state, replaced at every han
   - references are returned in order, byte-for-byte. A version without references has no `references` field, so older versions are served unchanged;
   - migration `0003` stores references in `procedure_version_references`. A trigger and a deferred foreign key allow them only in the transaction that creates their version, and triggers make them immutable and check pinned versions.
 - **Composition graph** ([#3](https://github.com/ashuangiras/polaroid/issues/3), [ADR-0009](../architecture/decisions/0009-reference-graph-rules.md)):
-  - a pinned reference selects its pinned version. A contextual one selects the target's latest version, until execution evidence exists;
+  - a pinned reference selects its pinned version. Without a resolution context, a contextual one selects the target's latest version; the write-time check always does;
   - every write of a version with references expands its graph in the write transaction. A path that reaches a procedure already on it, at any version, gets `409 reference_cycle` with the `cycle` path, and nothing is stored. This covers `A → A`, `A → B → A`, a cycle closed by a later revision of a target, and two concurrent half-cycles (exactly one is stored);
   - limits are a depth of 32 and 2048 nodes. Beyond them the response is `422 graph_too_large`, never partial data;
   - `GET /v1/procedures/{id}/versions/{n}/graph` (CLI `graph ID N`) returns the nested tree with the exact version of every node, read from one snapshot.
@@ -50,6 +50,11 @@ This page is a snapshot of the repository's current state, replaced at every han
   - an execution is verified when it succeeded and every reference of its version has a linked, verified child, recursively. Otherwise it reports its direct problems: `outcome_failed`, `missing_child`, `child_not_verified`;
   - a combination is repository, commit, `environment.name`, canonical inputs (sorted members, RFC 8785 floats, exact integers) and the child-version tree. Its status is that of its latest execution;
   - `GET /v1/executions/{id}/verification` and `GET /v1/procedures/{id}/versions/{n}/verifications[?repository&commit&environment]`. CLI commands: `verification`, `verifications`.
+- **Contextual resolution** ([#13](https://github.com/ashuangiras/polaroid/issues/13), [ADR-0013](../architecture/decisions/0013-evidence-based-resolution.md)):
+  - a context is a repository and an environment name. A version is verified there when its latest execution there is verified; that execution is its evidence;
+  - under a node with evidence, references follow the child executions it linked, so a verified combination is used as a whole. Otherwise a contextual reference selects the highest verified version, else the latest. A pinned reference selects its pin, with the pin's evidence if any;
+  - edges report `selected_by` (`pin`, `evidence`, `latest`), and nodes with evidence report `verified_by`. Cycles and limits are still checked on read;
+  - `GET /v1/procedures/{id}/versions/{n}/graph?repository=…&environment=…` and `GET /v1/bindings/{id}/resolution?environment=…`. CLI: `graph ID N REPO ENV`, `resolve BINDING_ID ENV`. Nothing is stored and there is no migration.
 - **Persistence:** SQLite in WAL mode with `synchronous=FULL`. Migrations are counted by `user_version`, and a database with a newer schema is refused.
 - **HTTP API v1** ([contract](../architecture/http-api.md)):
   - procedures: create, list, get by ID, get by key, get one version, get a version's composition graph, revise, and `/healthz`;
@@ -60,20 +65,21 @@ This page is a snapshot of the repository's current state, replaced at every han
 - **`polaroid` CLI:** a generic client. It reads JSON from a file or stdin, prints response bodies to stdout, and exits with 0, 1 or 2. Binding commands: `bindings`, `bind`, `get-binding`, `get-binding-revision`, `revise-binding`.
 - **Supporting material:** example records, the live demo (`make demo`, now including a two-repository binding), package-boundary tests, a dependency and license gate, CI workflow, Copilot instructions, and the docs and ADRs.
 
-**Not implemented:** evidence-based contextual resolution (and any resolution of contextual binding policies), discovery, aliases, MCP, access control, and the PoC import. See the [roadmap](roadmap.md).
+**Not implemented:** discovery, aliases, MCP, access control, pagination, and the PoC import. See the [roadmap](roadmap.md).
 
 ## Verification evidence
 
 | Check | Where | Result |
 | --- | --- | --- |
-| `make ci` with `GOLANGCI_LINT=<golangci-lint 2.14.0 release binary>`, branch `issue-11-verification` | darwin/arm64, local Go 1.27.2 | **Pass.** `0 issues`; 6/6 packages `ok` in `go test` and in `go test -race`; `deps-check: PASS (10 modules …)`; `No vulnerabilities found.`; `demo: PASS`. |
+| `make ci` with `GOLANGCI_LINT=<golangci-lint 2.14.0 release binary>`, branch `issue-13-resolution` | darwin/arm64, local Go 1.27.2 | **Pass.** `0 issues`; 6/6 packages `ok` in `go test` and in `go test -race`; `deps-check: PASS (10 modules …)`; `No vulnerabilities found.`; `demo: PASS`. |
+| GitHub Actions `ci`, runs 37929496783 (PR for #11) and 37929513551 (`main` at `76f24e5`) | ubuntu-latest | **Pass.** |
 | GitHub Actions `ci`, runs 37927228332 (PR for #9) and 37927243040 (`main` at `2d2f897`) | ubuntu-latest | **Pass.** |
 | GitHub Actions `ci`, runs 37925117183 (PR for #7) and 37925136844 (`main` at `0dcff5a`) | ubuntu-latest | **Pass.** |
 | GitHub Actions `ci`, runs 37923015793 (PR for #3) and 37923034159 (`main` at `c85211c`) | ubuntu-latest | **Pass.** |
 | GitHub Actions `ci`, runs 37918349018 (PR for #1) and 37918365752 (`main` at `ce8e024`) | ubuntu-latest | **Pass.** |
 | GitHub Actions `ci`, run [37912026720](https://github.com/ashuangiras/polaroid/actions/runs/37912026720) on commit `7fb84cd` (increment 1) | ubuntu-latest, Go 1.27.2, golangci-lint 2.14.0 | **Pass.** |
 | `make lint` with the `golangci-lint` on `PATH` (2.12.2) | darwin/arm64 | **Fails, as designed.** The output reads `golangci-lint 2.14.0 is required, found 2.12.2`. |
-| Test inventory | darwin/arm64, Go 1.27.2 | The source has 118 `Test` functions, and 118 top-level tests passed (plus 192 subtests). |
+| Test inventory | darwin/arm64, Go 1.27.2 | The source has 128 `Test` functions, and 128 top-level tests passed (plus 192 subtests). |
 
 Negative checks showed that the gates detect what they claim to detect. Each mutation below was made temporarily, the expected tests failed, and the mutation was reverted:
 
@@ -99,6 +105,10 @@ Negative checks showed that the gates detect what they claim to detect. Each mut
 - Comparing inputs compacted instead of canonical fails `TestCombinationKey` and `TestVerificationCombinations`.
 - Canonicalizing integers as doubles (plain RFC 8785) fails `TestCombinationKey`: two distinct integers above 2^53 merged.
 - Leaving the child-version tree out of the combination key fails `TestListCombinations`, `TestVerificationReadsStoredExecutions` and `TestVerificationCombinations`.
+- Selecting the lowest instead of the highest verified version fails two domain resolution tests, `TestResolveUsesStoredEvidence`, `TestGraphResolvedInContext` and `TestBindingResolution`.
+- Letting the oldest execution of a version decide (SQL order reversed) fails `TestResolveUsesStoredEvidence` and `TestGraphResolvedInContext`. The HTTP case was added after this check first passed it.
+- Ignoring a parent's verified child tree fails `TestVerifiedParentFixesItsChildVersions`, `TestResolveUsesStoredEvidence` and `TestGraphResolvedInContext`. The HTTP case was made discriminating after this check first passed it.
+- Ignoring the environment when looking up evidence fails `TestGraphResolvedInContext` and `TestBindingResolution`.
 - Leaking internal error text fails `TestInternalErrorsAreNotExposed`.
 - Making the CLI exit 0 on API errors fails `TestFailedRequestsExitOne`.
 - Adding `net/http` to `internal/memory` fails `TestPackageBoundaries`.
@@ -112,9 +122,4 @@ Negative checks showed that the gates detect what they claim to detect. Each mut
 
 ## Next work item
 
-Refine roadmap item **3.4 Contextual resolution from evidence** and file it as an issue. Settle these first:
-
-- what a requesting context is, since a combination includes the commit and inputs, which a resolving agent may not know in advance;
-- what is selected: the latest version verified in a matching context, the latest version overall when nothing matches, or an error;
-- whether resolution covers composition graphs, contextual binding policies, or both;
-- how the selected versions and their supporting evidence are reported.
+Increments 1–3 are complete. The remaining roadmap items are unordered and unscoped. The owner chooses and orders increment 4 from them: discovery, aliases, MCP transport, access control, pagination, and the blocked PoC import. The chosen first item is then refined into an issue.

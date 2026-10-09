@@ -24,18 +24,30 @@ type GraphReader interface {
 }
 
 // GraphNode is one procedure version in a composition graph, with the exact
-// version selected for it.
+// version selected for it. VerifiedBy is the execution that verifies it in
+// the resolution context, if any (ADR-0013).
 type GraphNode struct {
 	ProcedureID  string
 	CanonicalKey string
 	Version      int
+	VerifiedBy   string
 	Edges        []GraphEdge
 }
 
+// Selection says how a version was selected.
+type Selection string
+
+const (
+	SelectedByPin      Selection = "pin"
+	SelectedByEvidence Selection = "evidence"
+	SelectedByLatest   Selection = "latest"
+)
+
 // GraphEdge is a reference together with the node it selected.
 type GraphEdge struct {
-	Reference Reference
-	Node      GraphNode
+	Reference  Reference
+	SelectedBy Selection
+	Node       GraphNode
 }
 
 // CycleStep is one node on a reference cycle and the reference followed out
@@ -97,20 +109,24 @@ func ExpandGraph(ctx context.Context, r GraphReader, procedureID string, version
 
 type walker struct {
 	r      GraphReader
+	ev     *evidence // nil without a resolution context
 	nodes  int
 	path   []CycleStep
 	onPath map[string]bool
 }
 
 func (w *walker) expand(ctx context.Context, node *GraphNode, refs []Reference, depth int) error {
+	var links map[string]string
+	if node.VerifiedBy != "" {
+		var err error
+		if links, err = w.ev.links(ctx, node.VerifiedBy); err != nil {
+			return err
+		}
+	}
 	for _, ref := range refs {
-		version := ref.VersionPolicy.Pin
-		if ref.VersionPolicy.Kind == PolicyContextual {
-			latest, err := w.r.LatestVersion(ctx, ref.ProcedureID)
-			if err != nil {
-				return fmt.Errorf("resolve reference %q: %w", ref.Name, err)
-			}
-			version = latest
+		version, by, verifiedBy, err := w.choose(ctx, ref, links)
+		if err != nil {
+			return fmt.Errorf("resolve reference %q: %w", ref.Name, err)
 		}
 		w.path = append(w.path, CycleStep{ProcedureID: node.ProcedureID, Version: node.Version, Reference: ref.Name})
 		if w.onPath[ref.ProcedureID] {
@@ -126,16 +142,47 @@ func (w *walker) expand(ctx context.Context, node *GraphNode, refs []Reference, 
 		if err != nil {
 			return fmt.Errorf("read reference %q target: %w", ref.Name, err)
 		}
-		child := GraphNode{ProcedureID: ref.ProcedureID, CanonicalKey: key, Version: version}
+		child := GraphNode{ProcedureID: ref.ProcedureID, CanonicalKey: key, Version: version, VerifiedBy: verifiedBy}
 		w.onPath[ref.ProcedureID] = true
 		if err := w.expand(ctx, &child, childRefs, depth+1); err != nil {
 			return err
 		}
 		w.onPath[ref.ProcedureID] = false
 		w.path = w.path[:len(w.path)-1]
-		node.Edges = append(node.Edges, GraphEdge{Reference: ref, Node: child})
+		node.Edges = append(node.Edges, GraphEdge{Reference: ref, SelectedBy: by, Node: child})
 	}
 	return nil
+}
+
+// choose selects the version for ref (ADR-0013). links maps the parent's
+// reference names to the child executions of its evidence, if it has any.
+func (w *walker) choose(ctx context.Context, ref Reference, links map[string]string) (int, Selection, string, error) {
+	by := SelectedByPin
+	if ref.VersionPolicy.Kind == PolicyContextual {
+		by = SelectedByEvidence
+	}
+	if id, ok := links[ref.Name]; ok {
+		run, err := w.ev.r.Run(ctx, id)
+		if err != nil {
+			return 0, "", "", err
+		}
+		return run.Version, by, id, nil
+	}
+	if ref.VersionPolicy.Kind == PolicyPin {
+		if w.ev == nil {
+			return ref.VersionPolicy.Pin, by, "", nil
+		}
+		id, err := w.ev.of(ctx, ref.ProcedureID, ref.VersionPolicy.Pin)
+		return ref.VersionPolicy.Pin, by, id, err
+	}
+	if w.ev != nil {
+		version, id, err := w.ev.highest(ctx, ref.ProcedureID)
+		if err != nil || id != "" {
+			return version, by, id, err
+		}
+	}
+	latest, err := w.r.LatestVersion(ctx, ref.ProcedureID)
+	return latest, SelectedByLatest, "", err
 }
 
 // cycleTo returns the path from the first visit of procedureID, closed by
@@ -152,14 +199,20 @@ func (w *walker) cycleTo(procedureID string, version int) []CycleStep {
 	return append(cycle, CycleStep{ProcedureID: procedureID, Version: version})
 }
 
-// CompositionGraph returns the composition graph of one version.
-func (s *Service) CompositionGraph(ctx context.Context, procedureID string, version int) (GraphNode, error) {
+// CompositionGraph returns the composition graph of one version, resolved in
+// c when c is not empty.
+func (s *Service) CompositionGraph(ctx context.Context, procedureID string, version int, c ResolutionContext) (GraphNode, error) {
+	var p problems
 	if version < 1 {
-		return GraphNode{}, &ValidationError{Problems: []FieldProblem{{Field: "version", Message: "must be a version number of at least 1"}}}
+		p.add("version", "must be a version number of at least 1")
 	}
-	g, err := s.store.CompositionGraph(ctx, procedureID, version)
+	c.check(&p, true)
+	if err := p.err(); err != nil {
+		return GraphNode{}, err
+	}
+	res, err := s.store.Resolve(ctx, procedureID, VersionPolicy{Kind: PolicyPin, Pin: version}, c)
 	if err == nil {
-		return g, nil
+		return res.Graph, nil
 	}
 	if gerr := graphError(err); gerr != nil {
 		return GraphNode{}, gerr

@@ -39,6 +39,12 @@ func latestOf(name, target string) memory.Reference {
 	return reference(name, target, contextual, `{}`)
 }
 
+// compositionGraph reads a version's graph without a resolution context.
+func compositionGraph(s *sqlite.Store, ctx context.Context, id string, n int) (memory.GraphNode, error) {
+	res, err := s.Resolve(ctx, id, memory.VersionPolicy{Kind: memory.PolicyPin, Pin: n}, memory.ResolutionContext{})
+	return res.Graph, err
+}
+
 func wantCycle(t *testing.T, err error, want []memory.CycleStep) {
 	t.Helper()
 	var cycle *memory.ReferenceCycleError
@@ -124,7 +130,7 @@ func TestCompositionGraphReadsExactVersions(t *testing.T) {
 	mustPut(t, s, "mid", 1, latestOf("leaf", "leaf"))
 	mustPut(t, s, "root", 1, pinTo("old-leaf", "leaf", 1), latestOf("mid", "mid"))
 
-	g, err := s.CompositionGraph(ctx, "root", 1)
+	g, err := compositionGraph(s, ctx, "root", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,12 +147,12 @@ func TestCompositionGraphReadsExactVersions(t *testing.T) {
 
 	// Contextual references follow the latest version at read time.
 	mustPut(t, s, "leaf", 3)
-	g, err = s.CompositionGraph(ctx, "root", 1)
+	g, err = compositionGraph(s, ctx, "root", 1)
 	if err != nil || g.Edges[1].Node.Edges[0].Node.Version != 3 || g.Edges[0].Node.Version != 1 {
 		t.Fatalf("after leaf@3: %+v, %v", g, err)
 	}
 
-	if _, err := s.CompositionGraph(ctx, "root", 2); !errors.Is(err, memory.ErrNotFound) {
+	if _, err := compositionGraph(s, ctx, "root", 2); !errors.Is(err, memory.ErrNotFound) {
 		t.Fatalf("missing version: err = %v", err)
 	}
 }
@@ -159,7 +165,7 @@ func TestCompositionGraphLimits(t *testing.T) {
 	for i := 1; i <= memory.MaxGraphDepth; i++ {
 		mustPut(t, s, fmt.Sprint("p", i), 1, pinTo("next", fmt.Sprint("p", i-1), 1))
 	}
-	if _, err := s.CompositionGraph(ctx, fmt.Sprint("p", memory.MaxGraphDepth), 1); err != nil {
+	if _, err := compositionGraph(s, ctx, fmt.Sprint("p", memory.MaxGraphDepth), 1); err != nil {
 		t.Fatalf("a graph exactly %d deep: %v", memory.MaxGraphDepth, err)
 	}
 	var limit *memory.GraphLimitError
@@ -200,6 +206,6 @@ func TestCompositionGraphOfAStoredCycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = s.CompositionGraph(context.Background(), "a", 2)
+	_, err = compositionGraph(s, context.Background(), "a", 2)
 	wantCycle(t, err, []memory.CycleStep{{ProcedureID: "a", Version: 2, Reference: "me"}, {ProcedureID: "a", Version: 2}})
 }

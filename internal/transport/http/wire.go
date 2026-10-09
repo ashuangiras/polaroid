@@ -300,17 +300,19 @@ type fieldProblem struct {
 }
 
 // graphNodeBody is one node of a composition graph. References is always
-// present, empty for a leaf.
+// present, empty for a leaf. verified_by is omitted without evidence.
 type graphNodeBody struct {
 	ProcedureID  string          `json:"procedure_id"`
 	CanonicalKey string          `json:"canonical_key"`
 	Version      int             `json:"version"`
+	VerifiedBy   string          `json:"verified_by,omitzero"`
 	References   []graphEdgeBody `json:"references"`
 }
 
 type graphEdgeBody struct {
 	Name          string            `json:"name"`
 	VersionPolicy versionPolicyBody `json:"version_policy"`
+	SelectedBy    string            `json:"selected_by"`
 	Inputs        jsontext.Value    `json:"inputs"`
 	Node          graphNodeBody     `json:"node"`
 }
@@ -320,17 +322,29 @@ func newGraphNodeBody(n memory.GraphNode) graphNodeBody {
 		ProcedureID:  n.ProcedureID,
 		CanonicalKey: n.CanonicalKey,
 		Version:      n.Version,
+		VerifiedBy:   n.VerifiedBy,
 		References:   make([]graphEdgeBody, len(n.Edges)),
 	}
 	for i, e := range n.Edges {
 		body.References[i] = graphEdgeBody{
 			Name:          e.Reference.Name,
 			VersionPolicy: newVersionPolicyBody(e.Reference.VersionPolicy),
+			SelectedBy:    string(e.SelectedBy),
 			Inputs:        e.Reference.Inputs,
 			Node:          newGraphNodeBody(e.Node),
 		}
 	}
 	return body
+}
+
+type bindingResolutionBody struct {
+	BindingID       string            `json:"binding_id"`
+	BindingRevision int               `json:"binding_revision"`
+	Repository      string            `json:"repository"`
+	Environment     environmentName   `json:"environment"`
+	VersionPolicy   versionPolicyBody `json:"version_policy"`
+	SelectedBy      string            `json:"selected_by"`
+	Graph           graphNodeBody     `json:"graph"`
 }
 
 type environmentBody struct {

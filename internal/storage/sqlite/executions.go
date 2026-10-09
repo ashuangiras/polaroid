@@ -176,6 +176,31 @@ func (r txRuns) ReferenceNames(ctx context.Context, procedureID string, version 
 		WHERE procedure_id = ? AND version = ? ORDER BY position`, procedureID, version)
 }
 
+func (r txRuns) LatestRuns(ctx context.Context, procedureID string, c memory.ResolutionContext) ([]memory.VersionRun, error) {
+	rows, err := r.tx.QueryContext(ctx, `SELECT version, id FROM executions
+		WHERE procedure_id = ? AND repository = ? AND environment_name = ?
+		ORDER BY version DESC, created_at DESC, id DESC`, procedureID, c.Repository, c.Environment)
+	if err != nil {
+		return nil, fmt.Errorf("query latest runs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var runs []memory.VersionRun
+	for rows.Next() {
+		var run memory.VersionRun
+		if err := rows.Scan(&run.Version, &run.ExecutionID); err != nil {
+			return nil, fmt.Errorf("scan latest runs: %w", err)
+		}
+		// Rows are newest first within a version, so the first one is the latest.
+		if len(runs) == 0 || runs[len(runs)-1].Version != run.Version {
+			runs = append(runs, run)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read latest runs: %w", err)
+	}
+	return runs, nil
+}
+
 // queryStrings returns the single text column of every row.
 func queryStrings(ctx context.Context, q querier, query string, args ...any) ([]string, error) {
 	rows, err := q.QueryContext(ctx, query, args...)

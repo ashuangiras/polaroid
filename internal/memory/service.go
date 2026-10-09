@@ -39,9 +39,9 @@ type Store interface {
 	// Version returns one version, or an error wrapping ErrNotFound.
 	Version(ctx context.Context, procedureID string, number int) (Version, error)
 
-	// CompositionGraph returns ExpandGraph of one version, read from a single
+	// Resolve returns ResolveGraph for policy in c, read from a single
 	// consistent snapshot.
-	CompositionGraph(ctx context.Context, procedureID string, version int) (GraphNode, error)
+	Resolve(ctx context.Context, procedureID string, policy VersionPolicy, c ResolutionContext) (Resolution, error)
 
 	// CreateBinding stores b together with its first revision. It returns an
 	// error wrapping ErrNotFound if b.ProcedureID does not exist,
