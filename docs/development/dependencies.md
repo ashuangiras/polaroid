@@ -50,7 +50,10 @@ These tools are not Go module dependencies. They are not linked into or shipped 
 | Go toolchain | 1.27.2 (minimum 1.27.1) | BSD-3-Clause | Build, test, `go vet`. Taken from the `toolchain` and `go` lines in `go.mod`. 1.27.1 is affected by 9 reachable standard-library vulnerabilities; see [ADR-0002](../architecture/decisions/0002-go-toolchain-and-provisional-module-path.md). |
 | golangci-lint | 2.14.0 | GPL-3.0 | `make lint`. Runs as a separate binary, installed locally or by the CI action. Its source is never linked into Polaroid. Its official binaries are built with Go 1.27.0. Version 2.12.2 cannot lint with the Go 1.27.2 toolchain. |
 | govulncheck (`golang.org/x/vuln`) | v1.8.0 | BSD-3-Clause | `make vuln`, run with `go run` at a pinned version. |
-| jq | any | MIT | `scripts/demo.sh` only. GitHub reports the license as NOASSERTION; jq's `COPYING` file states MIT. |
+| jq | any | MIT | `scripts/demo.sh`, `scripts/e2e.sh`, `scripts/e2e-mcp.sh`. GitHub reports the license as NOASSERTION; jq's `COPYING` file states MIT. |
+| sqlite3 CLI | any | Public domain | `scripts/e2e.sh` only: shows that raw SQL cannot change history. |
+| `@modelcontextprotocol/sdk` (npm) | 1.32.1 | MIT | `scripts/e2e-mcp.sh` only: an independent MCP client. Installed into a temporary directory; the checks are skipped without npm. |
+| `@modelcontextprotocol/inspector` (npm) | 2.10.1 | MIT and Apache-2.0 (relicensing in progress; both permissive) | `scripts/e2e-mcp.sh` only, as above. |
 | `actions/checkout` | v7.0.1 (`3d3c42e5aac5ba805825da76410c181273ba90b1`) | MIT | CI |
 | `actions/setup-go` | v7.0.0 (`b7ad1dad31e06c5925ef5d2fc7ad053ef454303e`) | MIT | CI |
 | `golangci/golangci-lint-action` | v9.3.0 (`ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a`) | MIT | CI. Installs golangci-lint. |

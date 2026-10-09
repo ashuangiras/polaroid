@@ -81,9 +81,16 @@ This page is a snapshot of the repository's current state, replaced at every han
 | Check | Where | Result |
 | --- | --- | --- |
 | `make ci` with `GOLANGCI_LINT=<golangci-lint 2.14.0 release binary>`, branch `issue-21-protocol-2025-11-25` | darwin/arm64, local Go 1.27.2 | **Pass.** `0 issues`; all 7 packages with tests `ok` in `go test` and in `go test -race`; `deps-check: PASS (18 modules …)`; `No vulnerabilities found.`; `demo: PASS`. |
-| Live interop for #21 (local manual-test scripts) | darwin/arm64 | **Pass.** TypeScript SDK 1.32.1 negotiated 2025-11-25 with no session, listed 20 tools and called `report_feedback`; MCP Inspector 2.10.1 listed 20 tools; 2025-06-18 requests were refused; a foreign Host and a cross-site request got 403 at 2025-11-25. MCP: 86/86 checks; HTTP and CLI: 197/197. |
+| Live interop for #21 (end-to-end scripts) | darwin/arm64 | **Pass.** TypeScript SDK 1.32.1 negotiated 2025-11-25 with no session, listed 20 tools and called `report_feedback`; MCP Inspector 2.10.1 listed 20 tools; 2025-06-18 requests were refused; a foreign Host and a cross-site request got 403 at 2025-11-25. MCP: 86/86 checks; HTTP and CLI: 197/197. |
+| `make e2e` and `make e2e-mcp` (the end-to-end scripts, now committed in `scripts/`) | darwin/arm64, bash 5 | **Pass.** 197/197 and 86/86 checks. Without npm, `e2e-mcp` reports its 4 interop checks as skipped and passes 82/82; under bash 3.2 both scripts stop with "bash 4 or newer is required". |
+| GitHub Actions `ci`, runs 37948942387 (PR for #21) and 37949137092 (`main` at `4aba74c`) | ubuntu-latest | **Pass.** |
+| GitHub Actions `ci`, runs 37947660580 (PR for #20) and 37947847788 (`main` at `e2a37ef`) | ubuntu-latest | **Pass.** |
+| GitHub Actions `ci`, runs 37946750951 (PR for #22) and 37946935378 (`main` at `4bff086`) | ubuntu-latest | **Pass.** |
+| GitHub Actions `ci`, runs 37944833998 (PR for #16) and 37945030903 (`main` at `3a9705c`) | ubuntu-latest | **Pass.** |
+| GitHub Actions `ci`, runs 37942543783 (PR #18, `.vscode/mcp.json`) and 37942550790 (`main` at `4dfdbdc`) | ubuntu-latest | **Pass.** |
+| GitHub Actions `ci`, runs 37937225850 (PR for #15) and 37937247739 (`main` at `bae7c91`) | ubuntu-latest | **Pass.** |
 | Live upgrade and agent loop for #16 | darwin/arm64, `polaroidd` on 127.0.0.1:7417 | **Pass.** A schema-5 database with 2 procedures and 3 executions, written earlier from Copilot chat, upgraded to schema 6 with them intact. Over raw MCP JSON-RPC: `server/discover` instructions include `report_feedback`; `tools/list` has 20 tools (14 read-only); a `report_feedback` call stored a report that `get_feedback`, `polaroid get-feedback` and `polaroid feedbacks` return byte-identically. Invalid arguments named `kind`, `summary`, `details`, `reporter` and `context`. |
-| Local manual-test scripts (gitignored), with the new feedback sections | darwin/arm64 | **Pass.** HTTP and CLI: 197/197 checks. MCP: 81/81 checks. |
+| End-to-end scripts for #16, before they were committed | darwin/arm64 | **Pass.** HTTP and CLI: 197/197 checks. MCP: 81/81 checks. |
 | GitHub Actions `ci`, runs 37932118685 (PR for #13) and 37932138196 (`main` at `774c442`) | ubuntu-latest | **Pass.** |
 | GitHub Actions `ci`, runs 37929496783 (PR for #11) and 37929513551 (`main` at `76f24e5`) | ubuntu-latest | **Pass.** |
 | GitHub Actions `ci`, runs 37927228332 (PR for #9) and 37927243040 (`main` at `2d2f897`) | ubuntu-latest | **Pass.** |

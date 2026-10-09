@@ -9,10 +9,10 @@ GOLANGCI_LINT_VERSION := 2.14.0
 GOVULNCHECK_VERSION   := v1.8.0
 
 .DEFAULT_GOAL := help
-.PHONY: help fmt fmt-check vet lint build test race deps-check check vuln demo run ci clean
+.PHONY: help fmt fmt-check vet lint build test race deps-check check vuln demo run ci e2e e2e-mcp clean
 
 help: ## List targets
-	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-11s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*## "} /^[a-z0-9-]+:.*## / {printf "  %-11s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 fmt: ## Format Go sources in place
 	gofmt -w .
@@ -52,6 +52,12 @@ run: build ## Run the daemon; pass flags with ARGS="-addr ... -db ..."
 	./$(BIN)/polaroidd $(ARGS)
 
 ci: check vuln demo ## Everything CI runs
+
+e2e: build ## End-to-end report of every feature against a real daemon (bin/e2e/REPORT.md)
+	GOLANGCI_LINT=$(GOLANGCI_LINT) ./scripts/e2e.sh
+
+e2e-mcp: build ## End-to-end report of /mcp, with independent clients if npm is available (bin/e2e/MCP-REPORT.md)
+	./scripts/e2e-mcp.sh
 
 clean: ## Remove build output
 	rm -rf $(BIN)

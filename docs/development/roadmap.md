@@ -28,6 +28,14 @@ Create, list, retrieve and revise procedures with stable IDs, unique canonical k
 1. [#15 MCP transport: tools and resources over streamable HTTP](https://github.com/ashuangiras/polaroid/issues/15) — **done**
 2. [#16 Feedback box: agents report problems and suggestions about Polaroid](https://github.com/ashuangiras/polaroid/issues/16) (depends on #15) — **done**
 
+## From agent feedback (done)
+
+Filed from feedback reports that agents recorded with `report_feedback` (#16).
+
+1. [#22 Docs: member order of free-form objects is kept as received; MCP clients may reorder](https://github.com/ashuangiras/polaroid/issues/22) — **done**
+2. [#20 MCP: signal tool-catalogue changes](https://github.com/ashuangiras/polaroid/issues/20) — **done**, re-scoped to pinning `ttlMs: 0` and documenting client restarts
+3. [#21 MCP: also accept protocol 2025-11-25](https://github.com/ashuangiras/polaroid/issues/21) — **done** ([ADR-0016](../architecture/decisions/0016-mcp-protocol-2025-11-25.md))
+
 ## Later (unordered, not yet scoped)
 
 - Semantic discovery and duplicate suggestions for procedures.
