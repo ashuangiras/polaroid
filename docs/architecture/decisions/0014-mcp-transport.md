@@ -1,6 +1,6 @@
 # 0014. MCP is served over stateless streamable HTTP at /mcp, with flat tool arguments and the API's record shapes
 
-**Status:** Accepted
+**Status:** Accepted. The protocol clause (2026-07-28 only) is superseded by [ADR-0016](0016-mcp-protocol-2025-11-25.md).
 **Date:** 2026-10-09
 
 ## Context

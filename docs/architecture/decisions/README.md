@@ -17,7 +17,8 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0011](0011-subprocedure-executions.md) | A parent execution links its already-recorded children, one per reference, from the same repository and commit | Accepted |
 | [0012](0012-derived-verification.md) | Verification is derived on read from executions, per combination, and the latest execution decides | Accepted |
 | [0013](0013-evidence-based-resolution.md) | Contextual references resolve from evidence in a repository and environment, following verified combinations | Accepted |
-| [0014](0014-mcp-transport.md) | MCP is served over stateless streamable HTTP at /mcp, with flat tool arguments and the API's record shapes | Accepted |
+| [0014](0014-mcp-transport.md) | MCP is served over stateless streamable HTTP at /mcp, with flat tool arguments and the API's record shapes | Accepted; protocol clause superseded by ADR-0016 |
 | [0015](0015-feedback-reports.md) | Feedback reports are immutable, untriaged records about Polaroid itself | Accepted |
+| [0016](0016-mcp-protocol-2025-11-25.md) | /mcp also accepts protocol 2025-11-25, through the handshake but without sessions | Accepted |
 
 Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.
