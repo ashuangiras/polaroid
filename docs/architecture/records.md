@@ -39,6 +39,8 @@ A version is one immutable definition of a procedure.
 
 Polaroid checks the shape of `contract` and `instructions`, never their meaning. Each must be a JSON object with valid UTF-8 and unique member names at every level. Polaroid removes insignificant whitespace before storing it. Member order, values, number formatting and string escapes are kept exactly as submitted. String fields are stored exactly as submitted, without trimming.
 
+Member order is kept as Polaroid receives it, but JSON gives it no meaning (RFC 8259), and some clients reorder members before sending; VS Code Copilot chat does so over MCP. Keep order-sensitive data, such as steps, in arrays, never as ordered object members. This applies to every free-form object on this page.
+
 ### Subprocedure reference (implemented)
 
 A reference is a named use of another procedure by a version. It is part of the version, so it is immutable with it ([ADR-0008](decisions/0008-subprocedure-references.md)).

@@ -14,7 +14,7 @@
 
 Arguments are flat JSON objects, named after the record fields in [records.md](records.md).
 
-- **Decoding is strict, as for HTTP request bodies.** Unknown or duplicate members are rejected, and so are values of the wrong JSON type. Free-form objects (`contract`, `instructions`, `inputs`, `evidence`, `environment.attributes`, reference `inputs`, feedback `context`) are stored with their member order intact.
+- **Decoding is strict, as for HTTP request bodies.** Unknown or duplicate members are rejected, and so are values of the wrong JSON type. Free-form objects (`contract`, `instructions`, `inputs`, `evidence`, `environment.attributes`, reference `inputs`, feedback `context`) are stored with their member order intact, as Polaroid receives it. MCP clients may reorder members before sending (VS Code Copilot chat does), so keep order-sensitive data in arrays ([records.md](records.md#procedure-version-implemented)).
 - **Schemas:** every tool advertises an input schema generated from its argument type.
 
 | Tool | Read-only | Arguments | Result |
