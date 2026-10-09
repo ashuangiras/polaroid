@@ -16,5 +16,6 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0010](0010-execution-records.md) | Executions are immutable after-the-fact records with a named environment and inline evidence | Accepted |
 | [0011](0011-subprocedure-executions.md) | A parent execution links its already-recorded children, one per reference, from the same repository and commit | Accepted |
 | [0012](0012-derived-verification.md) | Verification is derived on read from executions, per combination, and the latest execution decides | Accepted |
+| [0013](0013-evidence-based-resolution.md) | Contextual references resolve from evidence in a repository and environment, following verified combinations | Accepted |
 
 Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.
