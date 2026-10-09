@@ -1,10 +1,10 @@
 # HTTP API (v1)
 
-This page is the contract of the API that `polaroidd` serves. It covers only what is implemented: procedure identity and immutable versions, and repository bindings with immutable revisions. Field rules are defined in [records.md](records.md).
+This page is the contract of the API that `polaroidd` serves. It covers only what is implemented: procedure identity and immutable versions with subprocedure references, and repository bindings with immutable revisions. Field rules are defined in [records.md](records.md).
 
 - **Base URL:** `http://127.0.0.1:7417` by default (`polaroidd -addr`).
 - **Bodies:** every request and response body is UTF-8 JSON. Requests with a body must send `Content-Type: application/json` and stay under 1 MiB.
-- **Strict decoding:** member names are case-sensitive. Unknown members, duplicate members and trailing data are rejected. This includes server-assigned fields and fields of planned capabilities, such as `references`.
+- **Strict decoding:** member names are case-sensitive. Unknown members, duplicate members and trailing data are rejected. This includes server-assigned fields and fields of planned capabilities.
 - **Timestamps:** RFC 3339 in UTC.
 
 ## Endpoints
@@ -53,7 +53,20 @@ Location: /v1/procedures/01a11de2-5b69-705a-a457-278000c106be
    "contract":{"inputs":{}},"instructions":{"steps":["a"]},"revision_reason":"Initial version.","created_at":"2026-10-08T23:38:56.233022Z"}]}
 ```
 
-A **history** has the fields `id`, `canonical_key`, `created_at`, `latest_version` and `versions`. A list item has the same fields without `versions`. A **version** has the fields `procedure_id`, `version`, `philosophy`, `method`, `contract`, `instructions`, `revision_reason` and `created_at`. `contract` and `instructions` are returned with insignificant whitespace removed. Otherwise they are exactly as submitted.
+A **history** has the fields `id`, `canonical_key`, `created_at`, `latest_version` and `versions`. A list item has the same fields without `versions`. A **version** has the fields `procedure_id`, `version`, `philosophy`, `method`, `contract`, `instructions`, `references` (only when the version has references), `revision_reason` and `created_at`. `contract` and `instructions` are returned with insignificant whitespace removed. Otherwise they are exactly as submitted.
+
+### References
+
+A version may list the procedures it composes, in `version.references` on create and revise:
+
+```json
+"references": [
+  {"name": "add-driver", "procedure_id": "01a11de2-5b69-705a-a457-278000c106be", "version_policy": {"pin": 2},
+   "inputs": {"module": {"input": "driver_module"}, "strict": {"value": true}}}
+]
+```
+
+They are returned in the same order and form, compacted. A version without references has no `references` field, so versions written before references existed are served unchanged. An unknown target, a missing pinned version, a duplicate name or a malformed `inputs` mapping is `400 invalid_request`. Each failing reference is named in `fields`, for example `version.references[0].procedure_id` or `version.references[1].inputs.module`. Cycles are not detected yet.
 
 ### Append a version
 
@@ -133,7 +146,7 @@ Every error is a JSON object of this form:
 
 | Status | `code` | When |
 | --- | --- | --- |
-| 400 | `invalid_request` | Malformed JSON, unknown or duplicate members, wrong JSON types, or a field that fails validation (listed in `fields`). Also a version or revision path segment that is not a positive integer, a pinned version the procedure does not have, and a missing, repeated, invalid or unknown query parameter when listing bindings. |
+| 400 | `invalid_request` | Malformed JSON, unknown or duplicate members, wrong JSON types, or a field that fails validation (listed in `fields`). Also a version or revision path segment that is not a positive integer, a pinned version the procedure does not have, a reference to an unknown procedure, and a missing, repeated, invalid or unknown query parameter when listing bindings. |
 | 403 | `forbidden` | The `Host` header does not name a loopback address while the daemon listens on loopback, or a browser sent an unsafe cross-origin request. |
 | 404 | `not_found` | Unknown procedure (also as a binding's `procedure_id`), canonical key, version, binding, binding revision or endpoint. |
 | 405 | `method_not_allowed` | The endpoint exists, but not for this method. The `Allow` header lists the methods it accepts. |

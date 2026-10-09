@@ -27,12 +27,23 @@ type Procedure struct {
 
 // Definition is the author-supplied content of one procedure version.
 // Contract and Instructions are JSON objects whose members are task knowledge.
+// References, in submission order, name the procedures this version composes.
 type Definition struct {
 	Philosophy     string
 	Method         string
 	Contract       jsontext.Value
 	Instructions   jsontext.Value
+	References     []Reference
 	RevisionReason string
+}
+
+// Reference is a named use of another procedure by a version. Inputs maps
+// each child input name to {"input": "<parent input>"} or {"value": <JSON>}.
+type Reference struct {
+	Name          string
+	ProcedureID   string
+	VersionPolicy VersionPolicy
+	Inputs        jsontext.Value
 }
 
 // Version is one immutable definition of a procedure. Versions are numbered
@@ -81,6 +92,23 @@ type VersionConflictError struct {
 
 func (e *VersionConflictError) Error() string {
 	return fmt.Sprintf("base version %d is not the latest version (latest is %d)", e.BaseVersion, e.LatestVersion)
+}
+
+// MissingTarget identifies a reference, by its index in Definition.References,
+// whose target procedure does not exist (Procedure) or lacks the pinned
+// version.
+type MissingTarget struct {
+	Index     int
+	Procedure bool
+}
+
+// MissingTargetsError reports every reference whose target is missing.
+type MissingTargetsError struct {
+	Missing []MissingTarget
+}
+
+func (e *MissingTargetsError) Error() string {
+	return fmt.Sprintf("%d reference targets do not exist", len(e.Missing))
 }
 
 // FieldProblem describes one invalid input field. Field uses the record

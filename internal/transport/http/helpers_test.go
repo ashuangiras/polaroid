@@ -31,7 +31,12 @@ type testServer struct {
 
 func newTestServer(t *testing.T) *testServer {
 	t.Helper()
-	store, err := sqlite.Open(context.Background(), filepath.Join(t.TempDir(), "polaroid.db"))
+	return newTestServerAt(t, filepath.Join(t.TempDir(), "polaroid.db"))
+}
+
+func newTestServerAt(t *testing.T, path string) *testServer {
+	t.Helper()
+	store, err := sqlite.Open(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,6 +121,7 @@ type versionJSON struct {
 	Method         string         `json:"method"`
 	Contract       jsontext.Value `json:"contract"`
 	Instructions   jsontext.Value `json:"instructions"`
+	References     jsontext.Value `json:"references"`
 	RevisionReason string         `json:"revision_reason"`
 	CreatedAt      time.Time      `json:"created_at"`
 }
