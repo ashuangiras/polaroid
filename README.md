@@ -14,14 +14,14 @@ Agents use Polaroid in a loop:
 
 Polaroid does not run an LLM, and it does not execute instructions. Its code manages generic records, versions, relationships, resolution and evidence. Task knowledge lives in the records, so adding a task never requires a code change.
 
-> **Status: increment 2 of the [roadmap](docs/development/roadmap.md) is in progress.** Procedure identity, immutable version storage, subprocedure references and repository bindings work end to end. Reference-graph validation, execution evidence and contextual resolution are planned and **not implemented**. The current state and the verification evidence are in [docs/development/status.md](docs/development/status.md).
+> **Status: increment 2 of the [roadmap](docs/development/roadmap.md) is done.** Procedure identity, immutable version storage, subprocedure references with cycle checks and a bounded composition graph, and repository bindings work end to end. Execution evidence and evidence-based contextual resolution (increment 3) are planned and **not implemented**. The current state and the verification evidence are in [docs/development/status.md](docs/development/status.md).
 
 ## What works today
 
 - Create a procedure. It gets a stable ID and a unique canonical key, such as `go.dependency.add`. Its version 1 holds philosophy, method, contract (a JSON object), instructions (a JSON object) and a revision reason.
 - List procedures. Retrieve a procedure with its full version history, by ID or by canonical key. Retrieve a single version.
 - Append a version against an expected base version. A stale base is rejected with `409`, and history is never overwritten. Of several concurrent revisions from the same base, exactly one succeeds.
-- Compose procedures: a version can list named references to other procedures, each with a version policy and a mapping of the child's inputs to parent inputs or literal values. Targets and pinned versions must exist.
+- Compose procedures: a version can list named references to other procedures, each with a version policy and a mapping of the child's inputs to parent inputs or literal values. Targets and pinned versions must exist, and references may not form a cycle. `bin/polaroid graph ID N` shows the composition tree with the exact version each reference selects (bounded to 32 levels and 2048 nodes).
 - Bind a procedure in a repository under a local name, without copying it. A binding's immutable revisions hold the repository's inputs and a version policy: a pinned version, or a contextual policy that is stored but not resolved yet. Binding revisions use the same expected-base rule.
 - Records persist in SQLite. Stored versions and binding revisions are immutable, which the database itself enforces.
 - `GET /healthz`, a JSON HTTP API ([contract](docs/architecture/http-api.md)) and a generic CLI.

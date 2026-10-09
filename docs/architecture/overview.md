@@ -42,7 +42,7 @@ There is deliberately one interface (`memory.Store`): it lets the domain stay ig
 
 - **Writes** run in one transaction that takes SQLite's write lock at `BEGIN` (`_txlock=immediate`, `busy_timeout` 5s). Concurrent writers queue; none fails mid-transaction.
 - **Revisions** carry the base version they were derived from. The store checks "base equals latest" and inserts `latest + 1` inside that transaction, so of N concurrent revisions from one base exactly one succeeds and the rest get `409 version_conflict`. Nothing is merged or overwritten. Binding revisions follow the same rule with `base_revision` and `409 revision_conflict`.
-- **Reads** are single SQL statements, so a history is always one consistent snapshot (WAL mode lets reads proceed during writes).
+- **Reads** are single SQL statements, so a history is always one consistent snapshot (WAL mode lets reads proceed during writes). The composition graph needs one query per node, so it reads inside one transaction instead.
 - **Integrity backstops in the schema**: unique canonical keys and `(repository, name)` pairs; triggers reject any `UPDATE` or `DELETE` of procedures, versions, bindings and binding revisions, any non-contiguous version or revision number, and a pin to a version that does not exist; a reference row can be written only in the same transaction as its new version (a trigger plus a deferred foreign key); `CHECK` constraints require `contract`, `instructions` and `inputs` to be JSON objects and keep identifiers in their canonical formats. These hold even for a client that bypasses `polaroidd`.
 - **Durability**: `synchronous=FULL`. Schema migrations run in a write transaction at startup; a database newer than the binary is refused.
 
@@ -59,4 +59,4 @@ Binding to a non-loopback address is possible (`-addr`) but logs a warning: anyo
 
 ## Planned components (not implemented)
 
-Reference-graph validation and bounded traversal (the rest of increment 2), and execution evidence with context-specific verification and resolution (increment 3) will extend `memory` and add tables via new migrations. Contextual binding and reference policies are stored today but resolved only in increment 3. MCP transport would sit beside `transport/http`. See [records.md](records.md#planned-records-not-implemented) and the [roadmap](../development/roadmap.md).
+Execution evidence with context-specific verification and resolution (increment 3) will extend `memory` and add tables via new migrations. Until then, contextual references select the latest version in the composition graph ([ADR-0009](decisions/0009-reference-graph-rules.md)), and contextual binding policies are stored but not resolved. MCP transport would sit beside `transport/http`. See [records.md](records.md#planned-records-not-implemented) and the [roadmap](../development/roadmap.md).

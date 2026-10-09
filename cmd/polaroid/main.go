@@ -53,6 +53,10 @@ var commands = []command{
 		func(c *client, args []string) error {
 			return c.do(http.MethodGet, procedurePath(args[0])+"/versions/"+url.PathEscape(args[1]), nil)
 		}},
+	{"graph", "ID N", "show the composition graph of version N, with the version each reference selects", 2, 2,
+		func(c *client, args []string) error {
+			return c.do(http.MethodGet, procedurePath(args[0])+"/versions/"+url.PathEscape(args[1])+"/graph", nil)
+		}},
 	{"revise", "ID [FILE]", "append a version from request JSON in FILE or stdin", 1, 2,
 		func(c *client, args []string) error {
 			return c.send(http.MethodPost, procedurePath(args[0])+"/versions", args[1:])

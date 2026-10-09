@@ -4,17 +4,17 @@ Increments are ordered. Issue-ready items are filed as [GitHub issues](https://g
 
 > **Work-item authority.** GitHub Issues are the source of truth for scope and acceptance criteria. This roadmap keeps only order and links for filed items, never a second copy. Items not yet issue-ready stay here until they are refined and filed.
 
-Increment 1 and the first two items of increment 2 are implemented. Nothing else below is.
+Increments 1 and 2 are implemented. Nothing below them is.
 
 ## Increment 1 — Procedure identity and immutable versions (done)
 
 Create, list, retrieve and revise procedures with stable IDs, unique canonical keys, append-only versions, stale-base conflicts, SQLite persistence, health endpoint, CLI. Evidence: [status.md](status.md).
 
-## Increment 2 — Bindings and composition
+## Increment 2 — Bindings and composition (done)
 
 1. [#1 Repository bindings with guarded revisions](https://github.com/ashuangiras/polaroid/issues/1) — **done**
 2. [#2 Named subprocedure references in procedure versions](https://github.com/ashuangiras/polaroid/issues/2) (depends on #1) — **done**
-3. [#3 Reference-graph validation and bounded traversal](https://github.com/ashuangiras/polaroid/issues/3) (depends on #2) — **next**
+3. [#3 Reference-graph validation and bounded traversal](https://github.com/ashuangiras/polaroid/issues/3) (depends on #2) — **done**
 
 ## Increment 3 — Execution evidence and resolution
 

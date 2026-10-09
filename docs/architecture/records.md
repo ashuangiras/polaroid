@@ -52,7 +52,16 @@ A reference is a named use of another procedure by a version. It is part of the 
 
 Polaroid validates the shape only. It does not check input names against either procedure's `contract`, which it never interprets. Field errors name the reference by position, for example `version.references[1].inputs.module`. An unknown target is `400` on `version.references[i].procedure_id`, and a missing pinned version is `400` on `version.references[i].version_policy.pin`. Every failing reference is listed.
 
-References are written in the same transaction as their version, and the database rejects adding, changing or removing them afterwards. Cycles, including self-references, are not detected yet, and no endpoint traverses the graph ([#3](https://github.com/ashuangiras/polaroid/issues/3)).
+References are written in the same transaction as their version, and the database rejects adding, changing or removing them afterwards.
+
+### Composition graph (implemented)
+
+A version's references, their targets' references, and so on, form its composition graph ([ADR-0009](decisions/0009-reference-graph-rules.md)).
+
+- **Selected versions:** a pinned reference selects its pinned version. A contextual reference selects the target's **latest version** at the time of the check or read. That is the rule until execution evidence exists (increment 3). Contextual *binding* policies are still not resolved.
+- **No cycles:** a path may not reach a procedure that is already on it, at any version. `A → A` and `A v2 → B → A v1` are both cycles. Every write of a version with references expands its graph in the same transaction. A cycle gets `409 reference_cycle`, and nothing is stored. This includes a cycle closed by a later revision of a contextually referenced target.
+- **Limits:** a graph may be at most **32** references deep and **2048** nodes in the expanded tree. A target shared by two references counts under each. A larger graph gets `422 graph_too_large`, never partial data. Writes check the new version's graph. A later revision elsewhere can still push an existing version's graph over the limits, and reading that graph then returns `422`.
+- Versions stored before cycle checking existed are never rewritten. If one holds a cycle, reading its graph returns `409 reference_cycle`.
 
 ### Versioning rules (implemented)
 
@@ -100,10 +109,6 @@ Binding revisions follow the [versioning rules](#versioning-rules-implemented) w
 ## Planned records (not implemented)
 
 These follow the established design. None of them exist in code, storage or the API yet. Their fields and rules are settled in the [roadmap](../development/roadmap.md) work items, and the open questions below must be answered before implementation.
-
-### Reference-graph validation (increment 2)
-
-Reject versions whose references would form a cycle, including a self-reference, and serve a bounded traversal of a version's composition graph ([#3](https://github.com/ashuangiras/polaroid/issues/3)).
 
 ### Execution and subprocedure execution (increment 3)
 

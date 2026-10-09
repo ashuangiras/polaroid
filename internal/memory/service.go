@@ -15,16 +15,17 @@ import (
 type Store interface {
 	// CreateProcedure stores p together with its first version. It returns an
 	// error wrapping ErrCanonicalKeyExists if p.CanonicalKey is already used,
-	// and a *MissingTargetsError if a reference's target or pinned version
-	// does not exist.
+	// a *MissingTargetsError if a reference's target or pinned version does
+	// not exist, and the error of ExpandGraph if the stored version's graph
+	// has a cycle or exceeds the limits; then nothing is stored.
 	CreateProcedure(ctx context.Context, p Procedure, first Version) error
 
 	// AppendVersion stores next if, and only if, baseVersion is the latest
 	// version of next.ProcedureID; the check and the write are one atomic
 	// step. Callers set next.Number to baseVersion+1. It returns a
 	// *VersionConflictError when baseVersion is not the latest version, an
-	// error wrapping ErrNotFound when the procedure does not exist, and a
-	// *MissingTargetsError as CreateProcedure does.
+	// error wrapping ErrNotFound when the procedure does not exist, and the
+	// reference errors of CreateProcedure.
 	AppendVersion(ctx context.Context, baseVersion int, next Version) error
 
 	// ListProcedures returns every procedure ordered by canonical key.
@@ -37,6 +38,10 @@ type Store interface {
 
 	// Version returns one version, or an error wrapping ErrNotFound.
 	Version(ctx context.Context, procedureID string, number int) (Version, error)
+
+	// CompositionGraph returns ExpandGraph of one version, read from a single
+	// consistent snapshot.
+	CompositionGraph(ctx context.Context, procedureID string, version int) (GraphNode, error)
 
 	// CreateBinding stores b together with its first revision. It returns an
 	// error wrapping ErrNotFound if b.ProcedureID does not exist,
@@ -96,6 +101,9 @@ func (s *Service) CreateProcedure(ctx context.Context, in NewProcedure) (History
 		if errors.As(err, &missing) {
 			return History{}, missingTargets(def.References, missing)
 		}
+		if gerr := graphError(err); gerr != nil {
+			return History{}, gerr
+		}
 		return History{}, fmt.Errorf("create procedure: %w", err)
 	}
 	return History{Procedure: p, Versions: []Version{v}}, nil
@@ -111,6 +119,9 @@ func (s *Service) ReviseProcedure(ctx context.Context, procedureID string, in Re
 	}
 	v := Version{ProcedureID: procedureID, Number: in.BaseVersion + 1, CreatedAt: timestamp(), Definition: def}
 	if err := s.store.AppendVersion(ctx, in.BaseVersion, v); err != nil {
+		if gerr := graphError(err); gerr != nil {
+			return Version{}, gerr
+		}
 		if errors.Is(err, ErrNotFound) {
 			return Version{}, fmt.Errorf("procedure %q: %w", procedureID, ErrNotFound)
 		}

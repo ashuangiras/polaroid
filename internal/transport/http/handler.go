@@ -44,6 +44,7 @@ func NewHandler(svc *memory.Service, logger *slog.Logger) http.Handler {
 	a.mux.HandleFunc("GET /v1/procedures/{id}", a.getProcedure)
 	a.mux.HandleFunc("POST /v1/procedures/{id}/versions", a.reviseProcedure)
 	a.mux.HandleFunc("GET /v1/procedures/{id}/versions/{version}", a.getVersion)
+	a.mux.HandleFunc("GET /v1/procedures/{id}/versions/{version}/graph", a.getGraph)
 	a.mux.HandleFunc("POST /v1/bindings", a.createBinding)
 	a.mux.HandleFunc("GET /v1/bindings", a.listBindings)
 	a.mux.HandleFunc("GET /v1/bindings/{id}", a.getBinding)
@@ -161,13 +162,8 @@ func (a *api) reviseProcedure(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) getVersion(w http.ResponseWriter, r *http.Request) {
-	number, err := strconv.Atoi(r.PathValue("version"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, errorDetail{
-			Code:    "invalid_request",
-			Message: "version must be a version number",
-			Fields:  []fieldProblem{{Field: "version", Message: "must be a version number of at least 1"}},
-		})
+	number, ok := versionNumber(w, r)
+	if !ok {
 		return
 	}
 	v, err := a.svc.Version(r.Context(), r.PathValue("id"), number)
@@ -178,12 +174,42 @@ func (a *api) getVersion(w http.ResponseWriter, r *http.Request) {
 	a.respond(w, r, http.StatusOK, newVersionBody(v))
 }
 
+func (a *api) getGraph(w http.ResponseWriter, r *http.Request) {
+	number, ok := versionNumber(w, r)
+	if !ok {
+		return
+	}
+	g, err := a.svc.CompositionGraph(r.Context(), r.PathValue("id"), number)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	a.respond(w, r, http.StatusOK, newGraphNodeBody(g))
+}
+
+// versionNumber parses the {version} path segment, writing the error
+// response if it is not a number.
+func versionNumber(w http.ResponseWriter, r *http.Request) (int, bool) {
+	number, err := strconv.Atoi(r.PathValue("version"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, errorDetail{
+			Code:    "invalid_request",
+			Message: "version must be a version number",
+			Fields:  []fieldProblem{{Field: "version", Message: "must be a version number of at least 1"}},
+		})
+		return 0, false
+	}
+	return number, true
+}
+
 // fail maps a domain error to its response. Anything unrecognised is an
 // internal failure: it is logged, and the client only learns that it happened.
 func (a *api) fail(w http.ResponseWriter, r *http.Request, err error) {
 	var invalid *memory.ValidationError
 	var conflict *memory.VersionConflictError
 	var revisionConflict *memory.RevisionConflictError
+	var cycle *memory.ReferenceCycleError
+	var limit *memory.GraphLimitError
 	switch {
 	case errors.As(err, &invalid):
 		detail := errorDetail{Code: "invalid_request", Message: invalid.Error()}
@@ -195,6 +221,14 @@ func (a *api) fail(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, http.StatusConflict, errorDetail{Code: "version_conflict", Message: conflict.Error(), LatestVersion: conflict.LatestVersion})
 	case errors.As(err, &revisionConflict):
 		writeError(w, http.StatusConflict, errorDetail{Code: "revision_conflict", Message: revisionConflict.Error(), LatestRevision: revisionConflict.LatestRevision})
+	case errors.As(err, &cycle):
+		detail := errorDetail{Code: "reference_cycle", Message: cycle.Error()}
+		for _, s := range cycle.Cycle {
+			detail.Cycle = append(detail.Cycle, cycleStepBody{ProcedureID: s.ProcedureID, Version: s.Version, Reference: s.Reference})
+		}
+		writeError(w, http.StatusConflict, detail)
+	case errors.As(err, &limit):
+		writeError(w, http.StatusUnprocessableEntity, errorDetail{Code: "graph_too_large", Message: limit.Error()})
 	case errors.Is(err, memory.ErrCanonicalKeyExists):
 		writeError(w, http.StatusConflict, errorDetail{Code: "canonical_key_exists", Message: err.Error()})
 	case errors.Is(err, memory.ErrBindingExists):

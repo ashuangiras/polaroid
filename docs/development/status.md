@@ -2,7 +2,7 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
-**As of 2026-10-09:** increment 1 (procedure identity and immutable versions), [#1](https://github.com/ashuangiras/polaroid/issues/1) (repository bindings with guarded revisions) and [#2](https://github.com/ashuangiras/polaroid/issues/2) (named subprocedure references) are implemented. The repository is the private repository [ashuangiras/polaroid](https://github.com/ashuangiras/polaroid), and the local toolchain is Go 1.27.2.
+**As of 2026-10-09:** increments 1 and 2 are implemented: procedure identity and immutable versions, [#1](https://github.com/ashuangiras/polaroid/issues/1) repository bindings, [#2](https://github.com/ashuangiras/polaroid/issues/2) named subprocedure references, and [#3](https://github.com/ashuangiras/polaroid/issues/3) reference-graph validation with bounded traversal. The repository is the private repository [ashuangiras/polaroid](https://github.com/ashuangiras/polaroid), and the local toolchain is Go 1.27.2.
 
 ## Implemented
 
@@ -20,11 +20,15 @@ This page is a snapshot of the repository's current state, replaced at every han
   - a version may carry `references`, each with a unique `name`, a target `procedure_id`, a `version_policy` (the binding type), and `inputs` that map each child input to `{"input": "<parent input>"}` or `{"value": <JSON>}`;
   - an unknown target, a missing pinned version, a duplicate name or a malformed mapping gets `400`, with every failing reference named in `fields`;
   - references are returned in order, byte-for-byte. A version without references has no `references` field, so older versions are served unchanged;
-  - migration `0003` stores references in `procedure_version_references`. A trigger and a deferred foreign key allow them only in the transaction that creates their version, and triggers make them immutable and check pinned versions;
-  - cycles and graph traversal are not handled yet ([#3](https://github.com/ashuangiras/polaroid/issues/3)).
+  - migration `0003` stores references in `procedure_version_references`. A trigger and a deferred foreign key allow them only in the transaction that creates their version, and triggers make them immutable and check pinned versions.
+- **Composition graph** ([#3](https://github.com/ashuangiras/polaroid/issues/3), [ADR-0009](../architecture/decisions/0009-reference-graph-rules.md)):
+  - a pinned reference selects its pinned version. A contextual one selects the target's latest version, until execution evidence exists;
+  - every write of a version with references expands its graph in the write transaction. A path that reaches a procedure already on it, at any version, gets `409 reference_cycle` with the `cycle` path, and nothing is stored. This covers `A → A`, `A → B → A`, a cycle closed by a later revision of a target, and two concurrent half-cycles (exactly one is stored);
+  - limits are a depth of 32 and 2048 nodes. Beyond them the response is `422 graph_too_large`, never partial data;
+  - `GET /v1/procedures/{id}/versions/{n}/graph` (CLI `graph ID N`) returns the nested tree with the exact version of every node, read from one snapshot.
 - **Persistence:** SQLite in WAL mode with `synchronous=FULL`. Migrations are counted by `user_version`, and a database with a newer schema is refused.
 - **HTTP API v1** ([contract](../architecture/http-api.md)):
-  - procedures: create, list, get by ID, get by key, get one version, revise, and `/healthz`;
+  - procedures: create, list, get by ID, get by key, get one version, get a version's composition graph, revise, and `/healthz`;
   - bindings: create, list by repository, get with history, get one revision, revise;
   - JSON errors throughout, for invalid input, missing records, conflicts and internal failures;
   - strict decoding, a 1 MiB limit, a loopback-host check and cross-origin protection.
@@ -32,17 +36,18 @@ This page is a snapshot of the repository's current state, replaced at every han
 - **`polaroid` CLI:** a generic client. It reads JSON from a file or stdin, prints response bodies to stdout, and exits with 0, 1 or 2. Binding commands: `bindings`, `bind`, `get-binding`, `get-binding-revision`, `revise-binding`.
 - **Supporting material:** example records, the live demo (`make demo`, now including a two-repository binding), package-boundary tests, a dependency and license gate, CI workflow, Copilot instructions, and the docs and ADRs.
 
-**Not implemented:** reference-graph validation and traversal, executions and evidence, contextual resolution, discovery, aliases, MCP, access control, and the PoC import. See the [roadmap](roadmap.md).
+**Not implemented:** executions and evidence, evidence-based contextual resolution (and any resolution of contextual binding policies), discovery, aliases, MCP, access control, and the PoC import. See the [roadmap](roadmap.md).
 
 ## Verification evidence
 
 | Check | Where | Result |
 | --- | --- | --- |
-| `make ci` with `GOLANGCI_LINT=<golangci-lint 2.14.0 release binary>`, branch `issue-2-subprocedure-references` | darwin/arm64, local Go 1.27.2 | **Pass.** `0 issues`; 6/6 packages `ok` in `go test` and in `go test -race`; `deps-check: PASS (10 modules …)`; `No vulnerabilities found.`; `demo: PASS`. |
+| `make ci` with `GOLANGCI_LINT=<golangci-lint 2.14.0 release binary>`, branch `issue-3-reference-graph` | darwin/arm64, local Go 1.27.2 | **Pass.** `0 issues`; 6/6 packages `ok` in `go test` and in `go test -race`; `deps-check: PASS (10 modules …)`; `No vulnerabilities found.`; `demo: PASS`. |
+| GitHub Actions `ci`, runs 37921336843 (PR for #2) and 37921363929 (`main` at `1f15445`) | ubuntu-latest | **Pass.** |
 | GitHub Actions `ci`, runs 37918349018 (PR for #1) and 37918365752 (`main` at `ce8e024`) | ubuntu-latest | **Pass.** |
 | GitHub Actions `ci`, run [37912026720](https://github.com/ashuangiras/polaroid/actions/runs/37912026720) on commit `7fb84cd` (increment 1) | ubuntu-latest, Go 1.27.2, golangci-lint 2.14.0 | **Pass.** |
 | `make lint` with the `golangci-lint` on `PATH` (2.12.2) | darwin/arm64 | **Fails, as designed.** The output reads `golangci-lint 2.14.0 is required, found 2.12.2`. |
-| Test inventory | darwin/arm64, Go 1.27.2 | The source has 76 `Test` functions, and 76 top-level tests passed (plus 99 subtests). |
+| Test inventory | darwin/arm64, Go 1.27.2 | The source has 90 `Test` functions, and 90 top-level tests passed (plus 105 subtests). |
 
 Negative checks showed that the gates detect what they claim to detect. Each mutation below was made temporarily, the expected tests failed, and the mutation was reverted:
 
@@ -54,6 +59,9 @@ Negative checks showed that the gates detect what they claim to detect. Each mut
 - Removing the reference-target check fails `TestReferencesToMissingTargetsAreRejected` and three `TestInvalidReferencesAreRejected` cases. The schema still blocked the write.
 - Disabling the trigger that keeps references with their version fails `TestSchemaRejectsChangesToReferences/add_to_an_existing_version`.
 - Always serializing `references` fails `TestVersionsWithoutReferencesOmitTheField` and `TestVersionsFromBeforeReferencesReadBackUnchanged`.
+- Skipping the write-time graph check fails the storage cycle, concurrency and limit tests and both HTTP graph tests.
+- Disabling cycle detection in the walker fails `TestExpandGraphRejectsCycles`, the four storage cycle tests and `TestReferenceCyclesAreRejected`. The limits still stop the walk.
+- Disabling the depth limit fails `TestExpandGraphLimits`, `TestCompositionGraphLimits` and `TestGraphsOverTheLimitAreRefused`.
 - Leaking internal error text fails `TestInternalErrorsAreNotExposed`.
 - Making the CLI exit 0 on API errors fails `TestFailedRequestsExitOne`.
 - Adding `net/http` to `internal/memory` fails `TestPackageBoundaries`.
@@ -67,4 +75,8 @@ Negative checks showed that the gates detect what they claim to detect. Each mut
 
 ## Next work item
 
-[#3 Reference-graph validation and bounded traversal](https://github.com/ashuangiras/polaroid/issues/3). Before starting, write the ADR the issue asks for: how a contextual reference is treated before execution evidence exists (the issue proposes evaluating it at the target's latest version), and the depth and node limits for traversal.
+Refine roadmap item **3.1 Execution records** and file it as an issue. Increment 3's items are ordered but not yet issue-ready. Settle at least these first:
+
+- how an environment is identified;
+- whether evidence is stored inline or by reference, with size limits;
+- how an execution names the binding revision and repository it ran under.

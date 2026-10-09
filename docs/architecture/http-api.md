@@ -17,6 +17,7 @@ This page is the contract of the API that `polaroidd` serves. It covers only wha
 | `GET /v1/procedures/{id}` | `200` history | A procedure and all of its versions, oldest first. |
 | `GET /v1/procedures/by-key/{canonical_key}` | `200` history | The same history, looked up by canonical key. |
 | `GET /v1/procedures/{id}/versions/{n}` | `200` version | One version. |
+| `GET /v1/procedures/{id}/versions/{n}/graph` | `200` graph node | The version's composition graph, with the exact version each reference selects. |
 | `POST /v1/procedures/{id}/versions` | `201` version, with a `Location` header | Append a version derived from `base_version`. |
 | `POST /v1/bindings` | `201` binding history, with a `Location` header | Create a binding and its revision 1. |
 | `GET /v1/bindings?repository={repository}` | `200 {"bindings":[...]}` | List one repository's bindings, ordered by name. Not paginated. |
@@ -66,7 +67,34 @@ A version may list the procedures it composes, in `version.references` on create
 ]
 ```
 
-They are returned in the same order and form, compacted. A version without references has no `references` field, so versions written before references existed are served unchanged. An unknown target, a missing pinned version, a duplicate name or a malformed `inputs` mapping is `400 invalid_request`. Each failing reference is named in `fields`, for example `version.references[0].procedure_id` or `version.references[1].inputs.module`. Cycles are not detected yet.
+They are returned in the same order and form, compacted. A version without references has no `references` field, so versions written before references existed are served unchanged. An unknown target, a missing pinned version, a duplicate name or a malformed `inputs` mapping is `400 invalid_request`. Each failing reference is named in `fields`, for example `version.references[0].procedure_id` or `version.references[1].inputs.module`.
+
+A version whose graph would contain a cycle is rejected with `409 reference_cycle`. The `cycle` field lists the path: each step is a node and the reference followed out of it, and the last step is the repeated procedure, which has no `reference`.
+
+```json
+{"error":{"code":"reference_cycle","message":"references form a cycle: A@2 -[b]-> B@1 -[a]-> A@2",
+  "cycle":[{"procedure_id":"A","version":2,"reference":"b"},{"procedure_id":"B","version":1,"reference":"a"},{"procedure_id":"A","version":2}]}}
+```
+
+A graph deeper than 32 references or larger than 2048 nodes is rejected with `422 graph_too_large`. See [records.md](records.md#composition-graph-implemented).
+
+### Composition graph
+
+`GET /v1/procedures/{id}/versions/{n}/graph` returns a nested tree.
+
+- Each node has `procedure_id`, `canonical_key`, `version` (the exact version selected) and `references`, which is empty for a leaf.
+- Each reference has its stored `name`, `version_policy` and `inputs`, and the selected child `node`.
+- Pinned references select the pinned version. Contextual references select the target's latest version at the moment of the read.
+- The whole walk reads one consistent snapshot.
+
+```json
+{"procedure_id":"…root","canonical_key":"compose.root","version":1,"references":[
+  {"name":"old-leaf","version_policy":{"pin":1},"inputs":{},"node":{"procedure_id":"…leaf","canonical_key":"go.dependency.add","version":1,"references":[]}},
+  {"name":"mid","version_policy":{"contextual":{}},"inputs":{"module":{"input":"driver"}},"node":{"procedure_id":"…mid","canonical_key":"compose.mid","version":1,"references":[
+    {"name":"leaf","version_policy":{"contextual":{}},"inputs":{},"node":{"procedure_id":"…leaf","canonical_key":"go.dependency.add","version":2,"references":[]}}]}}]}
+```
+
+A missing procedure or version is `404`. A cycle (possible only in versions stored before cycle checking existed) is `409 reference_cycle`, and a graph over the limits is `422 graph_too_large`. No partial graph is ever returned.
 
 ### Append a version
 
@@ -142,7 +170,7 @@ Every error is a JSON object of this form:
 {"error": {"code": "…", "message": "…", "fields": [{"field": "…", "message": "…"}], "latest_version": 2, "latest_revision": 2}}
 ```
 
-`fields` appears only with `invalid_request` errors that come from field validation. `latest_version` appears only with `version_conflict`, and `latest_revision` only with `revision_conflict`. Messages are for humans and may change; branch on `code`.
+`fields` appears only with `invalid_request` errors that come from field validation. `latest_version` appears only with `version_conflict`, `latest_revision` only with `revision_conflict`, and `cycle` only with `reference_cycle`. Messages are for humans and may change; branch on `code`.
 
 | Status | `code` | When |
 | --- | --- | --- |
@@ -154,6 +182,7 @@ Every error is a JSON object of this form:
 | 409 | `version_conflict` | `base_version` is not the latest version. `latest_version` is included. |
 | 409 | `binding_exists` | The repository already has a binding with this `name`. |
 | 409 | `revision_conflict` | `base_revision` is not the latest revision. `latest_revision` is included. |
+| 409 | `reference_cycle` | The version's references would form a cycle, or a stored graph contains one. `cycle` is included. |
 | 413 | `request_too_large` | The body exceeds 1 MiB. |
 | 415 | `unsupported_media_type` | A request with a body that is not `application/json`. |
 | 500 | `internal` | An unexpected failure. The details are logged by `polaroidd` and never returned. |
@@ -179,6 +208,7 @@ Example `invalid_request` response:
 | `polaroid get ID` | `GET /v1/procedures/{id}` |
 | `polaroid get-by-key KEY` | `GET /v1/procedures/by-key/{key}` |
 | `polaroid get-version ID N` | `GET /v1/procedures/{id}/versions/{n}` |
+| `polaroid graph ID N` | `GET /v1/procedures/{id}/versions/{n}/graph` |
 | `polaroid revise ID [FILE]` | `POST /v1/procedures/{id}/versions` |
 | `polaroid bindings REPOSITORY` | `GET /v1/bindings?repository={repository}` |
 | `polaroid bind [FILE]` | `POST /v1/bindings` |

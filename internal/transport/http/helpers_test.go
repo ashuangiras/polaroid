@@ -150,6 +150,11 @@ type errorJSON struct {
 	} `json:"fields"`
 	LatestVersion  int `json:"latest_version"`
 	LatestRevision int `json:"latest_revision"`
+	Cycle          []struct {
+		ProcedureID string `json:"procedure_id"`
+		Version     int    `json:"version"`
+		Reference   string `json:"reference"`
+	} `json:"cycle"`
 }
 
 type bindingJSON struct {

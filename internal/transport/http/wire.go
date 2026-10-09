@@ -284,9 +284,51 @@ type errorDetail struct {
 	// LatestRevision is the binding's latest revision for revision_conflict
 	// errors.
 	LatestRevision int `json:"latest_revision,omitzero"`
+	// Cycle is the path of a reference_cycle error.
+	Cycle []cycleStepBody `json:"cycle,omitzero"`
+}
+
+type cycleStepBody struct {
+	ProcedureID string `json:"procedure_id"`
+	Version     int    `json:"version"`
+	Reference   string `json:"reference,omitzero"`
 }
 
 type fieldProblem struct {
 	Field   string `json:"field"`
 	Message string `json:"message"`
+}
+
+// graphNodeBody is one node of a composition graph. References is always
+// present, empty for a leaf.
+type graphNodeBody struct {
+	ProcedureID  string          `json:"procedure_id"`
+	CanonicalKey string          `json:"canonical_key"`
+	Version      int             `json:"version"`
+	References   []graphEdgeBody `json:"references"`
+}
+
+type graphEdgeBody struct {
+	Name          string            `json:"name"`
+	VersionPolicy versionPolicyBody `json:"version_policy"`
+	Inputs        jsontext.Value    `json:"inputs"`
+	Node          graphNodeBody     `json:"node"`
+}
+
+func newGraphNodeBody(n memory.GraphNode) graphNodeBody {
+	body := graphNodeBody{
+		ProcedureID:  n.ProcedureID,
+		CanonicalKey: n.CanonicalKey,
+		Version:      n.Version,
+		References:   make([]graphEdgeBody, len(n.Edges)),
+	}
+	for i, e := range n.Edges {
+		body.References[i] = graphEdgeBody{
+			Name:          e.Reference.Name,
+			VersionPolicy: newVersionPolicyBody(e.Reference.VersionPolicy),
+			Inputs:        e.Reference.Inputs,
+			Node:          newGraphNodeBody(e.Node),
+		}
+	}
+	return body
 }
