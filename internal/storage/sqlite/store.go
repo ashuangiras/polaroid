@@ -265,7 +265,83 @@ func insertVersion(ctx context.Context, tx *sql.Tx, v memory.Version) error {
 	if err != nil {
 		return fmt.Errorf("insert version %d: %w", v.Number, err)
 	}
-	return nil
+	if len(v.References) == 0 {
+		return nil
+	}
+	// Walk the new version's graph as the transaction now sees it; a cycle or
+	// an exceeded limit fails the write and rolls everything back (ADR-0009).
+	_, err = memory.ExpandGraph(ctx, txGraph{tx}, v.ProcedureID, v.Number)
+	return err
+}
+
+// CompositionGraph implements memory.Store. The walk takes several queries,
+// so it runs in one transaction to read a single snapshot.
+func (s *Store) CompositionGraph(ctx context.Context, procedureID string, version int) (memory.GraphNode, error) {
+	var g memory.GraphNode
+	err := s.write(ctx, func(tx *sql.Tx) error {
+		var err error
+		g, err = memory.ExpandGraph(ctx, txGraph{tx}, procedureID, version)
+		return err
+	})
+	return g, err
+}
+
+// txGraph implements memory.GraphReader inside one transaction.
+type txGraph struct {
+	tx *sql.Tx
+}
+
+func (g txGraph) LatestVersion(ctx context.Context, procedureID string) (int, error) {
+	var latest sql.NullInt64
+	if err := g.tx.QueryRowContext(ctx,
+		`SELECT MAX(version) FROM procedure_versions WHERE procedure_id = ?`, procedureID).Scan(&latest); err != nil {
+		return 0, fmt.Errorf("read latest version: %w", err)
+	}
+	if !latest.Valid {
+		return 0, memory.ErrNotFound
+	}
+	return int(latest.Int64), nil
+}
+
+func (g txGraph) VersionNode(ctx context.Context, procedureID string, version int) (string, []memory.Reference, error) {
+	rows, err := g.tx.QueryContext(ctx, `
+		SELECT p.canonical_key, r.name, r.target_procedure_id, r.policy, r.pinned_version, r.inputs
+		FROM procedures AS p
+		JOIN procedure_versions AS v ON v.procedure_id = p.id
+		LEFT JOIN procedure_version_references AS r ON r.procedure_id = v.procedure_id AND r.version = v.version
+		WHERE p.id = ? AND v.version = ?
+		ORDER BY r.position`, procedureID, version)
+	if err != nil {
+		return "", nil, fmt.Errorf("query version references: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	key, found := "", false
+	var refs []memory.Reference
+	for rows.Next() {
+		var name, target, policy sql.NullString
+		var pin sql.NullInt64
+		var inputs []byte
+		if err := rows.Scan(&key, &name, &target, &policy, &pin, &inputs); err != nil {
+			return "", nil, fmt.Errorf("scan version references: %w", err)
+		}
+		found = true
+		if name.Valid {
+			refs = append(refs, memory.Reference{
+				Name:          name.String,
+				ProcedureID:   target.String,
+				VersionPolicy: memory.VersionPolicy{Kind: memory.PolicyKind(policy.String), Pin: int(pin.Int64)},
+				Inputs:        jsontext.Value(inputs),
+			})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", nil, fmt.Errorf("read version references: %w", err)
+	}
+	if !found {
+		return "", nil, memory.ErrNotFound
+	}
+	return key, refs, nil
 }
 
 // checkTargets returns a *memory.MissingTargetsError listing every reference

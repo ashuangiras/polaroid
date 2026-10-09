@@ -89,6 +89,7 @@ func TestCommandsReachTheAPI(t *testing.T) {
 		{"get", h.ID},
 		{"get-by-key", "go.dependency.add"},
 		{"get-version", h.ID, "2"},
+		{"graph", h.ID, "2"},
 	} {
 		r := cli("", nil, append([]string{"-server", server}, args...)...)
 		mustSucceed(t, r)
@@ -223,6 +224,7 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		{"get"},
 		{"get", "a", "b"},
 		{"get-version", "a"},
+		{"graph", "a"},
 		{"revise"},
 		{"bindings"},
 		{"get-binding"},
