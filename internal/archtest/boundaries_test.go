@@ -9,9 +9,9 @@ import (
 
 	// Importing the checked packages makes `go test` re-run this test
 	// whenever they change, instead of reusing a cached pass.
-	_ "example.com/polaroid/internal/memory"
-	_ "example.com/polaroid/internal/storage/sqlite"
-	_ "example.com/polaroid/internal/transport/http"
+	_ "github.com/ashuangiras/polaroid/internal/memory"
+	_ "github.com/ashuangiras/polaroid/internal/storage/sqlite"
+	_ "github.com/ashuangiras/polaroid/internal/transport/http"
 )
 
 // Dependency direction (see docs/architecture/overview.md): cmd wires

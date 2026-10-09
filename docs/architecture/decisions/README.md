@@ -5,7 +5,7 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | ADR | Decision | Status |
 | --- | --- | --- |
 | [0001](0001-single-module-layered-packages.md) | One Go module with layered internal packages | Accepted |
-| [0002](0002-go-toolchain-and-provisional-module-path.md) | Go 1.27.1 minimum, the Go 1.27.2 toolchain, and the provisional module path `example.com/polaroid` | Accepted |
+| [0002](0002-go-toolchain-and-provisional-module-path.md) | Go 1.27.1 minimum, the Go 1.27.2 toolchain, and the provisional module path `example.com/polaroid` (since replaced by `github.com/ashuangiras/polaroid`) | Accepted |
 | [0003](0003-sqlite-with-modernc-driver.md) | SQLite through the pure-Go `modernc.org/sqlite` driver | Accepted |
 | [0004](0004-append-only-versions-with-expected-base.md) | Append-only versions guarded by an expected base version | Accepted |
 | [0005](0005-strict-json-with-encoding-json-v2.md) | Strict JSON decoding with `encoding/json/v2` | Accepted |

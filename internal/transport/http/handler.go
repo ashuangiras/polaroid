@@ -20,7 +20,7 @@ import (
 	"strconv"
 	"strings"
 
-	"example.com/polaroid/internal/memory"
+	"github.com/ashuangiras/polaroid/internal/memory"
 )
 
 // MaxRequestBytes bounds every request body.

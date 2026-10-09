@@ -4,7 +4,7 @@ import (
 	"encoding/json/jsontext"
 	"time"
 
-	"example.com/polaroid/internal/memory"
+	"github.com/ashuangiras/polaroid/internal/memory"
 )
 
 // Request bodies. Server-assigned fields (IDs, version numbers, timestamps)

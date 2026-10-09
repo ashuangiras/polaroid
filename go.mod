@@ -1,4 +1,4 @@
-module example.com/polaroid
+module github.com/ashuangiras/polaroid
 
 go 1.27.1
 

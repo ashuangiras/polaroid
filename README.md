@@ -89,4 +89,4 @@ The CLI uses `-server URL`, else `$POLAROID_URL`, else `http://127.0.0.1:7417`. 
 
 ## Module path and license
 
-The module path `example.com/polaroid` is a placeholder until the repository is published ([ADR-0002](docs/architecture/decisions/0002-go-toolchain-and-provisional-module-path.md)). The project license has not been chosen yet; see [status](docs/development/status.md).
+The module path is `github.com/ashuangiras/polaroid`. The project license has not been chosen yet; see [status](docs/development/status.md).

@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"example.com/polaroid/internal/memory"
-	"example.com/polaroid/internal/storage/sqlite"
+	"github.com/ashuangiras/polaroid/internal/memory"
+	"github.com/ashuangiras/polaroid/internal/storage/sqlite"
 )
 
 var created = time.Date(2026, 10, 9, 12, 0, 0, 123456789, time.UTC)

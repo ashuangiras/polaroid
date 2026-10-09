@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	httptransport "example.com/polaroid/internal/transport/http"
+	httptransport "github.com/ashuangiras/polaroid/internal/transport/http"
 )
 
 func TestCreateRetrieveAndRevise(t *testing.T) {

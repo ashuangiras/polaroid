@@ -1,6 +1,6 @@
 # 0002. Go 1.27.1 minimum, Go 1.27.2 toolchain, and the provisional module path `example.com/polaroid`
 
-**Status:** Accepted
+**Status:** Accepted. The provisional module path was replaced with `github.com/ashuangiras/polaroid` on 2026-10-09, when the repository was published.
 **Date:** 2026-10-09
 
 ## Context

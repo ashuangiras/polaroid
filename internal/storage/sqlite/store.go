@@ -18,7 +18,7 @@ import (
 	sqlitedriver "modernc.org/sqlite"
 	sqlitelib "modernc.org/sqlite/lib"
 
-	"example.com/polaroid/internal/memory"
+	"github.com/ashuangiras/polaroid/internal/memory"
 )
 
 // Driver parameters appended to the database path; see modernc.org/sqlite

@@ -23,9 +23,9 @@ import (
 	"syscall"
 	"time"
 
-	"example.com/polaroid/internal/memory"
-	"example.com/polaroid/internal/storage/sqlite"
-	httptransport "example.com/polaroid/internal/transport/http"
+	"github.com/ashuangiras/polaroid/internal/memory"
+	"github.com/ashuangiras/polaroid/internal/storage/sqlite"
+	httptransport "github.com/ashuangiras/polaroid/internal/transport/http"
 )
 
 const (
