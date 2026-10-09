@@ -64,10 +64,18 @@ An unknown record, or a version that is not a number, gets the protocol's resour
 
 ## Connecting a client
 
-Start the daemon (`bin/polaroidd`), then point the client at the URL. For VS Code, add this to `.vscode/mcp.json`:
+Start the daemon (`bin/polaroidd`), then point the client at the URL. This repository ships the VS Code configuration in `.vscode/mcp.json`; for another workspace, add the same file:
 
 ```json
 {"servers": {"polaroid": {"type": "http", "url": "http://127.0.0.1:7417/mcp"}}}
 ```
+
+Verified clients (2026-10-09):
+
+| Client | Result |
+| --- | --- |
+| VS Code Copilot chat (VS Code 1.137, bundled `@github/copilot` runtime) | Works: 17 tools discovered, full workflow run from chat. |
+| Go SDK v1.8.0 client | Works; used by the automated tests. |
+| TypeScript SDK 1.32.1, MCP Inspector 2.10.1 | Refused: their newest protocol is 2025-11-25. |
 
 Other clients that support streamable HTTP take the same URL. The client must support protocol revision 2026-07-28.
