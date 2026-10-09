@@ -1,0 +1,35 @@
+{
+  "canonical_key": "go.module.checks",
+  "version": {
+    "philosophy": "A check is evidence only when it actually ran, against the state being verified, with the tool versions the repository pins. A check that was skipped, ran another version or reused a cached result is reported as exactly that, never as passed.",
+    "method": "Check the pinned tool versions, get fast feedback from the package tests, then run the repository's gate commands one at a time, keeping each exit status and a short deterministic excerpt of its output.",
+    "contract": {
+      "inputs": {
+        "gate_commands": "The repository's gate commands, in order, run from the module root, for example [\"make check\"].",
+        "working_tree": "`clean`, or `modified:` with a digest of the uncommitted changes, as recorded by the caller."
+      },
+      "preconditions": [
+        "The working directory is the module root, at the commit and working-tree state being verified.",
+        "The module builds at that state."
+      ],
+      "expected_outcome": "The package tests pass and every gate command exits 0.",
+      "verification": [
+        "Evidence lists every command with its exit status and an excerpt of deterministic lines: no durations, timestamps or process IDs.",
+        "Evidence lists every command that did not run, with the reason."
+      ],
+      "boundaries": [
+        "Does not fix failures or edit files; it reports them.",
+        "A command that cannot run, for example for lack of network or a pinned tool, makes the outcome `failed`, with the reason recorded."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        { "id": "tools", "action": "Read the repository's contributor documentation (for example AGENTS.md) for pinned tool versions, and check each installed version. If a pinned tool is not on PATH at that version, pass its path the way the repository documents, for example a GOLANGCI_LINT variable, and record that path's version in the environment attributes." },
+        { "id": "unit", "action": "Run the package tests first, for fast feedback: `GOFLAGS=-count=1 go test ./test/...` from the module root. The module's tests live in its top-level `test/` directory." },
+        { "id": "gate", "action": "Run each command in gate_commands in order, from the module root, with GOFLAGS=-count=1 so that Go test results are not reused from the cache. Keep each exit status and its deterministic summary lines, such as `ok` package lines, `0 issues.`, `deps-check: PASS`, `demo: PASS` or `passed=N failed=0`." },
+        { "id": "record", "action": "Record outcome `succeeded` only if every step passed. Otherwise record `failed`, naming the failing step and command with its output, and listing what did not run." }
+      ]
+    },
+    "revision_reason": "Initial version. DEMONSTRATION SEED (#28): one instruction in this version is deliberately stale, so that the correction loop can be exercised in an isolated store. It is not a naturally occurring defect."
+  }
+}
