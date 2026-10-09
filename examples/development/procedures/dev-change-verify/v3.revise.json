@@ -1,0 +1,130 @@
+{
+  "base_version": 2,
+  "version": {
+    "philosophy": "A change is verified for one exact state: a repository, a commit and working-tree state, an environment, and the versions of the procedures that ran. Evidence says what ran and what did not, and it is recorded so that a later agent can rely on it, or see where it stops.",
+    "method": "Establish the exact target: repository, full commit, working-tree state, effective inputs and environment. Resolve the binding at that target, and read the selected versions, why each was selected and whether it is already verified there. Run the build and then the checks through their references as a fresh run, record each child execution before the parent that links them, then resolve again at the same target and confirm that the parent combination is verified there.",
+    "goal": "Verify one commit of a repository by building it and running its gates through the referenced procedures, and record the evidence.",
+    "applicability": {
+      "shared": {}
+    },
+    "contract": {
+      "inputs": {
+        "build_command": "Passed to the build reference.",
+        "artifacts": "Passed to the build reference.",
+        "gate_commands": "Passed to the checks reference.",
+        "working_tree": "`clean`, or `modified:` with the SHA-256 of the uncommitted changes. Set by the agent at run time, never by a binding."
+      },
+      "preconditions": [
+        "A local checkout of the repository, with the change to verify committed or its working-tree state recorded.",
+        "A Polaroid binding of this procedure in the repository, whose inputs supply the commands and paths.",
+        "A Polaroid service whose binding resolution accepts a target `commit` and `inputs` and reports `target_verification` for each selected node."
+      ],
+      "expected_outcome": "Both child executions of this run succeeded and are linked to this run's parent execution, the parent is verified, and resolving at the same target reports the root and both children verified, with this run's executions as the latest.",
+      "verification": [
+        "get_verification on the parent execution reports verified, with a combination naming the repository, commit, environment, inputs and both child versions.",
+        "resolve_binding (or get_graph, for an explicitly chosen version) with the same commit and inputs reports `target_verification.verified: true` for the root, with `latest_execution_id` equal to this run's parent, and for both children, with this run's child executions as their latest."
+      ],
+      "boundaries": [
+        "Verification holds only for the recorded repository, commit, environment, inputs and child versions. It says nothing about another repository, environment, commit or working-tree state. A rebase, amend or merge that produces a new commit is a new target, unverified until a run is recorded there, even when its tree is identical.",
+        "Selection evidence (`selected_by: evidence`, `verified_by`, `selection_evidence`) explains why a version was chosen, and may come from any commit. It supports choosing a candidate; it never certifies the target.",
+        "Only `target_verification` speaks about the target. A missing `target_verification`, `verified: false` or empty `execution_ids` means unverified.",
+        "A successful or verified child does not establish its parent. The parent is verified only by its own recorded execution, linked to verified children.",
+        "Existing verification of the target is context, not a substitute: this procedure performs a fresh run and records its outcome. Only looking up whether a target is verified (resolving with the target, or listing verifications) records nothing and is not a run of this procedure.",
+        "Polaroid stores what agents submit and derives verification from those records. It does not check that the commands ran or that the evidence is true; the agent that records an execution is responsible for that.",
+        "Does not merge, push or close work items."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "context",
+          "action": "From the module root, record the full commit from `git rev-parse HEAD` (40 or 64 hex characters; a branch name or an abbreviated hash is not a target), the repository identifier from `git remote get-url origin` (host and path, lowercase, without scheme, user, port or `.git`), and an environment name in canonical-key form that identifies this machine, for example `darwin-arm64.local`, with attributes such as the OS, architecture and tool versions."
+        },
+        {
+          "id": "working-tree",
+          "action": "Run `git status --porcelain`. If it prints nothing, working_tree is `clean`. Otherwise commit the changes first, or set working_tree to `modified:` followed by the SHA-256 of `git diff HEAD` and the untracked files. Never record a modified tree as `clean`."
+        },
+        {
+          "id": "inputs",
+          "action": "Find this procedure's binding in the repository and read its latest revision. The effective inputs are that revision's inputs plus working_tree. Note the binding ID and revision number; the parent execution records them."
+        },
+        {
+          "id": "resolve",
+          "action": "Call resolve_binding with the environment, `commit` set to the full commit and `inputs` set to the effective inputs. Check that the `binding_revision` it resolved is the one whose inputs you used. Note the root version and, for every node, `selected_by`, `selection_evidence` (the execution and the commit it ran at) and `target_verification`."
+        },
+        {
+          "id": "read",
+          "action": "For the root and each reference, read the selected version in full (philosophy, method, contract and instructions) before running it, and the reference's input mapping. A child's effective inputs are the mapping applied to the effective inputs, as its `target_verification.combination.inputs` shows."
+        },
+        {
+          "id": "selection",
+          "action": "Treat selection evidence as the reason a candidate was chosen, not as a result for your commit. Only `target_verification` reports your target. Resolution may keep an older version that has evidence over a newer one that has none: follow the version resolution selected. If you deliberately run another version, for example a newer version's first run, read its graph with get_graph for that version, with the same repository, environment, commit and inputs, follow that graph, and state in the parent's evidence that the version was chosen explicitly, not by resolution."
+        },
+        {
+          "id": "existing-evidence",
+          "action": "If the root's `target_verification` is already verified, report it as context, with its `latest_execution_id`, and still perform the run: this procedure's result is a fresh run and its record. Never record an execution for a run you did not perform in this invocation, and never copy another execution's evidence."
+        },
+        {
+          "id": "children",
+          "action": "Follow the `build` reference, then the `checks` reference, each at its selected version and with its effective inputs. The parent runs no commands of its own, and each child procedure runs once per invocation. Assess each child's outcome against its own contract (expected outcome and verification), not only exit statuses. Record each child execution as soon as it finishes: the procedure and exact version, this repository and commit, the environment, its effective inputs, its outcome and its evidence (every command with its exit status and a deterministic excerpt, and what did not run)."
+        },
+        {
+          "id": "recheck",
+          "action": "Before recording each execution, check that `git rev-parse HEAD`, `git status --porcelain`, the effective inputs and the environment are still the ones you established. If any changed during the run, stop and reassess before recording: establish the state each command actually ran at, record only what you can state truthfully for that state, and verify a new state with a new run."
+        },
+        {
+          "id": "parent",
+          "action": "Record this procedure's execution with the exact version followed, binding_id and binding_revision, this repository and commit, the environment, the effective inputs, and `children` linking both child executions of this run. Its outcome is `succeeded` only if both children succeeded and met their contracts. Its evidence names the child execution IDs, how each version was selected, and the target verification seen before the run. A child execution can be linked to one parent only; if a parent was already recorded over it, run the child again."
+        },
+        {
+          "id": "confirm",
+          "action": "Read the parent's verification with get_verification. Then resolve again with the same commit and inputs (for an explicitly chosen version, call get_graph again) and report `target_verification` for the root and both children, with their `latest_execution_id`. The target is verified by this run only if the root is verified there and its latest execution is this run's parent. Report anything else as not verified, with the problems."
+        },
+        {
+          "id": "scope",
+          "action": "Report the result for the exact commit only. If the change is later rebased, amended or merged into a new commit, that commit is unverified until a run there is recorded: cite the verified commit by its own SHA, and never relabel the evidence as verification of the new one."
+        },
+        {
+          "id": "on-failure",
+          "action": "If a step fails, decide what failed before changing anything: wrong or outdated instructions, an environment blocker, or a defect in the product being verified. Only wrong instructions justify a new procedure version: append it with base_version set to the version you followed, run it, and record the new execution. Repair an environment blocker and record it; file a product defect as a work item. Never edit or delete earlier records."
+        }
+      ]
+    },
+    "references": [
+      {
+        "name": "build",
+        "procedure_id": "go.module.build",
+        "version_policy": {
+          "contextual": {}
+        },
+        "inputs": {
+          "build_command": {
+            "input": "build_command"
+          },
+          "artifacts": {
+            "input": "artifacts"
+          },
+          "working_tree": {
+            "input": "working_tree"
+          }
+        }
+      },
+      {
+        "name": "checks",
+        "procedure_id": "go.module.checks",
+        "version_policy": {
+          "contextual": {}
+        },
+        "inputs": {
+          "gate_commands": {
+            "input": "gate_commands"
+          },
+          "working_tree": {
+            "input": "working_tree"
+          }
+        }
+      }
+    ],
+    "revision_reason": "Classified for #35 (ADR-0020); the definition is unchanged from version 2. Its contract takes the module's own commands and paths as inputs and names no repository, and it is already bound by github.com/ashuangiras/polaroid and by the example.com/fixtures/go-service fixture with different inputs, so it is shared. Its origin is recorded on the procedure."
+  }
+}

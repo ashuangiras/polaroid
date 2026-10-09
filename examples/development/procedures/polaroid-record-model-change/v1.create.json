@@ -1,0 +1,96 @@
+{
+  "canonical_key": "polaroid.record-model.change",
+  "version": {
+    "philosophy": "Stored records are history that other agents rely on. A record-model change is compatible only if every record stored before it reads back with its original meaning and every existing request keeps its documented behavior; new meaning is added beside old records, never written over them. Deciding and documenting the contract before the code keeps the history honest.",
+    "method": "Settle the contract and its compatibility consequences first and record them in an ADR, then add a new migration with an upgrade test from the previous schema, implement each rule once in the domain with real-storage and concurrency tests, expose it identically on every transport, document it, and verify the implementation commit through the change-verification procedure.",
+    "contract": {
+      "inputs": {
+        "work_item": "The issue that holds the change's acceptance criteria.",
+        "build_command": "Passed to the verify reference.",
+        "artifacts": "Passed to the verify reference.",
+        "gate_commands": "Passed to the verify reference.",
+        "working_tree": "Passed to the verify reference; set by the agent at run time."
+      },
+      "preconditions": [
+        "A work item with testable acceptance criteria for a change to Polaroid's stored records, their schema, or the requests that read and write them.",
+        "A branch from an up-to-date main, and the current schema version known (the highest migration number)."
+      ],
+      "expected_outcome": "The change is implemented as a new migration and additive contract changes; every record stored before it reads back with its original meaning; old requests keep their documented behavior; the contract and its compatibility consequences are documented; and the implementation commit is verified through the verify reference.",
+      "verification": [
+        "An upgrade test opens a database written at the previous schema version, holding every record kind the change touches, and shows IDs, histories, evidence and verification combinations unchanged, also after reopening.",
+        "Each new rule has a test that fails when the rule is removed (a mutation check), using real SQLite and real HTTP.",
+        "The verify reference's execution is verified at the implementation commit and linked as this execution's child."
+      ],
+      "boundaries": [
+        "Never edits an applied migration and never updates or deletes stored rows; a new column means 'absent' for existing rows, never an invented value.",
+        "Does not add task-specific behavior or interpret free-form record content.",
+        "Does not change verification or selection of existing records unless the work item says so, and then documents it.",
+        "Does not merge, push or close work items."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "contracts",
+          "action": "Read AGENTS.md, docs/development/status.md, docs/architecture/records.md, http-api.md, mcp.md and the ADRs the change touches, then the migrations, the domain package and the transports. List every stored record kind and every request (HTTP, MCP tool, CLI command) the change affects."
+        },
+        {
+          "id": "compatibility",
+          "action": "Before writing code, decide and write down for each affected record and request: what existing rows mean after the migration, what an old request does, what a response adds, and which lists change. Record each consequential decision in an ADR, committed on its own before the implementation."
+        },
+        {
+          "id": "migration",
+          "action": "Add the next numbered migration file. Never edit an applied one. New tables get immutability triggers (no UPDATE or DELETE) and CHECK constraints that repeat the domain rules; new columns on existing tables are nullable and mean 'absent' for existing rows. Never UPDATE existing rows."
+        },
+        {
+          "id": "upgrade-test",
+          "action": "Write a storage test that applies the previous migrations to a new file, inserts representative rows of every affected record kind with raw SQL, opens the file with the new build, and compares what the store returns with what was inserted; reopen and compare again. Include child links and verification combinations when executions are involved."
+        },
+        {
+          "id": "domain",
+          "action": "Implement each rule once, in the domain package, which must not import HTTP or storage packages. The store enforces atomic rules (uniqueness, conflicts) inside its write transaction. Add tests with real SQLite and real HTTP; for every new uniqueness or registration rule add a concurrency test that synchronizes with barriers, never sleeps. Remove each new rule temporarily to see its tests fail, then restore it with the editor, not with git."
+        },
+        {
+          "id": "parity",
+          "action": "Expose the change on HTTP, MCP and the CLI with the same field names, filters and errors. Update tool descriptions and the MCP server instructions where agents need to know, and the end-to-end scripts' expectations."
+        },
+        {
+          "id": "docs",
+          "action": "In the same change, update records.md, http-api.md, mcp.md, the README and the examples, and state the compatibility consequences explicitly."
+        },
+        {
+          "id": "verify",
+          "action": "Commit the implementation and follow the `verify` reference at that exact commit, with explicit target verification, recording its children before it. Its execution becomes this execution's child."
+        },
+        {
+          "id": "record",
+          "action": "Record this execution with the work item, the ADRs, the migration number, the upgrade and concurrency tests, the mutation checks performed with their observed failures, and the verify child. Its outcome is succeeded only if every step held and the verify child is verified."
+        }
+      ]
+    },
+    "references": [
+      {
+        "name": "verify",
+        "procedure_id": "dev.change.verify",
+        "version_policy": {
+          "contextual": {}
+        },
+        "inputs": {
+          "artifacts": {
+            "input": "artifacts"
+          },
+          "build_command": {
+            "input": "build_command"
+          },
+          "gate_commands": {
+            "input": "gate_commands"
+          },
+          "working_tree": {
+            "input": "working_tree"
+          }
+        }
+      }
+    ],
+    "revision_reason": "Created for #35 (https://github.com/ashuangiras/polaroid/issues/35): no stored procedure covered implementing a backward-compatible change to Polaroid's record model, which that work needs and later schema changes will need again. It references dev.change.verify for verification instead of repeating its steps. Applicability and origin cannot be declared yet, because #35 adds those fields; a later version will declare them."
+  }
+}

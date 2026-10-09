@@ -1,0 +1,4 @@
+{
+  "repository_id": "github.com/ashuangiras/polaroid",
+  "reason": "Created in Polaroid during #35: no stored procedure covered changing Polaroid's record model, schema and contracts."
+}
