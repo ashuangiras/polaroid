@@ -77,15 +77,29 @@ var commands = []command{
 		func(c *client, args []string) error {
 			return c.send(http.MethodPost, bindingPath(args[0])+"/revisions", args[1:])
 		}},
+	{"record", "[FILE]", "record a finished execution from request JSON in FILE or stdin", 0, 1,
+		func(c *client, args []string) error { return c.send(http.MethodPost, "/v1/executions", args) }},
+	{"get-execution", "ID", "show one execution with its inputs and evidence", 1, 1,
+		func(c *client, args []string) error {
+			return c.do(http.MethodGet, "/v1/executions/"+url.PathEscape(args[0]), nil)
+		}},
+	{"executions", "PROCEDURE_ID [REPOSITORY]", "list a procedure's executions, optionally in one repository", 1, 2,
+		func(c *client, args []string) error {
+			query := url.Values{"procedure_id": {args[0]}}
+			if len(args) == 2 {
+				query.Set("repository", args[1])
+			}
+			return c.do(http.MethodGet, "/v1/executions?"+query.Encode(), nil)
+		}},
 }
 
 func usage() string {
 	var b strings.Builder
 	b.WriteString("Usage: polaroid [-server URL] [-timeout DURATION] COMMAND [ARGUMENTS]\n\nCommands:\n")
 	for _, cmd := range commands {
-		fmt.Fprintf(&b, "  %-28s %s\n", strings.TrimSpace(cmd.name+" "+cmd.args), cmd.summary)
+		fmt.Fprintf(&b, "  %-36s %s\n", strings.TrimSpace(cmd.name+" "+cmd.args), cmd.summary)
 	}
-	fmt.Fprintf(&b, "  %-28s %s\n", "help", "show this help")
+	fmt.Fprintf(&b, "  %-36s %s\n", "help", "show this help")
 	fmt.Fprintf(&b, "\nThe server is -server, else $POLAROID_URL, else %s.\n", defaultServer)
 	b.WriteString("Each response body is printed to stdout, also when the request fails.\n")
 	b.WriteString("Exit status: 0 success, 1 request failed, 2 usage error.\n")

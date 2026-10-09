@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Demonstrates procedure identity, immutable versions and repository bindings
-# against a real polaroidd process: create a procedure, read version 1, append
-# a corrected version 2, confirm both versions remain, confirm a stale
-# revision is rejected, bind the procedure in two repositories, revise one
-# binding and reject a stale binding revision, restart the daemon, and
-# confirm every history is unchanged.
+# Demonstrates procedure identity, immutable versions, repository bindings and
+# execution records against a real polaroidd process: create a procedure,
+# read version 1, append a corrected version 2, confirm both versions remain,
+# confirm a stale revision is rejected, bind the procedure in two
+# repositories, revise one binding and reject a stale binding revision,
+# record an execution under that binding, restart the daemon, and confirm
+# every record is unchanged.
 #
-# This verifies storage and versioning only. Contextual policies are stored
-# but not resolved, and execution evidence is not implemented yet
+# This verifies storage and versioning only. Contextual binding policies are
+# stored but not resolved, and nothing verifies executions yet
 # (docs/development/roadmap.md).
 #
 # Usage: scripts/demo.sh   (run `make build` first, or use `make demo`)
@@ -146,13 +147,32 @@ jq -e '[.revisions[].revision] == [1, 2]' <<<"$binding_a_history" >/dev/null ||
 	fail "binding history does not hold revisions 1 and 2"
 echo "exit status $status: $(jq -c .error <<<"$stale")"
 
-step "8. Restart polaroidd and confirm every history persisted"
+step "8. Record an execution of version 1 under the $repo_a binding's revision 2"
+commit=0123456789abcdef0123456789abcdef01234567
+execution="$(jq -n --arg id "$id" --arg binding "$binding_a_id" --arg repository "$repo_a" --arg commit "$commit" \
+	'{procedure_id: $id, version: 1, binding_id: $binding, binding_revision: 2, repository: $repository, commit: $commit,
+	  environment: {name: "demo.local", attributes: {os: "any"}}, inputs: {module: "modernc.org/sqlite"},
+	  outcome: "succeeded", evidence: {commands: [{run: "go list -deps -test ./...", exit: 0}]}}' |
+	bin/polaroid record)"
+execution_id="$(jq -r .id <<<"$execution")"
+jq -c '{id, version, binding_revision, repository, outcome}' <<<"$execution"
+[[ "$(bin/polaroid get-execution "$execution_id")" == "$execution" ]] || fail "execution reads back differently"
+jq -e --arg id "$execution_id" '[.executions[].id] == [$id]' <<<"$(bin/polaroid executions "$id" "$repo_a")" >/dev/null ||
+	fail "$repo_a does not list exactly its execution"
+status=0
+mismatch="$(jq '.version = 2' <<<"$(jq '{procedure_id, version, binding_id, binding_revision, repository, commit, environment, inputs, outcome, evidence}' <<<"$execution")" |
+	bin/polaroid record 2>/dev/null)" || status=$?
+jq -e '.error.fields[0].field == "version"' <<<"$mismatch" >/dev/null || fail "a version outside the binding's pin was recorded: $mismatch"
+[[ "$(bin/polaroid get "$id")" == "$history" ]] || fail "recording an execution changed the procedure"
+echo "version 2 under a revision that pins 1: exit status $status: $(jq -c .error.fields <<<"$mismatch")"
+step "9. Restart polaroidd and confirm every record persisted"
 stop_daemon
 start_daemon
 [[ "$(bin/polaroid get-by-key "$key")" == "$history" ]] || fail "history differs after restart"
 [[ "$(bin/polaroid get-binding "$binding_a_id")" == "$binding_a_history" ]] || fail "$repo_a binding differs after restart"
 [[ "$(bin/polaroid get-binding "$binding_b_id")" == "$binding_b_history" ]] || fail "$repo_b binding differs after restart"
-echo "history for $key and both bindings are byte-for-byte identical after restart"
+[[ "$(bin/polaroid get-execution "$execution_id")" == "$execution" ]] || fail "execution differs after restart"
+echo "history for $key, both bindings and the execution are byte-for-byte identical after restart"
 stop_daemon
 
 printf '\ndemo: PASS\n'

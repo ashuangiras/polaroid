@@ -1,9 +1,7 @@
 package http
 
 import (
-	"fmt"
 	"net/http"
-	"net/url"
 	"strconv"
 
 	"github.com/ashuangiras/polaroid/internal/memory"
@@ -31,24 +29,9 @@ func (a *api) createBinding(w http.ResponseWriter, r *http.Request) {
 // listBindings requires the repository query parameter and rejects any
 // other, so a filter this server does not support is never silently ignored.
 func (a *api) listBindings(w http.ResponseWriter, r *http.Request) {
-	query, err := url.ParseQuery(r.URL.RawQuery)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, errorDetail{Code: "invalid_request", Message: "malformed query string"})
+	query, ok := strictQuery(w, r, "repository")
+	if !ok {
 		return
-	}
-	for name, values := range query {
-		if name != "repository" {
-			writeError(w, http.StatusBadRequest, errorDetail{Code: "invalid_request", Message: fmt.Sprintf("unknown query parameter %q", name)})
-			return
-		}
-		if len(values) > 1 {
-			writeError(w, http.StatusBadRequest, errorDetail{
-				Code:    "invalid_request",
-				Message: "repository must be given once",
-				Fields:  []fieldProblem{{Field: "repository", Message: "must be given once"}},
-			})
-			return
-		}
 	}
 	bindings, err := a.svc.ListBindings(r.Context(), query.Get("repository"))
 	if err != nil {

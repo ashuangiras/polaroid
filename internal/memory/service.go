@@ -69,6 +69,18 @@ type Store interface {
 	// BindingRevision returns one revision, or an error wrapping ErrNotFound.
 	BindingRevision(ctx context.Context, bindingID string, number int) (BindingRevision, error)
 
+	// CreateExecution stores e. The caller has checked that its version and
+	// binding revision exist and match; the store never modifies or deletes
+	// an execution.
+	CreateExecution(ctx context.Context, e Execution) error
+
+	// Execution returns one execution, or an error wrapping ErrNotFound.
+	Execution(ctx context.Context, id string) (Execution, error)
+
+	// ListExecutions returns the executions f selects, oldest first, without
+	// their Inputs and Evidence.
+	ListExecutions(ctx context.Context, f ExecutionFilter) ([]Execution, error)
+
 	// Ping reports whether the store can serve requests.
 	Ping(ctx context.Context) error
 }
