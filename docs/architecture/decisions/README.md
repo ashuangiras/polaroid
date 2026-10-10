@@ -31,5 +31,6 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0025](0025-per-user-default-database.md) | The default database is per-user, in ~/.polaroid | Accepted |
 | [0026](0026-per-user-installation-and-managed-service.md) | Per-user installation and a managed service: launchd on macOS, systemd user services on Linux | Accepted |
 | [0027](0027-install-stages-its-source.md) | Install stages its source first; binary recovery is separate from data restore | Accepted |
+| [0028](0028-prerelease-verification-builds.md) | Prerelease verification builds published from tags on main | Accepted |
 
 Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.
