@@ -670,7 +670,7 @@ echo "change.verify.scoped requires checks and runs integration only when: $(jq 
 
 code50=5050505050505050505050505050505050505050
 docs50=5151515151515151515151515151515151515151
-echo "task A, a change to internal/server.go: both subprocedures apply and run"
+echo "task A, a change to internal/server.go, so both subprocedures apply and run"
 code_checks="$(run50 "$fast_id" "$code50" '{"commands":["make check"]}')"
 code_integration="$(run50 "$integration_id" "$code50" '{"commands":["make e2e"]}')"
 code_parent="$(run50 "$scoped_id" "$code50" "$scoped_inputs" "$(link50 "$code_checks" "$code_integration")" \
