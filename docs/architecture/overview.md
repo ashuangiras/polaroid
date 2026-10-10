@@ -28,7 +28,7 @@ flowchart LR
 | `internal/transport/http` | The [HTTP API](http-api.md): parsing, JSON-shape checks, error mapping, security checks | `memory`, `wire`, `net/http` |
 | `internal/transport/mcp` | The [MCP server](mcp.md) at `/mcp`: tools, resources, strict argument decoding | `memory`, `wire`, the MCP Go SDK |
 | `internal/transport/wire` | Record and error JSON shapes, strict decoding and error classification, shared by both transports so they cannot drift | `memory` |
-| `cmd/polaroidd` | Configuration, wiring, listener, timeouts, graceful shutdown | all of the above |
+| `cmd/polaroidd` | Configuration, including the database location (the per-user default and its private directories, [ADR-0025](decisions/0025-per-user-default-database.md)), wiring, listener, timeouts, graceful shutdown | all of the above |
 | `cmd/polaroid` | Generic CLI over the HTTP API | Standard library only |
 
 Each internal package is tested on its own against its contract: validation rules in `memory`, persistence and concurrency in `storage/sqlite` (real database files), and the full stack through real HTTP in `transport/http` and `transport/mcp` (the latter through the SDK's own client). `internal/archtest` fails the build if `memory` imports HTTP, SQL or storage code, if storage imports transport, if a transport imports storage, or if the two transports import each other.
@@ -49,7 +49,7 @@ There is deliberately one interface (`memory.Store`): it lets the domain stay ig
 - **Revisions** carry the base version they were derived from. The store checks "base equals latest" and inserts `latest + 1` inside that transaction, so of N concurrent revisions from one base exactly one succeeds and the rest get `409 version_conflict`. Nothing is merged or overwritten. Binding revisions follow the same rule with `base_revision` and `409 revision_conflict`.
 - **Reads** are single SQL statements, so a history is always one consistent snapshot (WAL mode lets reads proceed during writes). The composition graph, verification and resolution need one query per node, so they read inside one transaction instead.
 - **Integrity backstops in the schema**: unique canonical keys, `(repository, name)` pairs and repository identifiers; triggers reject any `UPDATE` or `DELETE` of procedures, versions, bindings, binding revisions, executions and their child links, feedback reports, repositories, repository identifiers and procedure origins, any non-contiguous version or revision number, a pin to a version that does not exist, an execution that does not match its binding revision, and a child link that does not fulfil its reference; a reference row can be written only in the same transaction as its new version (a trigger plus a deferred foreign key); `CHECK` constraints require `contract`, `instructions` and `inputs` to be JSON objects and keep identifiers in their canonical formats. These hold even for a client that bypasses `polaroidd`.
-- **Durability**: `synchronous=FULL`. Schema migrations run in a write transaction at startup; a database newer than the binary is refused.
+- **Durability**: `synchronous=FULL`. Schema migrations run in a write transaction at startup; a database newer than the binary is refused. By default the database is `~/.polaroid/data/polaroid.db`, outside any repository or build output, so build cleanup and binary upgrades cannot remove it ([ADR-0025](decisions/0025-per-user-default-database.md)).
 
 ## Security posture
 

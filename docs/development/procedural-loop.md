@@ -68,7 +68,7 @@ Version 1 of `go.module.checks` and the failed executions remain readable. Versi
 
 **Status: done, by a fresh-context subagent.** The check below was run by a Copilot subagent started from the authoring session. It had no access to that conversation; its only input was the prompt below, which names the goal, the repository, the service and generic operating rules, but no procedure steps. It is not a chat session started by a person. Anyone can repeat the check with the same prompt in a new Copilot chat, and add the evidence here.
 
-Prompt, for a new session in this workspace with `polaroidd -db bin/dogfood/polaroid.db` running on `127.0.0.1:7417`:
+Prompt, for a new session in this workspace with `polaroidd` running on `127.0.0.1:7417` (it was `-db bin/dogfood/polaroid.db` then; since #41 the shared catalog is the per-user default, `~/.polaroid/data/polaroid.db`, so no `-db` is needed):
 
 ```text
 Goal: verify the change on branch issue-28-procedural-loop of this repository

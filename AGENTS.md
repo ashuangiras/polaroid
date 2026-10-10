@@ -44,7 +44,7 @@ Polaroid is a versioned procedural memory service for agents, written in Go, wit
 | `make vuln` | Runs govulncheck. Needs network. |
 | `make demo` | Runs the live create, revise, conflict, two-repository binding, execution and restart demonstration, then scripted replays of the procedural-memory loop on the development procedures and of the multi-repository fixtures, and an upgrade of a schema-6 database. Needs `jq` and `sqlite3`. |
 | `make e2e` / `make e2e-mcp` | Runs the end-to-end scripts: every feature, and `/mcp` with independent clients, against a real daemon. Reports go to `bin/e2e/`. `E2E_INTEROP=0` skips the independent-client checks. |
-| `make run ARGS="-db x.db"` | Runs the daemon. |
+| `make run ARGS="-db x.db"` | Runs the daemon. Without `-db` or `POLAROID_DB` it serves the per-user catalog, `~/.polaroid/data/polaroid.db`; tests and scripts must always pass a temporary database. |
 
 ## Layout
 

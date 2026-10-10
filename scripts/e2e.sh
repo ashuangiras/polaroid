@@ -19,6 +19,10 @@ REPORT=$OUT/REPORT.md
 BODY=$OUT/.body.md
 WORK="$(mktemp -d)"
 DB="$WORK/polaroid.db"
+# Daemons run with this HOME, so none can reach the real ~/.polaroid (ADR-0025).
+REAL_HOME=${HOME:-}
+mkdir -p "$WORK/home"
+unset POLAROID_DB
 EX=examples/procedures/go-dependency-add
 PID="" URL="" LOG="" starts=0
 PASS=0 FAIL=0 SEC_PASS=0 SEC_FAIL=0 STEP=0
@@ -119,16 +123,19 @@ rev_req() { # rev_req BASE POLICY
 		'{base_revision: $b, revision: {inputs: {module: "example.com/other"}, version_policy: $p, revision_reason: "Changed the module."}}'
 }
 
-start_daemon() { # start_daemon DB [env|flags]
-	local db=$1 how=${2:-flags} addr=""
+start_daemon() { # start_daemon DB [env|flags|default] [HOME]; default ignores DB
+	local db=$1 how=${2:-flags} home=${3:-$WORK/home} addr=""
 	starts=$((starts + 1))
 	LOG="$WORK/polaroidd.$starts.log"
 	if [[ "$how" == env ]]; then
-		POLAROID_ADDR=127.0.0.1:0 POLAROID_DB="$db" bin/polaroidd 2>"$LOG" &
-		md '```console' "\$ POLAROID_ADDR=127.0.0.1:0 POLAROID_DB=$db bin/polaroidd &"
+		HOME="$home" POLAROID_ADDR=127.0.0.1:0 POLAROID_DB="$db" bin/polaroidd 2>"$LOG" &
+		md '```console' "\$ HOME=$home POLAROID_ADDR=127.0.0.1:0 POLAROID_DB=$db bin/polaroidd &"
+	elif [[ "$how" == default ]]; then
+		HOME="$home" bin/polaroidd -addr 127.0.0.1:0 2>"$LOG" &
+		md '```console' "\$ HOME=$home bin/polaroidd -addr 127.0.0.1:0 &"
 	else
-		bin/polaroidd -addr 127.0.0.1:0 -db "$db" 2>"$LOG" &
-		md '```console' "\$ bin/polaroidd -addr 127.0.0.1:0 -db $db &"
+		HOME="$home" bin/polaroidd -addr 127.0.0.1:0 -db "$db" 2>"$LOG" &
+		md '```console' "\$ HOME=$home bin/polaroidd -addr 127.0.0.1:0 -db $db &"
 	fi
 	PID=$!
 	for _ in $(seq 1 100); do
@@ -162,7 +169,7 @@ check "usage mentions -addr and -db" out_has "-db"
 
 ########################################################################
 section "Start the daemon and check health" \
-	"\`polaroidd\` listens on loopback (\`127.0.0.1:7417\` by default; this test uses port 0 to pick a free port). Configuration comes from flags or the \`POLAROID_ADDR\` / \`POLAROID_DB\` environment variables. \`GET /healthz\` reports whether the database is reachable." \
+	"\`polaroidd\` listens on loopback (\`127.0.0.1:7417\` by default; this test uses port 0 to pick a free port). Configuration comes from flags or the \`POLAROID_ADDR\` / \`POLAROID_DB\` environment variables; without either, the database is \`~/.polaroid/data/polaroid.db\` (section 32). \`GET /healthz\` reports whether the database is reachable." \
 	"\`bin/polaroidd -db polaroid.db &\` then \`bin/polaroid health\` (or \`curl -i http://127.0.0.1:7417/healthz\`)."
 start_daemon "$DB" env
 check "daemon took its database path from POLAROID_DB" grep -q "db=$DB" "$LOG"
@@ -776,9 +783,75 @@ check "bindings work on the upgraded database" json_has '.procedure_id == "old-1
 stop_daemon
 show 'sqlite3 "$WORK/v1.db" "PRAGMA user_version"'
 check "schema version is now 7" equal "$LAST" 7
-show 'cp "$DB" "$WORK/newer.db" && sqlite3 "$WORK/newer.db" "PRAGMA user_version = 99" && bin/polaroidd -addr 127.0.0.1:0 -db "$WORK/newer.db"'
+show 'cp "$DB" "$WORK/newer.db" && sqlite3 "$WORK/newer.db" "PRAGMA user_version = 99" && HOME="$WORK/home" bin/polaroidd -addr 127.0.0.1:0 -db "$WORK/newer.db"'
 check "newer schema refused with exit 1" rc_is 1
 check "error says the schema is newer than this build supports" out_has "newer than this build supports"
+
+########################################################################
+section "Per-user home, private files and catalog migration" \
+	"Without \`-db\` or \`POLAROID_DB\`, polaroidd uses \`~/.polaroid/data/polaroid.db\`, with the home directory from Go's \`os.UserHomeDir\` ([ADR-0025](../../docs/architecture/decisions/0025-per-user-default-database.md)); explicit paths keep their meaning. It creates the missing directories (0700) and the database (0600, so SQLite's -wal and -shm are 0600 too) and changes no existing permission. \`scripts/migrate-catalog.sh SOURCE [HOME]\` moves a stopped catalog there: a SQLite online backup into \`backups/\` (committed WAL content included), integrity checks, a private restore, and a refusal to replace an occupied destination; source and backup are kept. Every daemon in this report runs with a temporary \`HOME\`." \
+	"\`bin/polaroidd\` with neither \`-db\` nor \`POLAROID_DB\`; stop the old daemon, then \`scripts/migrate-catalog.sh OLD.db\`."
+mode_of() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
+modes() { local f; for f in "$@"; do echo "$(mode_of "$f") ${f#"$WORK"/}"; done; }
+inventory() { # every record as served, and each execution's verification
+	local id r
+	get /v1/procedures; get /v1/repositories; get /v1/executions; get /v1/feedback
+	for id in $(get /v1/procedures | jq -r '.procedures[].id'); do get "/v1/procedures/$id"; done
+	for r in $(sqlite3 "$1" 'SELECT DISTINCT repository FROM bindings ORDER BY 1'); do get "/v1/bindings?repository=$r"; done
+	for id in $(get /v1/executions | jq -r '.executions[].id'); do get "/v1/executions/$id"; get "/v1/executions/$id/verification"; done
+}
+umask 022
+H1="$WORK/home1"
+mkdir -p "$H1"
+start_daemon "" default "$H1"
+check "the default database is HOME/.polaroid/data/polaroid.db, and the start-up line says so" grep -q "db=$H1/.polaroid/data/polaroid.db db_source=default" "$LOG"
+show 'bin/polaroid create "$EX/v1.create.json" | jq -c "{canonical_key, latest_version}"'
+P1="$H1/.polaroid"
+show 'modes "$P1" "$P1/data" "$P1/data/polaroid.db" "$P1/data/polaroid.db-wal" "$P1/data/polaroid.db-shm"; ls -A "$P1"'
+check "under umask 022: directories 700; database, -wal and -shm 600; no backups/ yet" equal "$LAST" $'700 home1/.polaroid\n700 home1/.polaroid/data\n600 home1/.polaroid/data/polaroid.db\n600 home1/.polaroid/data/polaroid.db-wal\n600 home1/.polaroid/data/polaroid.db-shm\ndata'
+stop_daemon
+
+start_daemon "$DB" flags
+show 'inventory "$DB" | grep -c "\"verified\":true,"'
+check "the inventory includes this report's verified executions" test "$LAST" -gt 0
+show 'bin/polaroid create <<<"{\"canonical_key\": \"e2e.wal.marker\", \"version\": {\"philosophy\": \"p\", \"method\": \"m\", \"contract\": {}, \"instructions\": {}, \"revision_reason\": \"Written last, so it is only in the -wal file.\"}}" | jq -c "{canonical_key}"'
+BEFORE="$(inventory "$DB" | shasum -a 256)"
+show 'kill -KILL "$PID"; wait "$PID" 2>/dev/null; PID=""; test -s "$DB-wal" && echo "-wal holds data"; cp "$DB" "$WORK/main-file-only.db"; sqlite3 "$WORK/main-file-only.db" "SELECT count(*) FROM procedures WHERE canonical_key = '"'"'e2e.wal.marker'"'"'" 2>&1'
+check "after a crash, a copy of the main file alone misses the last write" equal "$LAST" $'-wal holds data\n0'
+H2="$WORK/home2"
+mkdir -p "$H2"
+show 'scripts/migrate-catalog.sh "$DB" "$H2/.polaroid"'
+check "migrated (exit 0), with source, backup and destination dumping to the same SQL" rc_is 0
+check "the summary names the kept source and backup" out_has "source       $DB (kept)"
+P2="$H2/.polaroid"
+show 'modes "$P2/data" "$P2/backups" "$P2/data/"* "$P2/backups/"*; ls -A "$P2"'
+check "one backup and one destination file, all private" matches "$LAST" $'^700 home2/.polaroid/data\n700 home2/.polaroid/backups\n600 home2/.polaroid/data/polaroid.db\n600 home2/.polaroid/backups/polaroid-[0-9TZ]+\\.db\nbackups\ndata$'
+start_daemon "" default "$H2"
+check "a daemon on the default location serves every record and verification exactly as before, the -wal write included" equal "$(inventory "$P2/data/polaroid.db" | shasum -a 256)" "$BEFORE"
+show 'bin/polaroid get-by-key e2e.wal.marker | jq -c "{canonical_key, latest_version}"'
+check "the write that was only in the -wal file was migrated" json_has '.latest_version == 1'
+stop_daemon
+
+SRC_DUMP="$(sqlite3 "$DB" .dump | shasum -a 256)" DEST_DUMP="$(sqlite3 "$P2/data/polaroid.db" .dump | shasum -a 256)"
+show 'scripts/migrate-catalog.sh "$DB" "$H2/.polaroid"'
+check "an occupied destination is refused with exit 3, reported, and left alone" rc_is 3
+check "the report names the occupied file" out_has "the destination is occupied; nothing was changed"
+check "source and destination are unchanged, and no new backup was written" equal "$(sqlite3 "$DB" .dump | shasum -a 256) $(sqlite3 "$P2/data/polaroid.db" .dump | shasum -a 256) $(ls "$P2/backups" | wc -l | tr -d ' ')" "$SRC_DUMP $DEST_DUMP 1"
+if command -v lsof >/dev/null; then
+	start_daemon "$DB" flags
+	show 'scripts/migrate-catalog.sh "$DB" "$WORK/home3/.polaroid"'
+	check "a source still open by polaroidd is refused, before anything is written" equal "$RC $(test -e "$WORK/home3" && echo created || echo absent)" "1 absent"
+	check "the refusal says to stop polaroidd" out_has "stop polaroidd first"
+	stop_daemon
+else
+	note "lsof is not installed here, so the open-source refusal was not exercised."
+fi
+
+DB_SUM="$(shasum -a 256 <"$P2/data/polaroid.db")"
+show 'mkdir -p "$WORK/build" && cp bin/polaroidd bin/polaroid "$WORK/build/" && make -s clean BIN="$WORK/build"; ls "$WORK/build" 2>&1; ls -A "$P2" "$P2/data"'
+check "make clean removes the build output it is given, never the catalog" equal "$(test -e "$WORK/build" && echo kept || echo removed) $(shasum -a 256 <"$P2/data/polaroid.db")" "removed $DB_SUM"
+show 'grep -l "${REAL_HOME:-/nonexistent}/.polaroid" "$WORK"/polaroidd.*.log || echo none'
+check "no daemon in this report used the real home directory" equal "$LAST" none
 close_section
 
 ########################################################################

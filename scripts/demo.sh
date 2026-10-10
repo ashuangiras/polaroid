@@ -41,6 +41,9 @@ command -v sqlite3 >/dev/null 2>&1 || { echo "demo: sqlite3 is required" >&2; ex
 example=examples/procedures/go-dependency-add
 work="$(mktemp -d)"
 db="$work/polaroid.db"
+# The daemon runs with this HOME, so it can never reach the real ~/.polaroid.
+mkdir -p "$work/home"
+unset POLAROID_DB
 pid=""
 starts=0
 
@@ -67,7 +70,7 @@ step() {
 start_daemon() {
 	starts=$((starts + 1))
 	local log="$work/polaroidd.$starts.log"
-	bin/polaroidd -addr 127.0.0.1:0 -db "$db" 2>"$log" &
+	HOME="$work/home" bin/polaroidd -addr 127.0.0.1:0 -db "$db" 2>"$log" &
 	pid=$!
 	local addr=""
 	for _ in $(seq 1 100); do

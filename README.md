@@ -46,7 +46,7 @@ Polaroid does not run an LLM, and it does not execute instructions. Its code man
 
 ```sh
 make build                                   # builds bin/polaroidd and bin/polaroid
-bin/polaroidd -db polaroid.db &              # listens on 127.0.0.1:7417
+bin/polaroidd -db /tmp/polaroid-try.db &     # a scratch catalog; without -db: ~/.polaroid/data/polaroid.db
 
 bin/polaroid create examples/procedures/go-dependency-add/v1.create.json   # note the "id"
 bin/polaroid get-by-key go.dependency.add
@@ -91,11 +91,20 @@ Polaroid's own development procedures (build, checks, verify a change) are recor
 | `polaroidd` flag | Environment variable | Default |
 | --- | --- | --- |
 | `-addr` | `POLAROID_ADDR` | `127.0.0.1:7417` (loopback) |
-| `-db` | `POLAROID_DB` | `polaroid.db` in the working directory |
+| `-db` | `POLAROID_DB` | `~/.polaroid/data/polaroid.db` in the user's home directory |
 
 Flags override environment variables. On SIGINT or SIGTERM, the daemon stops accepting connections and waits up to 10 seconds for in-flight requests to finish. There is no authentication yet, so keep the daemon on loopback ([ADR-0006](docs/architecture/decisions/0006-local-unauthenticated-api.md)).
 
 The CLI uses `-server URL`, else `$POLAROID_URL`, else `http://127.0.0.1:7417`. It prints each response body (JSON) to stdout, and exits with 0 on success, 1 when the request fails and 2 for a usage error. Run `bin/polaroid help` for the full command list.
+
+### Where the catalog lives
+
+- **Default.** Without `-db` and `POLAROID_DB`, `polaroidd` uses `~/.polaroid/data/polaroid.db`, where `~` is the home directory Go reports (`$HOME` on Linux and macOS), wherever the daemon is started ([ADR-0025](docs/architecture/decisions/0025-per-user-default-database.md)). The start-up line names the file in use and where the choice came from: `db=/home/u/.polaroid/data/polaroid.db db_source=default` (or `flag`, `environment`).
+- **Overrides.** `-db PATH` wins over `POLAROID_DB=PATH`, which wins over the default. A relative path is relative to the working directory, as before. `-db ""` and a set but empty `POLAROID_DB` are refused. If the home directory cannot be determined, is not absolute or does not exist, the daemon exits with an error asking for `-db` or `POLAROID_DB`; it never falls back to the working directory.
+- **Layout.** `~/.polaroid/data/polaroid.db` (with SQLite's `-wal` and `-shm` files) and `~/.polaroid/backups/`, which is created only when a backup is written. There are no configuration or log files there, and binaries are never placed there.
+- **Permissions (Linux and macOS).** The daemon creates missing `~/.polaroid` and `~/.polaroid/data` directories with mode `0700`, and a missing database with mode `0600`, so that SQLite's `-wal` and `-shm` files are `0600` too. It never changes the mode of an existing directory or file, nor anything at a path given with `-db` or `POLAROID_DB`; at start-up it warns about each existing default-location entry that other users can access. Fix those with `chmod` yourself. Other platforms use the same location without these guarantees.
+- **Older databases.** Before #41 the default was `polaroid.db` in the working directory. Nothing is discovered, merged or moved automatically. Keep using an old file with `-db /path/to/polaroid.db` or `POLAROID_DB=/path/to/polaroid.db`, or move it once: stop `polaroidd`, run `scripts/migrate-catalog.sh /path/to/polaroid.db`, then start `polaroidd` without `-db`. The script takes a SQLite online backup (which includes committed transactions still in the `-wal` file) into `~/.polaroid/backups/`, checks it, restores it to `~/.polaroid/data/polaroid.db` with mode `0600`, and refuses if that destination already exists. It keeps the source and the backup. To roll back, stop the daemon and start it with `-db` naming the source; anything written to the new catalog meanwhile is not in the source.
+- **Data outlives the build.** `make clean`, rebuilding and replacing binaries never touch `~/.polaroid`. Any future uninstall will keep it unless you explicitly ask for it to be deleted.
 
 ## Repository map
 
