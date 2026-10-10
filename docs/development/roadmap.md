@@ -64,6 +64,7 @@ Second-repository adoption trials are paused while the existing features are pre
 4. [#46 Downloadable prerelease verification builds with a repository-independent smoke test](https://github.com/ashuangiras/polaroid/issues/46) — **done** ([ADR-0028](../architecture/decisions/0028-prerelease-verification-builds.md))
 5. [#50 Conditional subprocedure references with recorded applicability decisions](https://github.com/ashuangiras/polaroid/issues/50) — **done** ([ADR-0029](../architecture/decisions/0029-conditional-references-and-applicability-decisions.md)), published as `v0.2.0-verify.1`
 6. [#52 smoke-test.sh fails one check on macOS when TMPDIR ends in /](https://github.com/ashuangiras/polaroid/issues/52) (fixes #46) — **done**, published as `v0.2.0-verify.2`
+7. [#56 Catalog backup, inspection and restore](https://github.com/ashuangiras/polaroid/issues/56) — **done** ([ADR-0030](../architecture/decisions/0030-catalog-backup-and-restore.md)), published as `v0.3.0-verify.1`; schedules, retention and remote copies are not scoped
 
 ## Later (unordered, not yet scoped)
 
