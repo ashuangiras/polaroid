@@ -2,7 +2,9 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
@@ -14,41 +16,103 @@ import (
 	"time"
 )
 
-// builds holds two builds of polaroid and polaroidd from this checkout: the
-// same revision, different bytes (-trimpath on and off), so installing one
-// over the other is an upgrade.
-var builds [2]string
+// builds holds two builds of polaroid and polaroidd, A and B, from two commits
+// of a snapshot of this working tree, so they differ in bytes and revision
+// and installing one over the other is an upgrade. broken is a third commit
+// whose polaroidd reports its build but exits 3 when started as a daemon.
+var (
+	builds [2]string
+	broken string
+)
 
 func TestMain(m *testing.M) {
-	if err := buildBinaries(); err != nil {
+	dir, err := buildBinaries()
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "build polaroid binaries:", err)
 		os.Exit(1)
 	}
 	code := m.Run()
-	_ = os.RemoveAll(filepath.Dir(builds[0]))
+	_ = os.RemoveAll(dir)
 	os.Exit(code)
 }
 
-func buildBinaries() error {
-	ctx := context.Background()
-	root, err := exec.CommandContext(ctx, "go", "env", "GOMOD").Output()
-	if err != nil {
-		return err
+const brokenStart = `package main
+
+import "os"
+
+func init() {
+	if len(os.Args) < 2 || os.Args[1] != "-version" {
+		os.Exit(3)
 	}
+}
+`
+
+func buildBinaries() (string, error) {
+	ctx := context.Background()
+	gomod, err := exec.CommandContext(ctx, "go", "env", "GOMOD").Output()
+	if err != nil {
+		return "", err
+	}
+	root := filepath.Dir(strings.TrimSpace(string(gomod)))
 	dir, err := os.MkdirTemp("", "polaroid-lifecycle-builds")
 	if err != nil {
-		return err
+		return "", err
 	}
-	for i, flags := range [][]string{{"-trimpath"}, nil} {
-		builds[i] = filepath.Join(dir, fmt.Sprintf("build %d", i))
-		args := append(append([]string{"build"}, flags...), "-o", builds[i]+"/", "./cmd/polaroidd", "./cmd/polaroid")
-		cmd := exec.CommandContext(ctx, "go", args...)
-		cmd.Dir = filepath.Dir(strings.TrimSpace(string(root)))
+	src := filepath.Join(dir, "src")
+	run := func(name string, args ...string) error {
+		cmd := exec.CommandContext(ctx, name, args...)
+		cmd.Dir = src
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.invalid", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.invalid")
 		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("%w: %s", err, out)
+			return fmt.Errorf("%s %v: %w: %s", name, args, err, out)
+		}
+		return nil
+	}
+	files, err := exec.CommandContext(ctx, "git", "-C", root, "ls-files", "-z", "-co", "--exclude-standard").Output()
+	if err != nil {
+		return dir, err
+	}
+	for _, f := range strings.Split(strings.TrimRight(string(files), "\x00"), "\x00") {
+		b, err := os.ReadFile(filepath.Join(root, f))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue // deleted in the working tree
+		}
+		if err == nil {
+			err = os.MkdirAll(filepath.Dir(filepath.Join(src, f)), 0o755)
+		}
+		if err == nil {
+			err = os.WriteFile(filepath.Join(src, f), b, 0o644)
+		}
+		if err != nil {
+			return dir, err
 		}
 	}
-	return nil
+	build := func(name string) (string, error) {
+		out := filepath.Join(dir, name)
+		return out, run("go", "build", "-o", out+"/", "./cmd/polaroidd", "./cmd/polaroid")
+	}
+	steps := []func() error{
+		func() error { return run("git", "init", "-q") },
+		func() error { return run("git", "add", "-A") },
+		func() error { return run("git", "-c", "commit.gpgsign=false", "commit", "-qm", "A") },
+		func() (err error) { builds[0], err = build("build A"); return err },
+		func() error {
+			return run("git", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "B")
+		},
+		func() (err error) { builds[1], err = build("build B"); return err },
+		func() error {
+			return os.WriteFile(filepath.Join(src, "cmd", "polaroidd", "broken.go"), []byte(brokenStart), 0o644)
+		},
+		func() error { return run("git", "add", "-A") },
+		func() error { return run("git", "-c", "commit.gpgsign=false", "commit", "-qm", "broken B") },
+		func() (err error) { broken, err = build("build broken"); return err },
+	}
+	for _, step := range steps {
+		if err := step(); err != nil {
+			return dir, err
+		}
+	}
+	return dir, nil
 }
 
 // procManager stands in for launchd or systemd in these tests: it runs the
@@ -67,6 +131,7 @@ type procManager struct {
 	startNothing          bool // claims to start but runs nothing
 	registered            bool
 	starts, stops         int
+	executed              []string // SHA-256 of each polaroidd started, read when it was started
 }
 
 func (m *procManager) Kind() string                 { return "test" }
@@ -110,6 +175,9 @@ func (m *procManager) Start(_ context.Context, l Layout) error {
 	cmd.Env, cmd.Dir = env, "/"
 	if err := cmd.Start(); err != nil {
 		return err
+	}
+	if sum, err := fileSHA256(argv[0]); err == nil {
+		m.executed = append(m.executed, sum)
 	}
 	m.cmd, m.done, m.exited = cmd, make(chan struct{}), false
 	go func(cmd *exec.Cmd, done chan struct{}) {

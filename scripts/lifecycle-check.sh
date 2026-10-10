@@ -97,8 +97,24 @@ no_daemon() { ! pgrep -f "$BIN/polaroidd" >/dev/null; }
 record() { curl -sf "$URL/v1/procedures/by-key/lifecycle.check"; }
 
 echo "lifecycle-check: $KIND, service $NAME, HOME \"$HOME\", endpoint $ADDR"
-B0="$ROOT/build 0" B1="$ROOT/build 1"
-go build -trimpath -o "$B0/" ./cmd/polaroidd ./cmd/polaroid && go build -o "$B1/" ./cmd/polaroidd ./cmd/polaroid || exit 2
+# Builds A ("build 0"), B ("build 1") and a B whose polaroidd reports its
+# build but exits 3 when started, from three commits of a snapshot of this
+# working tree, so that each reports a revision of its own.
+B0="$ROOT/build 0" B1="$ROOT/build 1" BROKEN="$ROOT/build broken" SRC="$ROOT/src"
+git ls-files -z -co --exclude-standard | while IFS= read -r -d '' f; do
+	[[ -e $f ]] && mkdir -p "$SRC/$(dirname "$f")" && cp "$f" "$SRC/$f"
+done
+g() { git -C "$SRC" -c user.name=lifecycle -c user.email=lifecycle@example.invalid -c commit.gpgsign=false "$@"; }
+build() { (cd "$SRC" && go build -o "$1/" ./cmd/polaroidd ./cmd/polaroid); }
+{ g init -q && g add -A && g commit -qm A && build "$B0" &&
+	g commit -q --allow-empty -m B && build "$B1" &&
+	printf 'package main\n\nimport "os"\n\nfunc init() {\n\tif len(os.Args) < 2 || os.Args[1] != "-version" {\n\t\tos.Exit(3)\n\t}\n}\n' >"$SRC/cmd/polaroidd/broken.go" &&
+	g add -A && g commit -qm "broken B" && build "$BROKEN"; } || exit 2
+REV0=$("$B0/polaroidd" -version | jq -r .revision) REV1=$("$B1/polaroidd" -version | jq -r .revision)
+[[ -n $REV0 && $REV0 != null && $REV0 != "$REV1" ]] || { echo "lifecycle-check: builds 0 and 1 need distinct revisions" >&2; exit 2; }
+# Install's staging goes here, so that leftovers can be seen.
+export TMPDIR="$ROOT/tmp"
+mkdir -p "$TMPDIR"
 CLI="$B0/polaroid"
 
 echo "[1] Not installed"
@@ -192,7 +208,47 @@ check "the installed polaroidd is build 1" cmp -s "$BIN/polaroidd" "$B1/polaroid
 check "build 0 is kept for recovery" cmp -s "$HOME/.local/state/polaroid/previous/polaroidd" "$B0/polaroidd"
 check "the record is intact" test "$(record)" == "$BEFORE"
 
-echo "[10] Diagnostics are private and bounded"
+# is_build0: the installed files, their record and the running daemon are build 0.
+is_build0() {
+	local pid ok=0
+	cmp -s "$BIN/polaroidd" "$B0/polaroidd" && cmp -s "$BIN/polaroid" "$B0/polaroid" || ok=1
+	[[ $("$BIN/polaroid" version | jq -r .revision) == "$REV0" && $("$BIN/polaroidd" -version | jq -r .revision) == "$REV0" ]] || ok=1
+	[[ $(jq -r .build.revision "$HOME/.local/state/polaroid/install.json") == "$REV0" ]] || ok=1
+	[[ $(jq -r '.files[] | select(.role == "polaroidd") | .sha256' "$HOME/.local/state/polaroid/install.json") == "$(sha256 "$B0/polaroidd")" ]] || ok=1
+	[[ $(jq -r '.files[] | select(.role == "polaroid") | .sha256' "$HOME/.local/state/polaroid/install.json") == "$(sha256 "$B0/polaroid")" ]] || ok=1
+	pid=$(manager_pid)
+	if [[ $KIND == systemd ]]; then
+		cmp -s "/proc/$pid/exe" "$B0/polaroidd" || ok=1
+	else
+		[[ $(grep 'polaroidd listening' "$HOME/Library/Logs/Polaroid/polaroidd.log" | tail -n 1) == *"revision=$REV0"* ]] || ok=1
+	fi
+	return $ok
+}
+sha256() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d ' ' -f 1; }
+no_staging() { [[ -z $(ls -A "$TMPDIR") && $(ls -A "$HOME/.local/state/polaroid" | sort | tr '\n' ' ') == "install.json previous " ]]; }
+
+echo "[10] Recovery with the documented command restores the previous build on the same catalog"
+P3=$(field .pid)
+cli install -from "$HOME/.local/state/polaroid/previous"
+check "recovery: exit 0, running, a new process" bash -c "[[ $RC == 0 && '$(field .state)' == running && '$(field .pid)' != '$P3' ]]"
+check "binaries, reported revisions, record hashes and the running daemon are build 0" is_build0
+check "previous/ now holds build 1" cmp -s "$HOME/.local/state/polaroid/previous/polaroidd" "$B1/polaroidd"
+check "the record is intact" test "$(record)" == "$BEFORE"
+check "no staging is left behind" no_staging
+
+echo "[11] After an upgrade that fails to start, recovery through a symlink with spaces to previous/"
+failed_with_recovery() { [[ $RC == 1 && $(field .state) == failed && $(field .detail) == *"polaroid install -from $HOME/.local/state/polaroid/previous"* ]]; }
+cli install -from "$BROKEN"
+check "the failing upgrade: exit 1, failed, with the recovery command" failed_with_recovery
+ln -s "$HOME/.local/state/polaroid/previous" "$ROOT/recovery link"
+cli install -from "$ROOT/recovery link"
+check "recovery: exit 0, running" state_is 0 running
+check "binaries, reported revisions, record hashes and the running daemon are build 0" is_build0
+check "previous/ now holds the failed build" cmp -s "$HOME/.local/state/polaroid/previous/polaroidd" "$BROKEN/polaroidd"
+check "the record is intact" test "$(record)" == "$BEFORE"
+check "no staging is left behind" no_staging
+
+echo "[12] Diagnostics are private and bounded"
 if [[ $KIND == launchd ]]; then
 	LOG="$HOME/Library/Logs/Polaroid/polaroidd.log"
 	check "the log is mode 600 in a 700 directory, and has the start-up line" bash -c "[[ \$(stat -f %Lp '$LOG') == 600 && \$(stat -f %Lp '$(dirname "$LOG")') == 700 ]] && grep -q 'polaroidd listening' '$LOG'"
@@ -204,7 +260,7 @@ else
 	fi
 fi
 
-echo "[11] Uninstall keeps the catalog; reinstall serves it"
+echo "[13] Uninstall keeps the catalog; reinstall serves it"
 cli uninstall
 check "uninstall: exit 0, not-installed" state_is 0 not-installed
 check "binaries, definition and state are gone" bash -c "[[ ! -e '$BIN/polaroid' && ! -e '$BIN/polaroidd' && ! -e '$HOME/.local/state/polaroid' && ! -e '$HOME/Library/LaunchAgents/$LABEL.plist' && ! -e '$HOME/.config/systemd/user/$UNIT' ]]"

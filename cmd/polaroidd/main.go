@@ -205,7 +205,7 @@ func run(ctx context.Context, cfg config, logger *slog.Logger, ready func(net.Ad
 	if abs, err := filepath.Abs(dbPath); err == nil {
 		dbPath = abs
 	}
-	logger.Info("polaroidd listening", "addr", ln.Addr().String(), "db", dbPath, "db_source", cfg.dbSource)
+	logger.Info("polaroidd listening", "addr", ln.Addr().String(), "db", dbPath, "db_source", cfg.dbSource, "revision", version.Current("polaroidd").Revision)
 	if ready != nil {
 		ready(ln.Addr())
 	}

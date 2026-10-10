@@ -1,6 +1,6 @@
 # 0026. Per-user installation and a managed service: launchd on macOS, systemd user services on Linux
 
-**Status:** Accepted. Extends [ADR-0025](0025-per-user-default-database.md).
+**Status:** Accepted. Extends [ADR-0025](0025-per-user-default-database.md). Installation staging and recovery amended by [ADR-0027](0027-install-stages-its-source.md).
 **Date:** 2026-10-10
 
 ## Context

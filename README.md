@@ -144,23 +144,32 @@ polaroid status                         # JSON; exit 0 when running and healthy
   - Linux: the journal, `journalctl --user -u polaroid.service`, kept within journald's configured limits.
   - A start that does not become healthy is stopped again, so that the manager does not keep retrying it. `status` then reports `failed` with the reason until the next successful start or `stop`.
 - **Upgrades.** `make build` the new version, then `polaroid install -from bin`. It does the following, in order:
-  1. Stop the service gracefully.
-  2. Keep the current binaries, definition and record in `~/.local/state/polaroid/previous/`.
-  3. Replace both binaries by staged atomic renames, so the CLI and daemon are never a mismatched pair.
-  4. Start the service and verify that it is healthy.
+  1. Copy the two binaries from `-from` into a private temporary directory, and check that they are one build. Only these staged bytes are hashed and installed, so `-from` may be any directory, including `previous/` ([ADR-0027](docs/architecture/decisions/0027-install-stages-its-source.md)).
+  2. Stop the service gracefully.
+  3. Keep the current binaries, definition and record in `~/.local/state/polaroid/previous/`. The new copy is complete before it replaces the old one.
+  4. Replace both binaries by staged atomic renames, so the CLI and daemon are never a mismatched pair.
+  5. Start the service and verify that it is healthy.
 
-  If a replacement or registration step fails, the previous installation is restored and restarted. If the new build fails to start, the service is left stopped and nothing is rolled back automatically: the new `polaroidd` may already have migrated the database, and an older `polaroidd` refuses a newer schema. Recover in one of two ways:
-  - Fix forward with a corrected build.
-  - Restore a backup taken before the upgrade, then `polaroid install -from ~/.local/state/polaroid/previous`.
+  If a replacement or registration step fails, the previous installation is restored and restarted. If the new build fails to start, the service is left stopped. Nothing is rolled back, and no data is restored or downgraded automatically. Recover in one of two ways:
+  - **Fix forward** with a corrected build: `polaroid install -from DIR`.
+  - **Go back to the previous build:** `polaroid install -from ~/.local/state/polaroid/previous`. This is binary recovery. It installs exactly the build kept there and serves the **current** catalog, with every record written since. If the failed build already upgraded the catalog's schema, the older `polaroidd` refuses to start (`database schema version N is newer than this build supports`) and `status` reports `failed`. Then fix forward.
 
-  Back up first with `sqlite3 ~/.polaroid/data/polaroid.db ".backup ~/.polaroid/backups/pre-upgrade.db"`.
+  **Restoring a catalog backup** is a separate data operation, never part of binary recovery. It loses every record written after the backup. Do it only deliberately:
+  1. `polaroid stop`.
+  2. Move the current `polaroid.db` and its `-wal` and `-shm` files aside, and keep them.
+  3. Copy the backup to the catalog path with mode `0600`.
+  4. `polaroid start`.
+
+  Never point the service at a different, older catalog, such as a pre-#41 `bin/dogfood/polaroid.db`, as a substitute for going back to a previous build.
+
+  Back up before an upgrade with `sqlite3 ~/.polaroid/data/polaroid.db ".backup ~/.polaroid/backups/pre-upgrade.db"`.
 - **Uninstall.** `polaroid uninstall` does the following:
   1. Stop and unregister the service.
   2. Remove the definition, both binaries (if they are still the installed ones), the macOS log files and `~/.local/state/polaroid`.
   3. Keep `~/.polaroid`: the catalog and its backups.
 
   There is no purge command.
-- **Validation.** `make lifecycle` runs an isolated installation against the real launchd or systemd user manager: a temporary `HOME` whose path contains spaces, its own service name (`-service-name`, meant for such checks only), port and catalog. It never touches your installation.
+- **Validation.** `make lifecycle` runs an isolated installation against the real launchd or systemd user manager: a temporary `HOME` whose path contains spaces, its own service name (`-service-name`, meant for such checks only), port and catalog. It builds three revisions of the working tree (an upgrade, and one that fails to start) and checks recovery from `previous/`. It never touches your installation.
 
 ## Repository map
 
