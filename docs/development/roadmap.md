@@ -66,6 +66,7 @@ Second-repository adoption trials are paused while the existing features are pre
 6. [#52 smoke-test.sh fails one check on macOS when TMPDIR ends in /](https://github.com/ashuangiras/polaroid/issues/52) (fixes #46) — **done**, published as `v0.2.0-verify.2`
 7. [#56 Catalog backup, inspection and restore](https://github.com/ashuangiras/polaroid/issues/56) — **done** ([ADR-0030](../architecture/decisions/0030-catalog-backup-and-restore.md)), published as `v0.3.0-verify.1`; schedules, retention and remote copies are not scoped
 8. [#59 Restore rolls back while a failed daemon may still have the catalog open](https://github.com/ashuangiras/polaroid/issues/59) (fixes #56) — **done**, published as `v0.3.0-verify.2`
+9. [#62 Workflow timing baseline: correct the workflow.md gate table](https://github.com/ashuangiras/polaroid/issues/62) — **done**, measured in [workflow-baseline-2026-10-10.md](workflow-baseline-2026-10-10.md)
 
 ## Later (unordered, not yet scoped)
 
