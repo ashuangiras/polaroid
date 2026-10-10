@@ -1,0 +1,4 @@
+{
+  "repository_id": "github.com/ashuangiras/polaroid",
+  "reason": "Created in Polaroid during #52: the packaged smoke test failed under the normal macOS TMPDIR, and no procedure checked archives as users receive them."
+}
