@@ -29,7 +29,9 @@ flowchart LR
 | `internal/transport/mcp` | The [MCP server](mcp.md) at `/mcp`: tools, resources, strict argument decoding | `memory`, `wire`, the MCP Go SDK |
 | `internal/transport/wire` | Record and error JSON shapes, strict decoding and error classification, shared by both transports so they cannot drift | `memory` |
 | `cmd/polaroidd` | Configuration, including the database location (the per-user default and its private directories, [ADR-0025](decisions/0025-per-user-default-database.md)), wiring, listener, timeouts, graceful shutdown | all of the above |
-| `cmd/polaroid` | Generic CLI over the HTTP API | Standard library only |
+| `cmd/polaroid` | Generic CLI over the HTTP API, and the local lifecycle commands | Standard library, `lifecycle`, `version` |
+| `internal/lifecycle` | Per-user installation and the managed service: layout, launchd and systemd definitions and adapters, ownership-aware status, staged install, upgrade and uninstall ([ADR-0026](decisions/0026-per-user-installation-and-managed-service.md)) | Standard library, `version` |
+| `internal/version` | The build identity embedded by the Go toolchain | Standard library only |
 
 Each internal package is tested on its own against its contract: validation rules in `memory`, persistence and concurrency in `storage/sqlite` (real database files), and the full stack through real HTTP in `transport/http` and `transport/mcp` (the latter through the SDK's own client). `internal/archtest` fails the build if `memory` imports HTTP, SQL or storage code, if storage imports transport, if a transport imports storage, or if the two transports import each other.
 

@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	json "encoding/json/v2"
 	"errors"
 	"flag"
 	"fmt"
@@ -29,6 +30,7 @@ import (
 	"github.com/ashuangiras/polaroid/internal/storage/sqlite"
 	httptransport "github.com/ashuangiras/polaroid/internal/transport/http"
 	mcptransport "github.com/ashuangiras/polaroid/internal/transport/mcp"
+	"github.com/ashuangiras/polaroid/internal/version"
 )
 
 const (
@@ -47,6 +49,11 @@ type config struct {
 	addr     string
 	dbPath   string
 	dbSource string
+	// defaultLocation is set when dbPath is the per-user default, however it
+	// was given; such a database is created private (ADR-0025, ADR-0026).
+	defaultLocation bool
+	logFile         string
+	version         bool
 }
 
 func main() {
@@ -62,9 +69,24 @@ func realMain() int {
 		fmt.Fprintln(os.Stderr, "polaroidd:", err)
 		return 2
 	}
+	if cfg.version {
+		b, _ := json.Marshal(version.Current("polaroidd"))
+		fmt.Println(string(b))
+		return 0
+	}
+	var logs io.Writer = os.Stderr
+	if cfg.logFile != "" {
+		f, err := openLogFile(cfg.logFile, logMaxBytes, redirectOutput)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "polaroidd:", err)
+			return 1
+		}
+		defer func() { _ = f.Close() }()
+		logs = f
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	logger := slog.New(slog.NewTextHandler(logs, nil))
 	if err := run(ctx, cfg, logger, nil); err != nil {
 		logger.Error("polaroidd failed", "error", err)
 		return 1
@@ -85,8 +107,10 @@ func parseConfig(args []string, lookupEnv func(string) (string, bool), userHomeD
 	fs.SetOutput(output)
 	fs.StringVar(&cfg.addr, "addr", cfg.addr, "listen `address` (env POLAROID_ADDR)")
 	fs.StringVar(&dbFlag, "db", "", "SQLite database `file` (env POLAROID_DB; default ~/.polaroid/data/polaroid.db in the user's home directory)")
+	fs.StringVar(&cfg.logFile, "log-file", "", "write logs, standard output and standard error to `file`, rotated to file.1 at 4 MiB (default: standard error)")
+	fs.BoolVar(&cfg.version, "version", false, "print the build as JSON and exit")
 	fs.Usage = func() {
-		fmt.Fprintln(output, "Usage: polaroidd [-addr host:port] [-db path]")
+		fmt.Fprintln(output, "Usage: polaroidd [-addr host:port] [-db path] [-log-file path] [-version]")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -94,6 +118,9 @@ func parseConfig(args []string, lookupEnv func(string) (string, bool), userHomeD
 	}
 	if fs.NArg() > 0 {
 		return config{}, fmt.Errorf("unexpected arguments: %v", fs.Args())
+	}
+	if cfg.version {
+		return cfg, nil
 	}
 	if _, _, err := net.SplitHostPort(cfg.addr); err != nil {
 		return config{}, fmt.Errorf("invalid listen address %q: %w", cfg.addr, err)
@@ -117,6 +144,11 @@ func parseConfig(args []string, lookupEnv func(string) (string, bool), userHomeD
 		}
 		cfg.dbPath, cfg.dbSource = path, dbFromDefault
 	}
+	if def, err := defaultDBPath(userHomeDir); err == nil {
+		if abs, err := filepath.Abs(cfg.dbPath); err == nil && abs == def {
+			cfg.defaultLocation = true
+		}
+	}
 	return cfg, nil
 }
 
@@ -124,7 +156,7 @@ func parseConfig(args []string, lookupEnv func(string) (string, bool), userHomeD
 // If ready is not nil it is called with the bound address once the server
 // accepts connections.
 func run(ctx context.Context, cfg config, logger *slog.Logger, ready func(net.Addr)) (err error) {
-	if cfg.dbSource == dbFromDefault {
+	if cfg.dbSource == dbFromDefault || cfg.defaultLocation {
 		exposed, err := prepareDefaultDB(cfg.dbPath)
 		if err != nil {
 			return err

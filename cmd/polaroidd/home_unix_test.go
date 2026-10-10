@@ -118,3 +118,28 @@ func TestExistingPermissionsAreNotChanged(t *testing.T) {
 		t.Fatalf("explicit path: mode %o, logs %s", got, logs.String())
 	}
 }
+
+// The service definition names the default database explicitly (ADR-0026);
+// it is still created private.
+func TestExplicitDefaultLocationIsCreatedPrivate(t *testing.T) {
+	withUmask022(t)
+	home := t.TempDir()
+	db := filepath.Join(home, ".polaroid", "data", "polaroid.db")
+	cfg, err := parseConfig([]string{"-addr", "127.0.0.1:0", "-db", db}, func(string) (string, bool) { return "", false },
+		func() (string, error) { return home, nil }, io.Discard)
+	if err != nil || cfg.dbSource != dbFromFlag {
+		t.Fatalf("parseConfig = %+v, %v", cfg, err)
+	}
+	base, stop := startConfig(t, cfg, io.Discard)
+	if status, body := request(t, http.MethodPost, base+"/v1/procedures", createBody); status != http.StatusCreated {
+		t.Fatalf("create: %d %s", status, body)
+	}
+	for path, want := range map[string]fs.FileMode{filepath.Dir(db): 0o700, db: 0o600, db + "-wal": 0o600} {
+		if got := modeOf(t, path); got != want {
+			t.Errorf("%s: mode %o, want %o", path, got, want)
+		}
+	}
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+}
