@@ -35,8 +35,8 @@ Polaroid is a versioned procedural memory service for agents, written in Go, wit
   | Binding | Procedure | For | Gate |
   | --- | --- | --- | --- |
   | `verify-docs` | `polaroid.change.docs` | Prose-only documentation that no program, script or test reads | `make docs-check` |
-  | `verify-records` | `polaroid.change.records` | Procedure, repository and binding fixtures | `make records-check`, `make demo` |
-  | `verify-focused` | `polaroid.change.focused` | A bounded code change with a regression test, outside the areas below | `make focused PKGS='...'` |
+  | `verify-records` | `polaroid.change.records` | Procedure, repository and binding fixtures | `make records-check` once, from a backup of the live catalog (a step, not a gate command), then `make demo` |
+  | `verify-focused` | `polaroid.change.focused` | A bounded code change with a regression test, outside the areas below, including explanatory wording in a tool or command description that changes no schema, accepted value or behavior | `make focused PKGS='...'` |
   | `verify-change` | `dev.change.verify` | Everything else: storage, migrations, recovery, ownership, lifecycle, public contracts, dependencies, shared behavior, the Makefile, scripts and workflows | `make check`, `make vuln`, `make demo`, `make e2e`, `make e2e-mcp E2E_INTEROP=0` |
 
   Add `make lifecycle` when the change can alter how Polaroid is installed or runs as a service (`polaroid.lifecycle.check`). A scoped result is reported with its scope, never as verification of the commit.

@@ -22,8 +22,8 @@ Choose the verification by what the change can affect, not by the size of its di
 | Binding | For | Gate |
 | --- | --- | --- |
 | `verify-docs` | Prose-only documentation that no program, script or test reads | `make docs-check` |
-| `verify-records` | Procedure, repository and binding fixtures in `examples/` | `make records-check`, `make demo` |
-| `verify-focused` | A bounded code change with a regression test, outside storage, migrations, recovery, lifecycle, ownership, public contracts, dependencies and shared behavior | `make focused PKGS='...'` |
+| `verify-records` | Procedure, repository and binding fixtures in `examples/` | `make records-check` once, from a backup of the live catalog, then `make demo` |
+| `verify-focused` | A bounded code change with a regression test, outside storage, migrations, recovery, lifecycle, ownership, public contracts, dependencies and shared behavior. Explanatory wording in a tool or command description qualifies when it changes no name, annotation, schema, accepted value, response, error or behavior; any of those does not | `make focused PKGS='...'` |
 | `verify-change` | Everything else, and whenever you are unsure | `make check`, `make vuln`, `make demo`, `make e2e`, `make e2e-mcp E2E_INTEROP=0` |
 
 The commands:
