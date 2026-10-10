@@ -28,8 +28,10 @@ sha256() { if command -v sha256sum >/dev/null; then sha256sum "$@"; else shasum 
 GOVERSION=$(go env GOVERSION)
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
-mkdir -p "$OUT"
-OUT=$(cd "$OUT" && pwd)
+# Assets are assembled outside the checkout: a file in it would mark the
+# next build's tree as modified.
+ASSETS="$WORK/assets"
+mkdir -p "$ASSETS"
 
 # setting BINARY KEY: one build setting from `go version -m`, read without
 # running the binary, so cross-compiled targets are checked too.
@@ -58,25 +60,27 @@ for target in $TARGETS; do
 	chmod 0644 "$dir/README.md"
 	archive="$name.tar.gz"
 	if tar --version 2>/dev/null | grep -q 'GNU tar'; then
-		tar -C "$WORK" --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$(git log -1 --format=%ct)" -czf "$OUT/$archive" "$name"
+		tar -C "$WORK" --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$(git log -1 --format=%ct)" -czf "$ASSETS/$archive" "$name"
 	else
-		COPYFILE_DISABLE=1 tar -C "$WORK" --uid 0 --gid 0 --uname root --gname root -czf "$OUT/$archive" "$name"
+		COPYFILE_DISABLE=1 tar -C "$WORK" --uid 0 --gid 0 --uname root --gname root -czf "$ASSETS/$archive" "$name"
 	fi
-	listed=$(tar -tzf "$OUT/$archive" | sort | tr '\n' ' ')
+	listed=$(tar -tzf "$ASSETS/$archive" | sort | tr '\n' ' ')
 	[[ $listed == "$name/ $name/README.md $name/polaroid $name/polaroidd $name/smoke-test.sh " ]] || die "$archive holds unexpected entries: $listed"
 	assets=$(jq -c --arg os "$os" --arg arch "$arch" --arg archive "$archive" \
-		--arg sum "$(sha256 "$OUT/$archive" | cut -d ' ' -f 1)" \
+		--arg sum "$(sha256 "$ASSETS/$archive" | cut -d ' ' -f 1)" \
 		--arg p "$(sha256 "$dir/polaroid" | cut -d ' ' -f 1)" --arg pd "$(sha256 "$dir/polaroidd" | cut -d ' ' -f 1)" \
 		'. + [{os: $os, arch: $arch, archive: $archive, sha256: $sum, files: {polaroid: $p, polaroidd: $pd}}]' <<<"$assets")
 done
 
-(cd "$OUT" && sha256 ./*.tar.gz | sed 's| \./| |' >SHA256SUMS)
+(cd "$ASSETS" && sha256 ./*.tar.gz | sed 's| \./| |' >SHA256SUMS)
 jq -n --arg version "$VERSION" --arg commit "$COMMIT" --arg time "$(git log -1 --format=%cI)" --arg go "$GOVERSION" \
 	--arg run "${GITHUB_SERVER_URL:+$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID}" \
 	--argjson assets "$assets" \
 	'{format: 1, name: "polaroid", version: $version, prerelease: true,
 	  source: {repository: "https://github.com/ashuangiras/polaroid", commit: $commit, commit_time: $time},
 	  build: {go: $go, cgo: false, flags: ["-trimpath"], ci_run: (if $run == "" then null else $run end)},
-	  checksums: "SHA256SUMS", assets: $assets}' >"$OUT/build-manifest.json"
+	  checksums: "SHA256SUMS", assets: $assets}' >"$ASSETS/build-manifest.json"
+mkdir -p "$OUT"
+mv "$ASSETS"/* "$OUT"/
 echo "package: $VERSION at $COMMIT ($GOVERSION) -> $OUT" >&2
 ls -l "$OUT" >&2
