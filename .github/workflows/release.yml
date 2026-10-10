@@ -1,13 +1,21 @@
 # Packages a prerelease verification build from a tag on main, tests the
 # archives themselves on native runners and in a container without systemd,
 # publishes them as a GitHub prerelease, then downloads the published assets
-# and tests them again (ADR-0028). It never replaces an existing release.
+# and tests them again (ADR-0028). It never replaces an existing release. On
+# a pull request that changes packaging, it packages the PR with a local-only
+# tag v0.0.0-pr.N and runs every archive test, but publishes nothing.
 # Actions and images are pinned; see docs/development/dependencies.md.
 name: release
 
 on:
   push:
     tags: ["v*-*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/package.sh
+      - packaging/**
+      - internal/version/**
   workflow_dispatch:
     inputs:
       tag:
@@ -18,11 +26,11 @@ on:
 permissions: {}
 
 concurrency:
-  group: release-${{ inputs.tag || github.ref_name }}
+  group: release-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 env:
-  TAG: ${{ inputs.tag || github.ref_name }}
+  TAG: ${{ github.event_name == 'pull_request' && format('v0.0.0-pr.{0}', github.event.pull_request.number) || inputs.tag || github.ref_name }}
 
 jobs:
   package:
@@ -32,10 +40,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Check out the tag
+      - name: Check out the tag (or, for a pull request, its merge commit)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: refs/tags/${{ env.TAG }}
+          ref: ${{ github.event_name != 'pull_request' && format('refs/tags/{0}', env.TAG) || '' }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -46,6 +54,7 @@ jobs:
           cache: false
 
       - name: Check that the tag is an unpublished prerelease on main
+        if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -55,6 +64,12 @@ jobs:
           if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "::error::release $TAG already exists; a published version is never replaced"; exit 1
           fi
+          git tag -l --format='%(contents)' "$TAG" >"$RUNNER_TEMP/tag-message.md"
+
+      - name: Tag the pull request locally (never pushed)
+        if: github.event_name == 'pull_request'
+        run: |
+          git -c user.name=release-dry-run -c user.email=release-dry-run@example.invalid tag -a "$TAG" -m "Dry run for pull request ${{ github.event.pull_request.number }}; not published."
           git tag -l --format='%(contents)' "$TAG" >"$RUNNER_TEMP/tag-message.md"
 
       - name: Build and package
@@ -161,6 +176,7 @@ jobs:
 
   publish:
     name: publish the prerelease
+    if: github.event_name != 'pull_request'
     needs: [package, test-archive, test-without-systemd]
     runs-on: ubuntu-latest
     timeout-minutes: 10
