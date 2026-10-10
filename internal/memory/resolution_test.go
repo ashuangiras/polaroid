@@ -21,7 +21,7 @@ func newFakeWorld(g fakeGraph) fakeWorld {
 func (w fakeWorld) ReferenceMappings(_ context.Context, procedureID string, version int) ([]ReferenceMapping, error) {
 	var refs []ReferenceMapping
 	for _, r := range w.fakeGraph[procedureID][version] {
-		refs = append(refs, ReferenceMapping{Name: r.Name, Inputs: r.Inputs})
+		refs = append(refs, ReferenceMapping{Name: r.Name, Inputs: r.Inputs, Conditional: r.Conditional()})
 	}
 	return refs, nil
 }

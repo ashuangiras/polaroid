@@ -56,10 +56,15 @@ const (
 	SelectedByLatest   Selection = "latest"
 )
 
-// GraphEdge is a reference together with the node it selected.
+// GraphEdge is a reference together with the node it selected. With a
+// target, a conditional edge carries the target's Decision. SkippedBy is the
+// parent's evidence when that execution recorded the reference as not
+// applicable, so the child was selected without it (ADR-0029).
 type GraphEdge struct {
 	Reference  Reference
 	SelectedBy Selection
+	Decision   TargetDecision
+	SkippedBy  string
 	Node       GraphNode
 }
 
@@ -145,9 +150,10 @@ type walker struct {
 
 func (w *walker) expand(ctx context.Context, node *GraphNode, refs []Reference, depth int) error {
 	var links map[string]string
+	var skipped map[string]bool
 	if node.VerifiedBy != "" {
 		var err error
-		if links, err = w.ev.links(ctx, node.VerifiedBy); err != nil {
+		if links, skipped, err = w.ev.links(ctx, node.VerifiedBy); err != nil {
 			return err
 		}
 	}
@@ -177,7 +183,11 @@ func (w *walker) expand(ctx context.Context, node *GraphNode, refs []Reference, 
 		}
 		w.onPath[ref.ProcedureID] = false
 		w.path = w.path[:len(w.path)-1]
-		node.Edges = append(node.Edges, GraphEdge{Reference: ref, SelectedBy: by, Node: child})
+		edge := GraphEdge{Reference: ref, SelectedBy: by, Node: child}
+		if skipped[ref.Name] {
+			edge.SkippedBy = node.VerifiedBy
+		}
+		node.Edges = append(node.Edges, edge)
 	}
 	return nil
 }

@@ -15,6 +15,7 @@ import (
 type childVersionJSON struct {
 	Reference string             `json:"reference"`
 	Version   int                `json:"version"`
+	Skipped   bool               `json:"skipped"`
 	Children  []childVersionJSON `json:"children"`
 }
 

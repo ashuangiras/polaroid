@@ -285,6 +285,14 @@ func applicability(scope, repositoryID sql.NullString) memory.Applicability {
 	return memory.Applicability{Kind: memory.ScopeKind(scope.String), RepositoryID: repositoryID.String}
 }
 
+// condition returns a reference's condition, nil for a required reference.
+func condition(c sql.NullString) *string {
+	if !c.Valid {
+		return nil
+	}
+	return &c.String
+}
+
 func origin(repositoryID, reason, created sql.NullString) (*memory.Origin, error) {
 	if !repositoryID.Valid {
 		return nil, nil
@@ -301,7 +309,7 @@ const historySelect = `
 	       o.repository_id, o.reason, o.created_at,
 	       v.version, v.philosophy, v.method, v.goal, v.scope, v.scope_repository_id,
 	       v.contract, v.instructions, v.revision_reason, v.created_at,
-	       r.name, r.target_procedure_id, r.policy, r.pinned_version, r.inputs
+	       r.name, r.target_procedure_id, r.policy, r.pinned_version, r.inputs, r.condition
 	FROM procedures AS p
 	JOIN procedure_versions AS v ON v.procedure_id = p.id
 	LEFT JOIN procedure_origins AS o ON o.procedure_id = p.id
@@ -335,13 +343,13 @@ func (s *Store) history(ctx context.Context, query string, args ...any) (memory.
 		var contract, instructions, refInputs []byte
 		var versionCreated string
 		var goal, scope, scopeRepository sql.NullString
-		var refName, refTarget, refPolicy sql.NullString
+		var refName, refTarget, refPolicy, refCondition sql.NullString
 		var refPin sql.NullInt64
 		if err := rows.Scan(&h.Procedure.ID, &h.Procedure.CanonicalKey, &procedureCreated,
 			&originRepository, &originReason, &originCreated,
 			&v.Number, &v.Philosophy, &v.Method, &goal, &scope, &scopeRepository,
 			&contract, &instructions, &v.RevisionReason, &versionCreated,
-			&refName, &refTarget, &refPolicy, &refPin, &refInputs); err != nil {
+			&refName, &refTarget, &refPolicy, &refPin, &refInputs, &refCondition); err != nil {
 			return memory.History{}, fmt.Errorf("scan version: %w", err)
 		}
 		if n := len(h.Versions); n == 0 || h.Versions[n-1].Number != v.Number {
@@ -361,6 +369,7 @@ func (s *Store) history(ctx context.Context, query string, args ...any) (memory.
 				ProcedureID:   refTarget.String,
 				VersionPolicy: memory.VersionPolicy{Kind: memory.PolicyKind(refPolicy.String), Pin: int(refPin.Int64)},
 				Inputs:        jsontext.Value(refInputs),
+				Condition:     condition(refCondition),
 			})
 		}
 	}
@@ -433,15 +442,18 @@ func insertVersion(ctx context.Context, tx *sql.Tx, v memory.Version) error {
 		return err
 	}
 	for i, r := range v.References {
-		var pinned any
+		var pinned, cond any
 		if r.VersionPolicy.Kind == memory.PolicyPin {
 			pinned = r.VersionPolicy.Pin
 		}
+		if r.Condition != nil {
+			cond = *r.Condition
+		}
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO procedure_version_references
-				(procedure_id, version, position, name, target_procedure_id, policy, pinned_version, inputs)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			v.ProcedureID, v.Number, i, r.Name, r.ProcedureID, string(r.VersionPolicy.Kind), pinned, string(r.Inputs))
+				(procedure_id, version, position, name, target_procedure_id, policy, pinned_version, inputs, condition)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			v.ProcedureID, v.Number, i, r.Name, r.ProcedureID, string(r.VersionPolicy.Kind), pinned, string(r.Inputs), cond)
 		if err != nil {
 			return fmt.Errorf("insert reference %q of version %d: %w", r.Name, v.Number, err)
 		}
@@ -503,7 +515,7 @@ func (g txGraph) LatestVersion(ctx context.Context, procedureID string) (int, er
 func (g txGraph) VersionNode(ctx context.Context, procedureID string, version int) (memory.NodeVersion, error) {
 	rows, err := g.tx.QueryContext(ctx, `
 		SELECT p.canonical_key, v.scope, v.scope_repository_id,
-		       r.name, r.target_procedure_id, r.policy, r.pinned_version, r.inputs
+		       r.name, r.target_procedure_id, r.policy, r.pinned_version, r.inputs, r.condition
 		FROM procedures AS p
 		JOIN procedure_versions AS v ON v.procedure_id = p.id
 		LEFT JOIN procedure_version_references AS r ON r.procedure_id = v.procedure_id AND r.version = v.version
@@ -517,10 +529,10 @@ func (g txGraph) VersionNode(ctx context.Context, procedureID string, version in
 	var node memory.NodeVersion
 	found := false
 	for rows.Next() {
-		var scope, scopeRepository, name, target, policy sql.NullString
+		var scope, scopeRepository, name, target, policy, cond sql.NullString
 		var pin sql.NullInt64
 		var inputs []byte
-		if err := rows.Scan(&node.CanonicalKey, &scope, &scopeRepository, &name, &target, &policy, &pin, &inputs); err != nil {
+		if err := rows.Scan(&node.CanonicalKey, &scope, &scopeRepository, &name, &target, &policy, &pin, &inputs, &cond); err != nil {
 			return memory.NodeVersion{}, fmt.Errorf("scan version references: %w", err)
 		}
 		found = true
@@ -531,6 +543,7 @@ func (g txGraph) VersionNode(ctx context.Context, procedureID string, version in
 				ProcedureID:   target.String,
 				VersionPolicy: memory.VersionPolicy{Kind: memory.PolicyKind(policy.String), Pin: int(pin.Int64)},
 				Inputs:        jsontext.Value(inputs),
+				Condition:     condition(cond),
 			})
 		}
 	}

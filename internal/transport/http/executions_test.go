@@ -35,6 +35,12 @@ type executionJSON struct {
 		Reference   string `json:"reference"`
 		ExecutionID string `json:"execution_id"`
 	} `json:"children"`
+	Decisions []struct {
+		Reference  string         `json:"reference"`
+		Applicable *bool          `json:"applicable"`
+		Rationale  string         `json:"rationale"`
+		Evidence   jsontext.Value `json:"evidence"`
+	} `json:"decisions"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -55,7 +61,7 @@ func executionRequest(procedureID string, version int, fields map[string]string)
 		members[k] = v
 	}
 	var parts []string
-	for _, k := range []string{"procedure_id", "version", "binding_id", "binding_revision", "repository", "commit", "environment", "inputs", "outcome", "evidence", "children"} {
+	for _, k := range []string{"procedure_id", "version", "binding_id", "binding_revision", "repository", "commit", "environment", "inputs", "outcome", "evidence", "children", "decisions"} {
 		if v, ok := members[k]; ok && v != "-" {
 			parts = append(parts, fmt.Sprintf("%q: %s", k, v))
 		}

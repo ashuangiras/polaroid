@@ -56,7 +56,7 @@ func (a *api) getBinding(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) resolveBinding(w http.ResponseWriter, r *http.Request) {
-	query, ok := strictQuery(w, r, "environment", "commit", "inputs")
+	query, ok := strictQuery(w, r, "environment", "commit", "inputs", "decisions")
 	if !ok {
 		return
 	}

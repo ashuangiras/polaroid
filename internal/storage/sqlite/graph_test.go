@@ -199,7 +199,7 @@ func TestCompositionGraphOfAStoredCycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, stmt := range []string{
-		`INSERT INTO procedure_version_references VALUES ('a', 2, 0, 'me', 'a', 'contextual', NULL, '{}')`,
+		`INSERT INTO procedure_version_references (procedure_id, version, position, name, target_procedure_id, policy, pinned_version, inputs) VALUES ('a', 2, 0, 'me', 'a', 'contextual', NULL, '{}')`,
 		`INSERT INTO procedure_versions (procedure_id, version, philosophy, method, contract, instructions, revision_reason, created_at)
 		 VALUES ('a', 2, 'p', 'm', '{}', '{}', 'r', '2026-10-09T12:00:00.000000000Z')`,
 	} {

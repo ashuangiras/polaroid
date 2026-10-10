@@ -11,8 +11,9 @@ import (
 	"github.com/ashuangiras/polaroid/internal/memory"
 )
 
-// CreateExecution implements memory.Store. Child links go first: the schema
-// accepts them only for a parent that does not exist yet (ADR-0011).
+// CreateExecution implements memory.Store. Child links and decisions go
+// first: the schema accepts them only for a parent that does not exist yet
+// (ADR-0011, ADR-0029).
 func (s *Store) CreateExecution(ctx context.Context, e *memory.Execution) error {
 	var bindingID, bindingRevision any
 	if e.BindingID != "" {
@@ -41,6 +42,21 @@ func (s *Store) CreateExecution(ctx context.Context, e *memory.Execution) error 
 				e.ID, e.ProcedureID, e.Version, e.Repository, e.Commit, i, c.Reference, c.ExecutionID)
 			if err != nil {
 				return fmt.Errorf("insert child %d: %w", i, err)
+			}
+		}
+		for i, d := range e.Decisions {
+			var evidence any
+			if len(d.Evidence) > 0 {
+				evidence = string(d.Evidence)
+			}
+			_, err := tx.ExecContext(ctx, `
+				INSERT INTO execution_decisions
+					(parent_execution_id, parent_procedure_id, parent_version, parent_repository, parent_commit_hash,
+					 position, reference, applicable, rationale, evidence)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				e.ID, e.ProcedureID, e.Version, e.Repository, e.Commit, i, d.Reference, *d.Applicable, d.Rationale, evidence)
+			if err != nil {
+				return fmt.Errorf("insert decision %d: %w", i, err)
 			}
 		}
 		_, err = tx.ExecContext(ctx, `
@@ -86,14 +102,21 @@ type querier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
-// readExecution reads an execution and its child links in one statement:
-// one row per child, or one row without children. Without withEvidence,
-// Evidence is left empty.
+// readExecution reads an execution with its child links and decisions in
+// one statement: one row per link or decision, or one row without either.
+// Without withEvidence, Evidence is left empty.
 func readExecution(ctx context.Context, q querier, id string, withEvidence bool) (memory.Execution, error) {
-	rows, err := q.QueryContext(ctx, `SELECT `+executionColumns+`, inputs, CASE WHEN ? THEN evidence END,
-		c.reference, c.child_execution_id
-		FROM executions LEFT JOIN execution_children AS c ON c.parent_execution_id = executions.id
-		WHERE id = ? ORDER BY c.position`, withEvidence, id)
+	rows, err := q.QueryContext(ctx, `SELECT `+executionColumns+`, inputs, CASE WHEN ? THEN executions.evidence END,
+		l.kind, l.reference, l.child, l.applicable, l.rationale, l.evidence
+		FROM executions LEFT JOIN (
+			SELECT parent_execution_id AS parent, 0 AS kind, position, reference, child_execution_id AS child,
+			       NULL AS applicable, NULL AS rationale, NULL AS evidence
+			FROM execution_children WHERE parent_execution_id = ?
+			UNION ALL
+			SELECT parent_execution_id, 1, position, reference, NULL, applicable, rationale, evidence
+			FROM execution_decisions WHERE parent_execution_id = ?
+		) AS l ON l.parent = executions.id
+		WHERE id = ? ORDER BY l.kind, l.position`, withEvidence, id, id, id)
 	if err != nil {
 		return memory.Execution{}, fmt.Errorf("query execution: %w", err)
 	}
@@ -102,9 +125,10 @@ func readExecution(ctx context.Context, q querier, id string, withEvidence bool)
 	var e memory.Execution
 	found := false
 	for rows.Next() {
-		var inputs, evidence []byte
-		var reference, child sql.NullString
-		row, err := scanExecution(rows, &inputs, &evidence, &reference, &child)
+		var inputs, evidence, decisionEvidence []byte
+		var kind, applicable sql.NullInt64
+		var reference, child, rationale sql.NullString
+		row, err := scanExecution(rows, &inputs, &evidence, &kind, &reference, &child, &applicable, &rationale, &decisionEvidence)
 		if err != nil {
 			return memory.Execution{}, err
 		}
@@ -112,8 +136,14 @@ func readExecution(ctx context.Context, q querier, id string, withEvidence bool)
 			e, found = row, true
 			e.Inputs, e.Evidence = jsontext.Value(inputs), jsontext.Value(evidence)
 		}
-		if child.Valid {
+		switch {
+		case !kind.Valid:
+		case kind.Int64 == 0:
 			e.Children = append(e.Children, memory.ChildExecution{Reference: reference.String, ExecutionID: child.String})
+		default:
+			applies := applicable.Int64 == 1
+			e.Decisions = append(e.Decisions, memory.ApplicabilityDecision{
+				Reference: reference.String, Applicable: &applies, Rationale: rationale.String, Evidence: jsontext.Value(decisionEvidence)})
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -209,7 +239,7 @@ func (r txRuns) RunIDs(ctx context.Context, f memory.VerificationFilter) ([]stri
 }
 
 func (r txRuns) ReferenceMappings(ctx context.Context, procedureID string, version int) ([]memory.ReferenceMapping, error) {
-	rows, err := r.tx.QueryContext(ctx, `SELECT name, inputs FROM procedure_version_references
+	rows, err := r.tx.QueryContext(ctx, `SELECT name, inputs, condition IS NOT NULL FROM procedure_version_references
 		WHERE procedure_id = ? AND version = ? ORDER BY position`, procedureID, version)
 	if err != nil {
 		return nil, fmt.Errorf("query reference mappings: %w", err)
@@ -218,10 +248,11 @@ func (r txRuns) ReferenceMappings(ctx context.Context, procedureID string, versi
 	var refs []memory.ReferenceMapping
 	for rows.Next() {
 		var name, inputs string
-		if err := rows.Scan(&name, &inputs); err != nil {
+		var conditional bool
+		if err := rows.Scan(&name, &inputs, &conditional); err != nil {
 			return nil, fmt.Errorf("scan reference mappings: %w", err)
 		}
-		refs = append(refs, memory.ReferenceMapping{Name: name, Inputs: jsontext.Value(inputs)})
+		refs = append(refs, memory.ReferenceMapping{Name: name, Inputs: jsontext.Value(inputs), Conditional: conditional})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read reference mappings: %w", err)

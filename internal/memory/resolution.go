@@ -6,6 +6,9 @@ import (
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
 	"fmt"
+	"maps"
+	"slices"
+	"strings"
 )
 
 // ResolutionContext is the context a version is resolved for (ADR-0013).
@@ -22,11 +25,24 @@ type ResolutionContext struct {
 }
 
 // Target is what a resolution is checked against, in its context's
-// repository and environment: a commit and the root's effective inputs.
+// repository and environment: a commit, the root's effective inputs and
+// the target's applicability decisions for conditional references, keyed
+// by reference path (names from the root joined by "/", ADR-0029).
 type Target struct {
-	Commit string
-	Inputs jsontext.Value
+	Commit    string
+	Inputs    jsontext.Value
+	Decisions jsontext.Value
+	decided   map[string]bool
 }
+
+// TargetDecision is a target's decision for one conditional reference.
+type TargetDecision string
+
+const (
+	DecisionApplicable    TargetDecision = "applicable"
+	DecisionNotApplicable TargetDecision = "not_applicable"
+	DecisionUndecided     TargetDecision = "undecided"
+)
 
 // SelectionEvidence is the execution that selected a node, and where it ran:
 // the identifier it was recorded with and that identifier's registered
@@ -55,6 +71,10 @@ func (c ResolutionContext) check(p *problems, optional bool) {
 
 // check validates t and replaces valid inputs with their compacted form.
 func (t *Target) check(p *problems) {
+	if t.Commit == "" && len(t.Inputs) == 0 && len(t.Decisions) > 0 {
+		p.add("decisions", "requires commit and inputs")
+		return
+	}
 	switch {
 	case t.Commit == "":
 		p.add("commit", "is required with inputs")
@@ -66,6 +86,69 @@ func (t *Target) check(p *problems) {
 	} else {
 		t.Inputs = checkObject(p, "inputs", t.Inputs)
 	}
+	if len(t.Decisions) > 0 {
+		t.decided = checkTargetDecisions(p, t.Decisions)
+	}
+}
+
+const decisionsRule = `must be a JSON object mapping reference paths (names from the root joined by "/") to true or false`
+
+// checkTargetDecisions parses a target's decisions.
+func checkTargetDecisions(p *problems, v jsontext.Value) map[string]bool {
+	c := checkObject(p, "decisions", v)
+	if c == nil {
+		return nil
+	}
+	var decided map[string]bool
+	if err := json.Unmarshal(c, &decided); err != nil {
+		p.add("decisions", decisionsRule)
+		return nil
+	}
+	for path := range decided {
+		for _, name := range strings.Split(path, "/") {
+			if !canonicalKeyPattern.MatchString(name) {
+				p.add("decisions", fmt.Sprintf("path %q: %s", path, decisionsRule))
+				break
+			}
+		}
+	}
+	return decided
+}
+
+// checkDecisionPaths reports every decided path that does not reach a
+// conditional reference of the graph outside a reference decided not
+// applicable.
+func checkDecisionPaths(root *GraphNode, decided map[string]bool) error {
+	valid := map[string]bool{}
+	var walk func(node *GraphNode, path string)
+	walk = func(node *GraphNode, path string) {
+		for i := range node.Edges {
+			edge := &node.Edges[i]
+			child := joinPath(path, edge.Reference.Name)
+			if edge.Reference.Conditional() {
+				valid[child] = true
+				if applicable, ok := decided[child]; ok && !applicable {
+					continue
+				}
+			}
+			walk(&edge.Node, child)
+		}
+	}
+	walk(root, "")
+	var p problems
+	for _, path := range slices.Sorted(maps.Keys(decided)) {
+		if !valid[path] {
+			p.add("decisions", fmt.Sprintf("path %q does not reach a conditional reference of the selected graph outside a reference decided not applicable", path))
+		}
+	}
+	return p.err()
+}
+
+func joinPath(path, name string) string {
+	if path == "" {
+		return name
+	}
+	return path + "/" + name
 }
 
 // withOwnTarget returns c with a copy of its target, so that checking it
@@ -138,18 +221,23 @@ func ResolveGraph(ctx context.Context, r ResolutionReader, procedureID string, p
 		var inputs jsontext.Value
 		if c.Target != nil {
 			inputs = c.Target.Inputs
+			if err := checkDecisionPaths(&root, c.Target.decided); err != nil {
+				return Resolution{}, err
+			}
 		}
-		if err := w.ev.annotate(ctx, &root, inputs); err != nil {
+		if err := w.ev.annotate(ctx, &root, inputs, "", c.Target != nil); err != nil {
 			return Resolution{}, err
 		}
 	}
 	return Resolution{SelectedBy: by, Graph: root}, nil
 }
 
-// annotate adds each node's selection evidence and, with a target, the
-// status of the node's selected combination at the target. inputs are the
-// node's effective inputs at the target.
-func (e *evidence) annotate(ctx context.Context, node *GraphNode, inputs jsontext.Value) error {
+// annotate adds each node's selection evidence and, when target is set, the
+// status of the node's expected combination at the target. inputs are the
+// node's effective inputs at the target and path its reference path. A
+// reference the target decides not applicable gets no target status below
+// it (ADR-0029).
+func (e *evidence) annotate(ctx context.Context, node *GraphNode, inputs jsontext.Value, path string, target bool) error {
 	if node.VerifiedBy != "" {
 		run, err := e.r.Run(ctx, node.VerifiedBy)
 		if err != nil {
@@ -157,8 +245,8 @@ func (e *evidence) annotate(ctx context.Context, node *GraphNode, inputs jsontex
 		}
 		node.Evidence = &SelectionEvidence{ExecutionID: run.ID, Repository: run.Repository, RepositoryID: run.Identity.ID, Commit: run.Commit, Environment: run.Environment.Name}
 	}
-	if e.c.Target != nil {
-		status, err := e.targetStatus(ctx, node, inputs)
+	if target {
+		status, err := e.targetStatus(ctx, node, inputs, path)
 		if err != nil {
 			return err
 		}
@@ -166,24 +254,44 @@ func (e *evidence) annotate(ctx context.Context, node *GraphNode, inputs jsontex
 	}
 	for i := range node.Edges {
 		edge := &node.Edges[i]
+		childPath := joinPath(path, edge.Reference.Name)
+		childTarget := target
+		if target && edge.Reference.Conditional() {
+			edge.Decision = e.c.Target.decision(childPath)
+			childTarget = edge.Decision != DecisionNotApplicable
+		}
 		var childInputs jsontext.Value
-		if e.c.Target != nil {
+		if childTarget {
 			var err error
 			if childInputs, err = mapInputs(edge.Reference.Inputs, inputs); err != nil {
 				return fmt.Errorf("map inputs of reference %q: %w", edge.Reference.Name, err)
 			}
 		}
-		if err := e.annotate(ctx, &edge.Node, childInputs); err != nil {
+		if err := e.annotate(ctx, &edge.Node, childInputs, childPath, childTarget); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// targetStatus returns the status of node's selected combination at the
+// decision returns t's decision for the conditional reference at path.
+func (t *Target) decision(path string) TargetDecision {
+	applicable, ok := t.decided[path]
+	switch {
+	case !ok:
+		return DecisionUndecided
+	case applicable:
+		return DecisionApplicable
+	}
+	return DecisionNotApplicable
+}
+
+// targetStatus returns the status of node's expected combination at the
 // target: its latest execution there decides, as for any combination
-// (ADR-0012). With no execution it is unverified.
-func (e *evidence) targetStatus(ctx context.Context, node *GraphNode, inputs jsontext.Value) (CombinationStatus, error) {
+// (ADR-0012). With no execution it is unverified. With an undecided
+// conditional reference below the node, no execution is looked up and the
+// node is unverified (ADR-0029).
+func (e *evidence) targetStatus(ctx context.Context, node *GraphNode, inputs jsontext.Value, path string) (CombinationStatus, error) {
 	canonical, err := canonicalInputs(inputs)
 	if err != nil {
 		return CombinationStatus{}, fmt.Errorf("canonicalize target inputs: %w", err)
@@ -193,13 +301,17 @@ func (e *evidence) targetStatus(ctx context.Context, node *GraphNode, inputs jso
 		return CombinationStatus{}, err
 	}
 	repository, repositoryID := combinationRepository(e.c.Repository, identity)
+	var undecided []string
 	want := Combination{
 		Repository:   repository,
 		RepositoryID: repositoryID,
 		Commit:       e.c.Target.Commit,
 		Environment:  e.c.Environment,
 		Inputs:       canonical,
-		Children:     selectedChildren(node),
+		Children:     e.c.Target.expected(node, path, &undecided),
+	}
+	if len(undecided) > 0 {
+		return CombinationStatus{Combination: want, ExecutionIDs: []string{}, Undecided: undecided}, nil
 	}
 	statuses, err := ListCombinations(ctx, e.r, VerificationFilter{
 		ProcedureID: node.ProcedureID, Version: node.Version,
@@ -216,13 +328,25 @@ func (e *evidence) targetStatus(ctx context.Context, node *GraphNode, inputs jso
 	return CombinationStatus{Combination: want, ExecutionIDs: []string{}}, nil
 }
 
-// selectedChildren is the child-version tree a graph node selected, in the
-// form a combination records it.
-func selectedChildren(node *GraphNode) []ChildVersion {
+// expected is the child-version tree the target expects under node at path:
+// a reference decided not applicable is skipped, and an undecided one is
+// left out and its path added to undecided.
+func (t *Target) expected(node *GraphNode, path string, undecided *[]string) []ChildVersion {
 	var out []ChildVersion
 	for i := range node.Edges {
 		e := &node.Edges[i]
-		out = append(out, ChildVersion{Reference: e.Reference.Name, Version: e.Node.Version, Children: selectedChildren(&e.Node)})
+		child := joinPath(path, e.Reference.Name)
+		if e.Reference.Conditional() {
+			switch t.decision(child) {
+			case DecisionUndecided:
+				*undecided = append(*undecided, child)
+				continue
+			case DecisionNotApplicable:
+				out = append(out, ChildVersion{Reference: e.Reference.Name, Skipped: true})
+				continue
+			}
+		}
+		out = append(out, ChildVersion{Reference: e.Reference.Name, Version: e.Node.Version, Children: t.expected(&e.Node, child, undecided)})
 	}
 	return out
 }
@@ -344,17 +468,24 @@ func (e *evidence) verified(ctx context.Context, id string) (string, error) {
 	return id, nil
 }
 
-// links maps each reference of a verified execution to its child execution.
-func (e *evidence) links(ctx context.Context, id string) (map[string]string, error) {
+// links maps each reference of a verified execution to its child execution,
+// and returns the conditional references it recorded as not applicable.
+func (e *evidence) links(ctx context.Context, id string) (map[string]string, map[string]bool, error) {
 	run, err := e.r.Run(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("read evidence %q: %w", id, err)
+		return nil, nil, fmt.Errorf("read evidence %q: %w", id, err)
 	}
 	links := make(map[string]string, len(run.Children))
 	for _, c := range run.Children {
 		links[c.Reference] = c.ExecutionID
 	}
-	return links, nil
+	skipped := map[string]bool{}
+	for _, d := range run.Decisions {
+		if d.Applicable != nil && !*d.Applicable {
+			skipped[d.Reference] = true
+		}
+	}
+	return links, skipped, nil
 }
 
 // ResolveBinding resolves a binding's latest revision in the binding's

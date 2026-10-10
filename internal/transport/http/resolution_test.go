@@ -30,7 +30,10 @@ type graphNodeJSON struct {
 	References         []struct {
 		Name          string         `json:"name"`
 		VersionPolicy jsontext.Value `json:"version_policy"`
+		Condition     *string        `json:"condition"`
 		SelectedBy    string         `json:"selected_by"`
+		SkippedBy     string         `json:"skipped_by"`
+		Decision      string         `json:"decision"`
 		Inputs        jsontext.Value `json:"inputs"`
 		Node          graphNodeJSON  `json:"node"`
 	} `json:"references"`
@@ -41,6 +44,7 @@ type targetVerificationJSON struct {
 	Verified          bool            `json:"verified"`
 	LatestExecutionID string          `json:"latest_execution_id"`
 	ExecutionIDs      []string        `json:"execution_ids"`
+	Undecided         []string        `json:"undecided"`
 }
 
 type bindingResolutionJSON struct {
