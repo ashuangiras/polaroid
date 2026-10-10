@@ -1,0 +1,21 @@
+{
+  "repository": "github.com/ashuangiras/polaroid",
+  "name": "hosted-ci",
+  "procedure_id": "dev.ci.hosted",
+  "revision": {
+    "inputs": {
+      "policy": "local-only",
+      "plan": "GitHub Free",
+      "workflows": [
+        ".github/workflows/ci.yml"
+      ],
+      "trigger": "manual",
+      "timeout_minutes": 30,
+      "reason": "Owner decision (2026-10-10, #59, #65): on GitHub Free, development CI is not waited for. The applicable local checks are the evidence; ci.yml runs only when dispatched by hand. Releases still wait for the release workflow, which publishes."
+    },
+    "version_policy": {
+      "contextual": {}
+    },
+    "revision_reason": "Records Polaroid's hosted-CI policy once (#65), so agents read it instead of checking the account plan."
+  }
+}

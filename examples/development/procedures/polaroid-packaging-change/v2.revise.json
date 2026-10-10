@@ -1,0 +1,124 @@
+{
+  "base_version": 1,
+  "version": {
+    "philosophy": "A packaging change is judged by the archive users download, not by the repository: the checks that run in the checkout say nothing about the script inside the archive or the environment it meets. Reproduce on the archive first, fix the cause rather than the test environment, and prove the fix on a freshly packaged archive.",
+    "method": "Reproduce the defect against an extracted archive in the users' normal environment and establish its cause; fix it with a regression check that fails on the unfixed archive; verify the commit through the verify reference, check a freshly packaged archive of that commit through the archive reference, and decide the lifecycle reference from the changed files.",
+    "goal": "Change how Polaroid is packaged or how its archives are tested (scripts/package.sh, packaging/, the release workflow) so that every archive keeps working as users receive it.",
+    "applicability": {
+      "repository": "github.com/ashuangiras/polaroid"
+    },
+    "contract": {
+      "inputs": {
+        "work_item": "The issue that holds the change's acceptance criteria.",
+        "build_command": "Passed to the verify reference.",
+        "artifacts": "Passed to the verify reference.",
+        "gate_commands": "Passed to the verify reference.",
+        "working_tree": "Passed to the verify reference; set by the agent at run time.",
+        "platform": "The host's os/arch, passed to the archive reference."
+      },
+      "preconditions": [
+        "A work item with testable acceptance criteria for packaging or archive testing.",
+        "A branch from an up-to-date main; a native host for at least one archive platform."
+      ],
+      "expected_outcome": "The defect is reproduced on an extracted archive and its cause is stated; the fix addresses the cause without weakening a check; a regression check fails on the unfixed archive and passes on the fixed one; the commit is verified through verify and a freshly packaged archive of it through archive; the release workflow's dry run, dispatched manually on the branch, passes on every platform.",
+      "verification": [
+        "The reproduction's failing output and the established cause are in this execution's evidence.",
+        "The regression check's result on the unfixed archive (failing) and on the fixed archive (passing) is recorded.",
+        "The verify and archive children are verified at the commit and linked; the lifecycle reference has a recorded decision based on the changed files.",
+        "The release workflow's dry run, dispatched manually on the branch at the commit (no tag), passed every archive test, on each platform."
+      ],
+      "boundaries": [
+        "Never forces an environment workaround (such as TMPDIR=/tmp) in the archive tests to make a check pass, and never weakens or skips a check.",
+        "Never changes the archive matrix, the asset names, SHA256SUMS or build-manifest.json formats unless the work item says so.",
+        "Never pushes a tag or publishes a release; that is polaroid.release.publish, after merge.",
+        "Never skips the verify reference or any of its gate commands (AGENTS.md)."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "reproduce",
+          "action": "Run the published or a freshly packaged archive's smoke-test.sh in the users' normal environment (on macOS, the shell's own TMPDIR) and capture the failing check. Compare with the environment the release workflow uses, and decide whether the binaries or only the script are at fault.",
+          "done_when": "The failing assertion, the environment that triggers it and its cause are written down."
+        },
+        {
+          "id": "fix",
+          "action": "Fix the cause in the packaged script or the packaging, keeping every assertion, the cleanup and the isolation from the user's service and catalog. Add or extend scripts/smoke-archive-check.sh so the failing environment is a scenario, and run it on the unfixed archive: it must fail."
+        },
+        {
+          "id": "verify",
+          "action": "Commit and follow the verify reference at that exact commit with the full gate (the `verify-change` binding's inputs), recording its children before it.",
+          "required_by": "AGENTS.md: packaging changes need the full gate."
+        },
+        {
+          "id": "archive",
+          "action": "Follow the archive reference for a freshly packaged archive of the commit on this host (assets local).",
+          "required_by": "#52: archives are checked as users receive them."
+        },
+        {
+          "id": "lifecycle",
+          "action": "List the files the change touches against main and decide whether the lifecycle reference's condition holds; follow it if it does. Record the decision with the changed files as its basis either way.",
+          "when": "The lifecycle reference's condition holds.",
+          "escalate_when": "A changed file's effect on installation or the service is unclear: then it applies."
+        },
+        {
+          "id": "dry-run",
+          "action": "Dispatch the release workflow's dry run on the branch: `gh workflow run release.yml --ref BRANCH` with no tag (pull requests no longer start it). Find the run at the commit and wait for it once, bounded (for example `timeout 2700 gh run watch RUN --exit-status`): every native archive test and the Alpine test must pass. It packages with a local tag v0.0.0-dispatch.N and publishes nothing.",
+          "done_when": "The run ID and each job's result are recorded."
+        },
+        {
+          "id": "record",
+          "action": "Record this execution with the work item, the reproduction and cause, the regression check before and after, the children and decisions, and the dry-run results."
+        }
+      ]
+    },
+    "references": [
+      {
+        "name": "verify",
+        "procedure_id": "dev.change.verify",
+        "version_policy": {
+          "contextual": {}
+        },
+        "inputs": {
+          "artifacts": {
+            "input": "artifacts"
+          },
+          "build_command": {
+            "input": "build_command"
+          },
+          "gate_commands": {
+            "input": "gate_commands"
+          },
+          "working_tree": {
+            "input": "working_tree"
+          }
+        }
+      },
+      {
+        "name": "archive",
+        "procedure_id": "polaroid.archive.check",
+        "version_policy": {
+          "contextual": {}
+        },
+        "inputs": {
+          "platform": {
+            "input": "platform"
+          },
+          "assets": {
+            "value": "local"
+          }
+        }
+      },
+      {
+        "name": "lifecycle",
+        "procedure_id": "polaroid.lifecycle.check",
+        "version_policy": {
+          "contextual": {}
+        },
+        "inputs": {},
+        "condition": "The change can alter how Polaroid is installed, started, stopped, upgraded or recovered as a service: it touches internal/lifecycle, cmd/polaroid/lifecycle.go, polaroidd's flags, logging, start-up or shutdown in cmd/polaroidd, scripts/lifecycle-check.sh or the service definitions."
+      }
+    ],
+    "revision_reason": "#65 (refs #62): the release workflow no longer runs on pull requests, where it spent hosted minutes on every packaging pull request; its dry run is dispatched manually on the branch, and this procedure still requires it. The verify reference keeps the full gate."
+  }
+}

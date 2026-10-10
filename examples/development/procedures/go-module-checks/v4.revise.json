@@ -1,0 +1,55 @@
+{
+  "base_version": 3,
+  "version": {
+    "philosophy": "A check is evidence only when it actually ran, against the state being verified, with the tool versions the repository pins. A check that was skipped or ran another version is reported as exactly that, never as passed. A test result that Go served from its cache is reported as cached: it is sound only where the cache sees every input of the test, and the repository's gate decides where that holds. Running the same check twice adds time, not evidence.",
+    "method": "Check the toolchain and the pinned tool versions, then run each gate command once, in order, as the repository defines it, keeping each exit status and a short deterministic excerpt of its output, with cached test results counted as cached.",
+    "goal": "Run a Go module's gate commands once each, in order, with pinned tools, and record each outcome, including which test results were cached.",
+    "applicability": {
+      "shared": {}
+    },
+    "contract": {
+      "inputs": {
+        "gate_commands": "The repository's gate commands, in order, run from the module root, for example [\"make check\"]. A command may name another effective input in braces, for example {packages}; substitute that input's value when running it.",
+        "working_tree": "`clean`, or `modified:` with a digest of the uncommitted changes, as recorded by the caller.",
+        "packages": "Optional: the value of {packages} in gate_commands."
+      },
+      "preconditions": [
+        "The working directory is the module root, at the commit and working-tree state being verified.",
+        "Anything the gate commands need that they do not build themselves has been built at that state, for example by the caller's build step."
+      ],
+      "expected_outcome": "Every gate command ran once and exited 0.",
+      "verification": [
+        "Evidence lists every command as run (placeholders substituted) with its exit status and an excerpt of deterministic lines: no durations, timestamps or process IDs.",
+        "Evidence says, for each command that ran Go tests, how many packages ran and how many results were `(cached)`.",
+        "Evidence lists every command that did not run, with the reason."
+      ],
+      "boundaries": [
+        "The result covers only the commands in gate_commands. It says nothing about checks they do not include, and never stands for a fuller gate.",
+        "Does not fix failures or edit files; it reports them.",
+        "A command that cannot run, for example for lack of network or a pinned tool, makes the outcome `failed`, with the reason recorded.",
+        "Does not change GOFLAGS or caching unless the repository's guidance says to: when the repository does not document that its gate itself runs uncached the tests the cache cannot judge, run every command with GOFLAGS=-count=1 and say so."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "tools",
+          "action": "Run `go version` and compare it with go.mod's `toolchain` line (or its `go` line). Read the repository's contributor documentation (for example AGENTS.md) for pinned tool versions and for its test-cache policy, and check each installed version. If a pinned tool is not on PATH at that version, pass its path the way the repository documents, for example a GOLANGCI_LINT variable, and record that path's version in the environment attributes."
+        },
+        {
+          "id": "gate",
+          "action": "Run each command in gate_commands once, in order, from the module root, with {name} placeholders replaced by the effective inputs. Run no other test command before or between them: when the gate runs the package tests, that is the test run. Keep each exit status and its deterministic summary lines, such as `ok` package lines, `0 issues.`, `deps-check: PASS`, `docs-check: PASS`, `demo: PASS` or `passed=N failed=0`. Stop at the first failing command, and list the rest as not run."
+        },
+        {
+          "id": "cache",
+          "action": "For each command that ran Go tests, count the `ok` package lines and those marked `(cached)`, and report both. A cached result is reported as cached, never as a fresh run."
+        },
+        {
+          "id": "record",
+          "action": "Record outcome `succeeded` only if every gate command ran and exited 0. Otherwise record `failed`, naming the failing command with its output, and listing what did not run."
+        }
+      ]
+    },
+    "revision_reason": "#65 (refs #62): version 3 ran `go test ./...` for fast feedback and then the gate's `make check` ran the same tests again (101 s of the baseline's 440 s gate window), and forced GOFLAGS=-count=1 on every command, so no test result was ever served from Go's cache, even where its invalidation is sound. Each gate command now runs once; the repository's gate decides which tests run uncached, and cached results are reported as cached. Gate commands may name a run-time input such as {packages}, for scoped gates."
+  }
+}

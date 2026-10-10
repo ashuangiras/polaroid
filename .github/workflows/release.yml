@@ -1,27 +1,23 @@
 # Packages a prerelease verification build from a tag on main, tests the
 # archives themselves on native runners and in a container without systemd,
 # publishes them as a GitHub prerelease, then downloads the published assets
-# and tests them again (ADR-0028). It never replaces an existing release. On
-# a pull request that changes packaging, it packages the PR with a local-only
-# tag v0.0.0-pr.N and runs every archive test, but publishes nothing.
+# and tests them again (ADR-0028). It never replaces an existing release.
+# Dispatched by hand without a tag, it is a dry run of the selected branch:
+# it packages it with a local-only tag v0.0.0-dispatch.N and runs every
+# archive test, but publishes nothing. Pull requests no longer start it
+# (ADR-0031).
 # Actions and images are pinned; see docs/development/dependencies.md.
 name: release
 
 on:
   push:
     tags: ["v*-*"]
-  pull_request:
-    paths:
-      - .github/workflows/release.yml
-      - scripts/package.sh
-      - scripts/smoke-archive-check.sh
-      - packaging/**
-      - internal/version/**
   workflow_dispatch:
     inputs:
       tag:
-        description: An existing prerelease tag on main, for example v0.1.0-verify.1
-        required: true
+        description: An existing prerelease tag on main to publish, for example v0.1.0-verify.1. Leave empty for a dry run of the selected branch, which publishes nothing.
+        required: false
+        default: ""
         type: string
 
 permissions: {}
@@ -31,7 +27,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  TAG: ${{ github.event_name == 'pull_request' && format('v0.0.0-pr.{0}', github.event.pull_request.number) || inputs.tag || github.ref_name }}
+  TAG: ${{ (github.event_name == 'workflow_dispatch' && inputs.tag == '') && format('v0.0.0-dispatch.{0}', github.run_number) || inputs.tag || github.ref_name }}
 
 jobs:
   package:
@@ -41,10 +37,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Check out the tag (or, for a pull request, its merge commit)
+      - name: Check out the tag (or, for a dry run, the selected branch)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event_name != 'pull_request' && format('refs/tags/{0}', env.TAG) || '' }}
+          ref: ${{ (github.event_name == 'push' || inputs.tag != '') && format('refs/tags/{0}', env.TAG) || '' }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -55,7 +51,7 @@ jobs:
           cache: false
 
       - name: Check that the tag is an unpublished prerelease on main
-        if: github.event_name != 'pull_request'
+        if: github.event_name == 'push' || inputs.tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -67,10 +63,10 @@ jobs:
           fi
           git tag -l --format='%(contents)' "$TAG" >"$RUNNER_TEMP/tag-message.md"
 
-      - name: Tag the pull request locally (never pushed)
-        if: github.event_name == 'pull_request'
+      - name: Tag the selected branch locally (never pushed)
+        if: github.event_name == 'workflow_dispatch' && inputs.tag == ''
         run: |
-          git -c user.name=release-dry-run -c user.email=release-dry-run@example.invalid tag -a "$TAG" -m "Dry run for pull request ${{ github.event.pull_request.number }}; not published."
+          git -c user.name=release-dry-run -c user.email=release-dry-run@example.invalid tag -a "$TAG" -m "Dry run of $GITHUB_REF_NAME at $GITHUB_SHA; not published."
           git tag -l --format='%(contents)' "$TAG" >"$RUNNER_TEMP/tag-message.md"
 
       - name: Build and package
@@ -187,7 +183,7 @@ jobs:
 
   publish:
     name: publish the prerelease
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'push' || inputs.tag != ''
     needs: [package, test-archive, test-without-systemd]
     runs-on: ubuntu-latest
     timeout-minutes: 10

@@ -12,11 +12,11 @@
 
 ## Evidence
 
-<!-- Paste real output. For each gate you did not run, write "not run" and why. -->
+<!-- Paste real output. Name the binding you verified through (verify-docs, verify-records, verify-focused or verify-change) and its scope. For each gate you did not run, write "not run" and why; mark cached results as cached. -->
 
-- `make check`:
-- `make vuln`:
-- `make demo`:
+- Binding and scope:
+- Gate commands and summary lines:
+- Executions recorded:
 - Tests added or changed:
 
 ## Documentation

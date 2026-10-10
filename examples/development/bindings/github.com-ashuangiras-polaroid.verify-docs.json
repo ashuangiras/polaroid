@@ -1,0 +1,17 @@
+{
+  "repository": "github.com/ashuangiras/polaroid",
+  "name": "verify-docs",
+  "procedure_id": "polaroid.change.docs",
+  "revision": {
+    "inputs": {
+      "scope": "docs",
+      "gate_commands": [
+        "make docs-check"
+      ]
+    },
+    "version_policy": {
+      "contextual": {}
+    },
+    "revision_reason": "Prose-only documentation changes (#65): check the claims, links and anchors without building or testing Go code. Not full verification."
+  }
+}

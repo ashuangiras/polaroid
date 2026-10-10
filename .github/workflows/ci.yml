@@ -1,11 +1,12 @@
 # Runs the same checks as `make ci` locally. Actions are pinned to full commit
 # SHAs; see docs/development/dependencies.md for versions and licenses.
+# Manual only (ADR-0031): Polaroid's hosted-CI policy is local-only, recorded
+# as its `hosted-ci` binding, so pushes and pull requests start nothing.
+# Dispatch it with `gh workflow run ci.yml --ref BRANCH`.
 name: ci
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read

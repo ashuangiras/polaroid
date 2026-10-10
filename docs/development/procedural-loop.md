@@ -6,7 +6,7 @@ This page records how Polaroid's development procedures were used through Polaro
 | --- | --- | --- |
 | What | `make demo` replays the loop with scripted outcomes in a temporary store | An agent retrieved procedures over MCP, ran real commands, reasoned about a failure and wrote the records below |
 | Proves | Polaroid's lifecycle: loading, MCP calls, conflicts, composition, verification transitions, history, persistence | That the loop works in practice for a real development task |
-| Runs | In CI on every push, without an LLM | Once per session; IDs come from one local store |
+| Runs | In every full verification (`make demo`) and `make ci`, without an LLM | Once per session; IDs come from one local store |
 | Where | [scripts/demo.sh](../../scripts/demo.sh), steps 9 to 18, 20 and 21 | This page |
 
 ## The procedures

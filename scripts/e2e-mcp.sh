@@ -132,7 +132,7 @@ ids() { jq -r .id <<<"$LAST"; }
 section "Start polaroidd; discover the MCP server" \
 	"\`polaroidd\` serves MCP at \`/mcp\` on its normal listener (default \`127.0.0.1:7417\`, random here). Protocol 2026-07-28 has no initialize handshake: a client calls \`server/discover\` (SEP-2575), and every request is self-contained. The server advertises 2026-07-28 and, for clients that still use the initialize handshake, 2025-11-25 (ADR-0016, still without sessions), the \`tools\` and \`resources\` capabilities, and instructions that teach an agent the Polaroid loop." \
 	"\`bin/polaroidd &\`, then configure your MCP client with \`http://127.0.0.1:7417/mcp\`. By hand, the request below."
-make build >/dev/null
+make -s binaries >/dev/null
 start_daemon
 show 'post server/discover "" "" | jq -c .'
 check "the server speaks protocols 2026-07-28 and 2025-11-25" json_has '.result.supportedVersions == ["2026-07-28","2025-11-25"]'

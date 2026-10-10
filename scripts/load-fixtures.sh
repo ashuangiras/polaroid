@@ -100,18 +100,25 @@ repository_id() {
 	jq -r .id <<<"$out"
 }
 
-# missing FILE prints the referenced keys that name no stored procedure.
+# missing FILE prints the referenced keys that name no stored procedure, and
+# key@N for a reference pinned to a version N that is not stored yet.
 missing() {
-	local key
-	for key in $(jq -r '.version.references[]?.procedure_id' "$1"); do
-		[[ -n "$(id_of "$key")" ]] || echo "$key"
-	done
+	local key pin id
+	while IFS=$'\t' read -r key pin; do
+		id="$(id_of "$key")"
+		if [[ -z "$id" ]]; then
+			echo "$key"
+		elif [[ -n "$pin" ]] && (("$("$cli" get "$id" | jq -r .latest_version)" < pin)); then
+			echo "$key@$pin"
+		fi
+	done < <(jq -r '.version.references[]? | [.procedure_id, (.version_policy.pin // "" | tostring)] | @tsv' "$1")
 }
 
 comparable='{philosophy, method, goal: (.goal // null), applicability: (.applicability // null), contract, instructions, references: (.references // []), revision_reason}'
 
 # load_procedure DIR loads one procedure. It sets deferred=1 and changes
-# nothing if a version to load references a procedure that is not stored yet.
+# nothing if a version to load references a procedure, or a pinned version,
+# that is not stored yet.
 load_procedure() {
 	local pdir=${1%/} files=() n=2 limit i key hist id latest want got base
 	deferred=0
