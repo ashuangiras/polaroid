@@ -54,8 +54,9 @@ type (
 	// targetArgs ask for each selected combination's status at an exact
 	// commit and inputs (ADR-0018).
 	targetArgs struct {
-		Commit string         `json:"commit,omitzero" jsonschema:"the full commit you will run at; requires inputs. Each node then reports target_verification"`
-		Inputs jsontext.Value `json:"inputs,omitzero" jsonschema:"the root's effective inputs at that commit; requires commit"`
+		Commit    string         `json:"commit,omitzero" jsonschema:"the full commit you will run at; requires inputs. Each node then reports target_verification"`
+		Inputs    jsontext.Value `json:"inputs,omitzero" jsonschema:"the root's effective inputs at that commit; requires commit"`
+		Decisions jsontext.Value `json:"decisions,omitzero" jsonschema:"your applicability decisions for the conditional references, as an object from reference path (names from the root joined by /) to true or false; requires commit and inputs. A node with an undecided conditional reference below it is never target-verified"`
 	}
 	createProcedureArgs struct {
 		CanonicalKey string          `json:"canonical_key"`
@@ -144,10 +145,10 @@ func (a repositoryArgs) page() memory.Page {
 }
 
 func (a targetArgs) target() *memory.Target {
-	if a.Commit == "" && a.Inputs == nil {
+	if a.Commit == "" && a.Inputs == nil && a.Decisions == nil {
 		return nil
 	}
-	return &memory.Target{Commit: a.Commit, Inputs: a.Inputs}
+	return &memory.Target{Commit: a.Commit, Inputs: a.Inputs, Decisions: a.Decisions}
 }
 
 func (t *tools) register(s *sdk.Server) {
@@ -183,7 +184,8 @@ func (t *tools) register(s *sdk.Server) {
 		})
 	add(s, t, "get_graph", "Get a version's composition graph with the exact version each reference selects. "+
 		"With repository and environment, contextual references resolve from verification evidence, reported per node as selection_evidence (any commit). "+
-		"Add commit and inputs to get target_verification: whether each selected combination is verified at that exact commit and inputs.", read,
+		"Add commit and inputs to get target_verification: whether each selected combination is verified at that exact commit and inputs. "+
+		"References with a condition apply only when it holds: decide each for your task and pass decisions; the graph always shows every reference and its condition.", read,
 		func(ctx context.Context, in graphArgs) (any, error) {
 			g, err := t.svc.CompositionGraph(ctx, in.ProcedureID, in.Version,
 				memory.ResolutionContext{Repository: in.Repository, Environment: in.Environment, Target: in.target()})
@@ -260,7 +262,7 @@ func (t *tools) register(s *sdk.Server) {
 		})
 	add(s, t, "resolve_binding", "Resolve a binding's latest revision in its repository and an environment. "+
 		"Versions are selected from earlier evidence, reported per node as selection_evidence with the commit it ran at; that is not verification of your checkout. "+
-		"Add commit and inputs to get target_verification for each selected combination at exactly that commit and inputs.", read,
+		"Add commit and inputs to get target_verification for each selected combination at exactly that commit and inputs, and decisions for its conditional references.", read,
 		func(ctx context.Context, in resolveBindingArgs) (any, error) {
 			r, err := t.svc.ResolveBinding(ctx, in.BindingID, in.Environment, in.target())
 			return wire.NewBindingResolution(r), err
@@ -275,12 +277,13 @@ func (t *tools) register(s *sdk.Server) {
 			r, err := t.svc.ReviseBinding(ctx, in.BindingID, memory.BindingRevise{BaseRevision: in.BaseRevision, Config: in.Domain()})
 			return wire.NewBindingRevision(r), flatten(err, "revision.")
 		})
-	add(s, t, "record_execution", "Record one finished run of an exact version. Record children first, each with exactly the inputs its reference maps from the parent's inputs, then the parent listing them in children.", write,
+	add(s, t, "record_execution", "Record one finished run of an exact version. Record children first, each with exactly the inputs its reference maps from the parent's inputs, then the parent listing them in children. "+
+		"For every reference with a condition, add a decision {reference, applicable, rationale}: applicable true needs its child; false needs a concrete rationale and no child. Required references cannot be skipped.", write,
 		func(ctx context.Context, in wire.ExecutionRecord) (any, error) {
 			e, err := t.svc.RecordExecution(ctx, in.Domain())
 			return wire.NewExecution(e), err
 		})
-	add(s, t, "get_execution", "Get one execution, with its inputs, evidence and children.", read,
+	add(s, t, "get_execution", "Get one execution, with its inputs, evidence, children and applicability decisions.", read,
 		func(ctx context.Context, in byID) (any, error) {
 			e, err := t.svc.Execution(ctx, in.ID)
 			return wire.NewExecution(e), err

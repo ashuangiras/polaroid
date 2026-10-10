@@ -96,6 +96,9 @@ func checkReferences(p *problems, refs []Reference) []Reference {
 		}
 		checkPolicy(p, field+".version_policy", r.VersionPolicy)
 		r.Inputs = checkMapping(p, field+".inputs", r.Inputs)
+		if r.Condition != nil {
+			checkText(p, field+".condition", *r.Condition)
+		}
 		out[i] = r
 	}
 	return out

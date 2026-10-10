@@ -162,12 +162,13 @@ func newOrigin(o *memory.Origin) *Origin {
 }
 
 // Reference is one named subprocedure reference, in requests and responses
-// alike.
+// alike. condition is omitted for a required reference (ADR-0029).
 type Reference struct {
 	Name          string         `json:"name"`
 	ProcedureID   string         `json:"procedure_id"`
 	VersionPolicy VersionPolicy  `json:"version_policy"`
 	Inputs        jsontext.Value `json:"inputs"`
+	Condition     *string        `json:"condition,omitzero"`
 }
 
 func references(body []Reference) []memory.Reference {
@@ -176,7 +177,7 @@ func references(body []Reference) []memory.Reference {
 	}
 	refs := make([]memory.Reference, len(body))
 	for i, r := range body {
-		refs[i] = memory.Reference{Name: r.Name, ProcedureID: r.ProcedureID, VersionPolicy: r.VersionPolicy.Domain(), Inputs: r.Inputs}
+		refs[i] = memory.Reference{Name: r.Name, ProcedureID: r.ProcedureID, VersionPolicy: r.VersionPolicy.Domain(), Inputs: r.Inputs, Condition: r.Condition}
 	}
 	return refs
 }
@@ -187,7 +188,7 @@ func newReferences(refs []memory.Reference) []Reference {
 	}
 	body := make([]Reference, len(refs))
 	for i, r := range refs {
-		body[i] = Reference{Name: r.Name, ProcedureID: r.ProcedureID, VersionPolicy: NewVersionPolicy(r.VersionPolicy), Inputs: r.Inputs}
+		body[i] = Reference{Name: r.Name, ProcedureID: r.ProcedureID, VersionPolicy: NewVersionPolicy(r.VersionPolicy), Inputs: r.Inputs, Condition: r.Condition}
 	}
 	return body
 }
@@ -453,12 +454,20 @@ type TargetVerification struct {
 	Verified          bool        `json:"verified"`
 	LatestExecutionID string      `json:"latest_execution_id,omitzero"`
 	ExecutionIDs      []string    `json:"execution_ids"`
+	Undecided         []string    `json:"undecided,omitzero"`
 }
 
+// GraphEdge is a reference with the node it selected. condition is omitted
+// for a required reference, decision without a target or for a required
+// reference, and skipped_by unless the parent's evidence skipped it
+// (ADR-0029).
 type GraphEdge struct {
 	Name          string         `json:"name"`
 	VersionPolicy VersionPolicy  `json:"version_policy"`
+	Condition     *string        `json:"condition,omitzero"`
 	SelectedBy    string         `json:"selected_by"`
+	SkippedBy     string         `json:"skipped_by,omitzero"`
+	Decision      string         `json:"decision,omitzero"`
 	Inputs        jsontext.Value `json:"inputs"`
 	Node          GraphNode      `json:"node"`
 }
@@ -482,13 +491,17 @@ func NewGraphNode(n memory.GraphNode) GraphNode {
 			Verified:          s.Verified,
 			LatestExecutionID: s.LatestExecutionID,
 			ExecutionIDs:      s.ExecutionIDs,
+			Undecided:         s.Undecided,
 		}
 	}
 	for i, e := range n.Edges {
 		body.References[i] = GraphEdge{
 			Name:          e.Reference.Name,
 			VersionPolicy: NewVersionPolicy(e.Reference.VersionPolicy),
+			Condition:     e.Reference.Condition,
 			SelectedBy:    string(e.SelectedBy),
+			SkippedBy:     e.SkippedBy,
+			Decision:      string(e.Decision),
 			Inputs:        e.Reference.Inputs,
 			Node:          NewGraphNode(e.Node),
 		}
@@ -540,12 +553,41 @@ type ExecutionRecord struct {
 	Outcome         string         `json:"outcome"`
 	Evidence        jsontext.Value `json:"evidence"`
 	Children        []Child        `json:"children,omitzero"`
+	Decisions       []Decision     `json:"decisions,omitzero"`
 }
 
 // Child links a child execution to the reference it fulfilled.
 type Child struct {
 	Reference   string `json:"reference"`
 	ExecutionID string `json:"execution_id"`
+}
+
+// Decision is an execution's applicability decision for one conditional
+// reference (ADR-0029). evidence is optional and omitted when absent.
+type Decision struct {
+	Reference  string         `json:"reference"`
+	Applicable *bool          `json:"applicable"`
+	Rationale  string         `json:"rationale"`
+	Evidence   jsontext.Value `json:"evidence,omitzero"`
+}
+
+func decisions(body []Decision) []memory.ApplicabilityDecision {
+	if len(body) == 0 {
+		return nil
+	}
+	out := make([]memory.ApplicabilityDecision, len(body))
+	for i, d := range body {
+		out[i] = memory.ApplicabilityDecision{Reference: d.Reference, Applicable: d.Applicable, Rationale: d.Rationale, Evidence: d.Evidence}
+	}
+	return out
+}
+
+func newDecisions(ds []memory.ApplicabilityDecision) []Decision {
+	var out []Decision
+	for _, d := range ds {
+		out = append(out, Decision{Reference: d.Reference, Applicable: d.Applicable, Rationale: d.Rationale, Evidence: d.Evidence})
+	}
+	return out
 }
 
 // Domain returns r in domain form.
@@ -566,6 +608,7 @@ func (r ExecutionRecord) Domain() memory.ExecutionRecord {
 		Outcome:         memory.Outcome(r.Outcome),
 		Evidence:        r.Evidence,
 		Children:        children,
+		Decisions:       decisions(r.Decisions),
 	}
 }
 
@@ -630,10 +673,11 @@ type Execution struct {
 	Inputs          jsontext.Value `json:"inputs"`
 	Outcome         string         `json:"outcome"`
 	Evidence        jsontext.Value `json:"evidence"`
-	// Children is omitted when there are none, so executions recorded before
-	// child links existed are served unchanged.
-	Children  []Child   `json:"children,omitzero"`
-	CreatedAt time.Time `json:"created_at"`
+	// Children and Decisions are omitted when there are none, so executions
+	// recorded before they existed are served unchanged.
+	Children  []Child    `json:"children,omitzero"`
+	Decisions []Decision `json:"decisions,omitzero"`
+	CreatedAt time.Time  `json:"created_at"`
 }
 
 func NewExecution(e memory.Execution) Execution {
@@ -656,6 +700,7 @@ func NewExecution(e memory.Execution) Execution {
 		Outcome:         s.Outcome,
 		Evidence:        e.Evidence,
 		Children:        children,
+		Decisions:       newDecisions(e.Decisions),
 		CreatedAt:       s.CreatedAt,
 	}
 }
@@ -673,9 +718,13 @@ type Combination struct {
 	Children     []ChildVersion  `json:"children,omitzero"`
 }
 
+// ChildVersion is a linked child's reference and version with its own
+// children, or a conditional reference decided not applicable:
+// {"reference", "skipped": true} without a version (ADR-0029).
 type ChildVersion struct {
 	Reference string         `json:"reference"`
-	Version   int            `json:"version"`
+	Version   int            `json:"version,omitzero"`
+	Skipped   bool           `json:"skipped,omitzero"`
 	Children  []ChildVersion `json:"children,omitzero"`
 }
 
@@ -693,7 +742,7 @@ func newCombination(c memory.Combination) Combination {
 func newChildVersions(children []memory.ChildVersion) []ChildVersion {
 	var out []ChildVersion
 	for _, c := range children {
-		out = append(out, ChildVersion{Reference: c.Reference, Version: c.Version, Children: newChildVersions(c.Children)})
+		out = append(out, ChildVersion{Reference: c.Reference, Version: c.Version, Skipped: c.Skipped, Children: newChildVersions(c.Children)})
 	}
 	return out
 }

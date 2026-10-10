@@ -227,6 +227,53 @@ func TestExecutionCommands(t *testing.T) {
 	}
 }
 
+// TestConditionalCommands: a conditional reference's decision is recorded
+// with record, and graph and resolve pass target DECISIONS (ADR-0029).
+func TestConditionalCommands(t *testing.T) {
+	server := newServer(t)
+	id := func(r result) string {
+		t.Helper()
+		mustSucceed(t, r)
+		var v struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(r.stdout), &v); err != nil || v.ID == "" {
+			t.Fatalf("no id in %q (%v)", r.stdout, err)
+		}
+		return v.ID
+	}
+	leaf := id(cli(createJSON, nil, "-server", server, "create"))
+	verify := id(cli(`{"canonical_key":"demo.verify","version":{"philosophy":"p","method":"m","contract":{},"instructions":{},`+
+		`"references":[{"name":"integration","procedure_id":"`+leaf+`","version_policy":{"pin":1},"inputs":{},"condition":"Only for code changes."}],`+
+		`"revision_reason":"r"}}`, nil, "-server", server, "create"))
+	const commit = "0123456789abcdef0123456789abcdef01234567"
+	docs := id(cli(`{"procedure_id":"`+verify+`","version":1,"repository":"scratch","commit":"`+commit+`",`+
+		`"environment":{"name":"laptop","attributes":{}},"inputs":{},"outcome":"succeeded","evidence":{"exit":0},`+
+		`"decisions":[{"reference":"integration","applicable":false,"rationale":"Only README.md changed."}]}`, nil, "-server", server, "record"))
+
+	for args, want := range map[[8]string]string{
+		{"graph", verify, "1", "scratch", "laptop", commit, "{}", `{"integration":false}`}: `"verified":true,"latest_execution_id":"` + docs + `"`,
+		{"graph", verify, "1", "scratch", "laptop", commit, "{}", `{"integration":true}`}:  `"decision":"applicable"`,
+		{"graph", verify, "1", "scratch", "laptop", commit, "{}"}:                          `"undecided":["integration"]`,
+	} {
+		r := cli("", nil, append([]string{"-server", server}, slices.DeleteFunc(args[:], func(s string) bool { return s == "" })...)...)
+		mustSucceed(t, r)
+		if !strings.Contains(r.stdout, want) {
+			t.Fatalf("%v: stdout %s, want %s", args, r.stdout, want)
+		}
+	}
+	b := id(cli(`{"repository":"scratch","name":"verify","procedure_id":"`+verify+`",`+
+		`"revision":{"inputs":{},"version_policy":{"pin":1},"revision_reason":"r"}}`, nil, "-server", server, "bind"))
+	resolved := cli("", nil, "-server", server, "resolve", b, "laptop", commit, "{}", `{"integration":false}`)
+	mustSucceed(t, resolved)
+	if !strings.Contains(resolved.stdout, `"decision":"not_applicable"`) || !strings.Contains(resolved.stdout, `"verified":true`) {
+		t.Fatalf("resolve with DECISIONS: %s", resolved.stdout)
+	}
+	if bad := cli("", nil, "-server", server, "resolve", b, "laptop", commit, "{}", `{"lint":true}`); bad.code != exitFailure || !strings.Contains(bad.stdout, `"field":"decisions"`) {
+		t.Fatalf("an unknown decision path: exit %d, stdout %s", bad.code, bad.stdout)
+	}
+}
+
 func TestFeedbackCommands(t *testing.T) {
 	server := newServer(t)
 	const reportJSON = `{"kind":"problem","summary":"The CLI hides the error code","details":"Only stdout has it.",` +
@@ -394,10 +441,10 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		{"graph", "a"},
 		{"graph", "a", "1", "repo"},
 		{"graph", "a", "1", "repo", "env", "x"},
-		{"graph", "a", "1", "repo", "env", "c", "{}", "x"},
+		{"graph", "a", "1", "repo", "env", "c", "{}", "{}", "x"},
 		{"resolve", "a"},
 		{"resolve", "a", "env", "c"},
-		{"resolve", "a", "env", "c", "{}", "x"},
+		{"resolve", "a", "env", "c", "{}", "{}", "x"},
 		{"revise"},
 		{"bindings"},
 		{"get-binding"},

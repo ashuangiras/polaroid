@@ -21,10 +21,12 @@ type VerificationReader interface {
 	ReferenceMappings(ctx context.Context, procedureID string, version int) ([]ReferenceMapping, error)
 }
 
-// ReferenceMapping is a reference's name and its input mapping (ADR-0008).
+// ReferenceMapping is a reference's name, its input mapping (ADR-0008) and
+// whether it is conditional (ADR-0029).
 type ReferenceMapping struct {
-	Name   string
-	Inputs jsontext.Value
+	Name        string
+	Inputs      jsontext.Value
+	Conditional bool
 }
 
 // VerificationFilter selects the executions of one procedure version,
@@ -46,6 +48,7 @@ const (
 	ProblemMissingChild        ProblemCode = "missing_child"
 	ProblemChildInputsMismatch ProblemCode = "child_inputs_mismatch"
 	ProblemChildNotVerified    ProblemCode = "child_not_verified"
+	ProblemMissingDecision     ProblemCode = "missing_decision"
 )
 
 // VerificationProblem is one direct reason an execution is not verified.
@@ -78,10 +81,13 @@ func combinationRepository(identifier string, id RepositoryIdentity) (string, st
 	return id.Identifier, id.ID
 }
 
-// ChildVersion is the version a linked child ran, with its own children.
+// ChildVersion is the version a linked child ran, with its own children,
+// or, with Skipped, a conditional reference decided not applicable
+// (ADR-0029).
 type ChildVersion struct {
 	Reference string
 	Version   int
+	Skipped   bool
 	Children  []ChildVersion
 }
 
@@ -96,17 +102,21 @@ type Verification struct {
 }
 
 // CombinationStatus is one combination of a version with its executions,
-// oldest first. Its status is the verification of the latest one.
+// oldest first. Its status is the verification of the latest one. For a
+// target, Undecided lists the reference paths of conditional references
+// without a target decision; then no execution is looked up (ADR-0029).
 type CombinationStatus struct {
 	Combination       Combination
 	Verified          bool
 	LatestExecutionID string
 	ExecutionIDs      []string
+	Undecided         []string
 }
 
-// VerifyExecution judges one stored execution (ADR-0012): it is verified if
-// it succeeded and every reference of its version is fulfilled by a linked
-// child that is itself verified.
+// VerifyExecution judges one stored execution (ADR-0012, ADR-0029): it is
+// verified if it succeeded and every reference of its version is fulfilled
+// by a linked child that is itself verified, except a conditional reference
+// recorded as not applicable; every conditional reference needs a decision.
 func VerifyExecution(ctx context.Context, r VerificationReader, id string) (Verification, error) {
 	return newVerifier(r).verify(ctx, id)
 }
@@ -183,9 +193,26 @@ func (v *verifier) verify(ctx context.Context, id string) (Verification, error) 
 	for _, c := range e.Children {
 		children[c.Reference] = c.ExecutionID
 	}
+	decisions := make(map[string]bool, len(e.Decisions))
+	for _, d := range e.Decisions {
+		decisions[d.Reference] = d.Applicable != nil && *d.Applicable
+	}
 	for _, ref := range refs {
 		name := ref.Name
 		childID, ok := children[name]
+		if ref.Conditional {
+			applicable, decided := decisions[name]
+			switch {
+			case !decided:
+				out.Problems = append(out.Problems, VerificationProblem{Code: ProblemMissingDecision, Reference: name})
+				if !ok {
+					continue
+				}
+			case !applicable:
+				out.Combination.Children = append(out.Combination.Children, ChildVersion{Reference: name, Skipped: true})
+				continue
+			}
+		}
 		if !ok {
 			out.Problems = append(out.Problems, VerificationProblem{Code: ProblemMissingChild, Reference: name})
 			continue
@@ -249,8 +276,8 @@ func mappedInputs(mapping, parent jsontext.Value) (jsontext.Value, error) {
 
 // key identifies c. A registered identity is keyed by its ID, behind a byte
 // no identifier contains; repositories, commits, environment names and
-// reference names cannot contain NUL, '@', '(', ')' or ',', and inputs are
-// canonical.
+// reference names cannot contain NUL, '@', '!', '(', ')' or ',', and inputs
+// are canonical.
 func (c Combination) key() string {
 	var b strings.Builder
 	repository := c.Repository
@@ -269,6 +296,10 @@ func writeChildKey(b *strings.Builder, children []ChildVersion) {
 	for i, c := range children {
 		if i > 0 {
 			b.WriteByte(',')
+		}
+		if c.Skipped {
+			fmt.Fprintf(b, "%s!skipped", c.Reference)
+			continue
 		}
 		fmt.Fprintf(b, "%s@%d(", c.Reference, c.Version)
 		writeChildKey(b, c.Children)

@@ -47,12 +47,19 @@ type Definition struct {
 
 // Reference is a named use of another procedure by a version. Inputs maps
 // each child input name to {"input": "<parent input>"} or {"value": <JSON>}.
+// Condition, when set, makes the reference conditional: it says in prose
+// when the referenced work applies, and Polaroid never reads it. A nil
+// Condition makes the reference required (ADR-0029).
 type Reference struct {
 	Name          string
 	ProcedureID   string
 	VersionPolicy VersionPolicy
 	Inputs        jsontext.Value
+	Condition     *string
 }
+
+// Conditional reports whether r applies only when its condition holds.
+func (r Reference) Conditional() bool { return r.Condition != nil }
 
 // Version is one immutable definition of a procedure. Versions are numbered
 // contiguously from 1 within their procedure.

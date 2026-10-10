@@ -327,7 +327,7 @@ func TestOpenMigratesSchemaVersion6(t *testing.T) {
 	}
 	defer func() { _ = raw.Close() }()
 	var schema int
-	if err := raw.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&schema); err != nil || schema != 7 {
-		t.Fatalf("schema version = %d, %v; want 7", schema, err)
+	if err := raw.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&schema); err != nil || schema != latestSchema {
+		t.Fatalf("schema version = %d, %v; want %d", schema, err, latestSchema)
 	}
 }

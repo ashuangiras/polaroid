@@ -222,7 +222,7 @@ func (a *api) getGraph(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	query, ok := strictQuery(w, r, "repository", "environment", "commit", "inputs")
+	query, ok := strictQuery(w, r, "repository", "environment", "commit", "inputs", "decisions")
 	if !ok {
 		return
 	}

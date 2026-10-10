@@ -42,6 +42,19 @@ type ExecutionRecord struct {
 	Outcome         Outcome
 	Evidence        jsontext.Value
 	Children        []ChildExecution
+	Decisions       []ApplicabilityDecision
+}
+
+// ApplicabilityDecision records whether a conditional reference of the
+// version applied to this run (ADR-0029). Applicable is required on input;
+// Rationale states its basis; Evidence is an optional JSON object that is
+// never interpreted. Polaroid checks the structure, not whether the
+// rationale is true.
+type ApplicabilityDecision struct {
+	Reference  string
+	Applicable *bool
+	Rationale  string
+	Evidence   jsontext.Value
 }
 
 // ChildExecution links an already-recorded execution to the parent's
@@ -119,7 +132,35 @@ func (r ExecutionRecord) validate() (ExecutionRecord, error) {
 		p.add("evidence", "must not be empty")
 	}
 	r.Children = checkChildren(&p, r.Children)
+	r.Decisions = checkDecisions(&p, r.Decisions)
 	return r, p.err()
+}
+
+// checkDecisions returns a copy of decisions in stored form, or nil if there
+// are none.
+func checkDecisions(p *problems, decisions []ApplicabilityDecision) []ApplicabilityDecision {
+	if len(decisions) == 0 {
+		return nil
+	}
+	out := make([]ApplicabilityDecision, len(decisions))
+	seen := make(map[string]bool, len(decisions))
+	for i, d := range decisions {
+		field := fmt.Sprintf("decisions[%d]", i)
+		checkKey(p, field+".reference", d.Reference)
+		if d.Reference != "" && seen[d.Reference] {
+			p.add(field+".reference", "is already decided by an earlier decision")
+		}
+		seen[d.Reference] = true
+		if d.Applicable == nil {
+			p.add(field+".applicable", "is required: true or false")
+		}
+		checkText(p, field+".rationale", d.Rationale)
+		if len(d.Evidence) > 0 {
+			d.Evidence = checkObject(p, field+".evidence", d.Evidence)
+		}
+		out[i] = d
+	}
+	return out
 }
 
 // checkChildren returns a copy of children, or nil if there are none.
@@ -208,7 +249,35 @@ func (s *Service) checkExecutionTargets(ctx context.Context, r ExecutionRecord) 
 	if err := s.checkChildLinks(ctx, r, v, &p); err != nil {
 		return err
 	}
+	checkDecisionTargets(r, v, &p)
 	return p.err()
+}
+
+// checkDecisionTargets checks each decision against the version's
+// references and the run's children (ADR-0029). Missing decisions are left
+// to verification, so incomplete runs stay recordable.
+func checkDecisionTargets(r ExecutionRecord, v Version, p *problems) {
+	linked := make(map[string]bool, len(r.Children))
+	for _, c := range r.Children {
+		linked[c.Reference] = true
+	}
+	for i, d := range r.Decisions {
+		field := fmt.Sprintf("decisions[%d]", i)
+		var ref *Reference
+		for j := range v.References {
+			if v.References[j].Name == d.Reference {
+				ref = &v.References[j]
+			}
+		}
+		switch {
+		case ref == nil:
+			p.add(field+".reference", fmt.Sprintf("version %d has no reference named %q", v.Number, d.Reference))
+		case !ref.Conditional():
+			p.add(field+".reference", fmt.Sprintf("reference %q is required (it declares no condition), so it cannot be skipped and takes no decision; link its child in children", d.Reference))
+		case d.Applicable != nil && !*d.Applicable && linked[d.Reference]:
+			p.add(field+".applicable", fmt.Sprintf("is false, but children links a child for reference %q; a reference that does not apply has no child", d.Reference))
+		}
+	}
 }
 
 // checkChildLinks checks each child against the parent version's references
