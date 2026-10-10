@@ -216,6 +216,26 @@ func TestToolsAndResourcesAreAdvertised(t *testing.T) {
 	}
 }
 
+// Feedback 01a122e7-abd8: an agent learned the reporter format only from a rejected call.
+func TestReportFeedbackDescribesTheReporterFormat(t *testing.T) {
+	h := newHarness(t)
+	var desc string
+	for tool, err := range h.session.Tools(context.Background(), nil) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tool.Name == "report_feedback" {
+			desc = tool.Description
+		}
+	}
+	for _, want := range []string{"reporter", "canonical-key form", "copilot.vscode"} {
+		if !strings.Contains(desc, want) {
+			t.Fatalf("report_feedback's description does not mention %q: %q", want, desc)
+		}
+	}
+	h.ok(t, "report_feedback", `{"kind":"suggestion","summary":"s","details":"d","reporter":"copilot.vscode"}`)
+}
+
 const commit = "0123456789abcdef0123456789abcdef01234567"
 
 func run(procedureID string, version int, outcome, children string) string {
