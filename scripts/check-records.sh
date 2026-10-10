@@ -73,7 +73,7 @@ for dir in "$@"; do
 			fail "binding $b of $dir resolved without a graph: $graph"
 		resolved=$((resolved + 1))
 	done < <(jq -r '.bindings[].id' <<<"$loaded")
-	echo "records-check: $dir: $(jq '.procedures | length' <<<"$loaded") procedures and $resolved bindings loaded and resolved; a second load wrote nothing"
+	echo "records-check: $dir: $(jq '.procedures | length' <<<"$loaded") procedures and $resolved bindings ($(jq '[.bindings[].latest_revision] | add // 0' <<<"$loaded") binding revisions) loaded and resolved; a second load wrote nothing"
 done
 kill -TERM "$pid"
 wait "$pid" || fail "polaroidd did not stop cleanly"

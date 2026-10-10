@@ -1,6 +1,6 @@
 # 0031. Scoped verification and local-only hosted CI
 
-**Status:** Accepted. Extends [ADR-0017](0017-development-procedures-as-records.md); changes the triggers of [ADR-0028](0028-prerelease-verification-builds.md)'s release workflow.
+**Status:** Accepted. Extends [ADR-0017](0017-development-procedures-as-records.md); changes the triggers of [ADR-0028](0028-prerelease-verification-builds.md)'s release workflow. **Amended:** 2026-10-11 by [#77](https://github.com/ashuangiras/polaroid/issues/77): binding fixtures carry later revisions (`later_revisions`), and the loader appends them, so no binding revision is live-only.
 **Date:** 2026-10-10.
 
 ## Context

@@ -30,10 +30,11 @@ The commands:
 
 | Gate | Command | Notes |
 | --- | --- | --- |
-| Offline checks | `make check` | fmt-check, vet, golangci-lint 2.14.0, the build when `bin/` is not current, test, race, deps-check, docs-check, records-check. |
-| Focused offline checks | `make focused PKGS='...'` | The same, with the tests of `PKGS` only (the changed packages and every package that imports them), and without docs-check and records-check. |
+| Offline checks | `make check` | fmt-check, vet, golangci-lint 2.14.0, the build when `bin/` is not current, test, race, deps-check, docs-check, records-check, loader-check. |
+| Focused offline checks | `make focused PKGS='...'` | The same, with the tests of `PKGS` only (the changed packages and every package that imports them), and without docs-check, records-check and loader-check. |
 | Documentation links | `make docs-check` | Every relative link and anchor in the tracked Markdown files. No Go is built. |
 | Records | `make records-check` | Loads the fixtures into an isolated catalog twice and resolves their bindings. `RECORDS_FROM=DIR` starts from a copy of a `polaroid backup`, for example of the live catalog. |
+| Fixture loader | `make loader-check` | Creating, comparing, appending and refusing binding revisions (`later_revisions`, [examples/README.md](../../examples/README.md)) in an isolated catalog. |
 | Vulnerabilities | `make vuln` | Needs network. Its advisory database changes, so a result from an earlier day is not cited. |
 | Live demonstration | `make demo` | Needs `jq` and `sqlite3`. Runs real binaries. Its last steps replay the procedural-memory loop and the multi-repository fixtures with scripted outcomes, and upgrade a schema-6 database. |
 | End-to-end scripts | `make e2e`, `make e2e-mcp` | Need bash 4+, `curl`, `jq` and `sqlite3`. Reports go to `bin/e2e/`. `e2e-mcp` also runs independent MCP clients from npm and inspects a local VS Code; `E2E_INTEROP=0` skips them. |

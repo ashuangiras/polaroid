@@ -10,25 +10,41 @@
 #   DIR/repositories/*.json                                     register requests, plus optional "aliases"
 #   DIR/procedures/<name>/v1.create.json, v2.revise.json, ...   one procedure
 #   DIR/procedures/<name>/origin.json                           its origin, recorded once
-#   DIR/bindings/*.json                                         create-binding requests
+#   DIR/bindings/*.json                                         create-binding requests, plus optional "later_revisions"
+#
+# A binding fixture's "revision" is revision 1. "later_revisions" lists the
+# revisions after it, in order, each as the revise-binding request body:
+# entry i (from 0) is {"base_revision": i+1, "revision": {inputs,
+# version_policy, revision_reason}} and appends revision i+2. Revisions are
+# only ever appended to the fixture, as they are to the store.
 #
 # Repositories are reused by canonical identifier if their name matches, and
 # missing aliases are added. Procedures are reused by canonical key: every
 # stored version must equal the fixture's, and missing versions are appended
 # with base_version set to the stored latest; a missing origin is recorded.
-# Bindings are reused by repository and name if they bind the same procedure
-# with the same first revision. Nothing is ever overwritten, so a second run
-# changes nothing. The loader knows record shapes, not tasks.
+# Every binding fixture is validated (shape, revision numbering, the bound
+# procedure, pinned versions) before any binding is written. A binding is
+# reused by repository and name if it binds the same procedure: every stored
+# revision the fixture represents must equal it, and missing revisions are
+# appended in order. A stale base (another writer appended first) stops the
+# load with the store's latest revision; nothing is merged or overwritten.
+# Revisions the store has beyond the fixture are kept and reported, and the
+# output's latest_revision is the store's. Nothing is ever overwritten, so a
+# second run changes nothing. A load is a series of API calls, not one
+# transaction: a load that stops keeps what it wrote, and rerunning it after
+# the cause is fixed continues from there. The loader knows record shapes, not
+# tasks.
 #
 # Usage: scripts/load-fixtures.sh [-n MAX_VERSION] DIR
 #   -n N loads each procedure's versions up to N only.
 #   The server is $POLAROID_URL, else the CLI's default. Needs jq and
-#   bin/polaroid (make build). Progress goes to stderr; stdout gets
+#   bin/polaroid (make build), or the CLI in $LOAD_FIXTURES_CLI. Progress goes
+#   to stderr; stdout gets
 #   {"repositories": {IDENTIFIER: ID, ...}, "procedures": {KEY: ID, ...},
-#    "bindings": [{repository, name, id}, ...]}.
+#    "bindings": [{repository, name, id, fixture_revisions, latest_revision}, ...]}.
 set -euo pipefail
 
-cli="$(cd "$(dirname "$0")/.." && pwd)/bin/polaroid"
+cli="${LOAD_FIXTURES_CLI:-$(cd "$(dirname "$0")/.." && pwd)/bin/polaroid}"
 die() {
 	echo "load-fixtures: $*" >&2
 	exit 1
@@ -228,26 +244,84 @@ for p in "$dir"/procedures/*/; do
 done
 
 bindings='[]'
+binding_files=()
 for f in "$dir"/bindings/*.json; do
-	[[ -f "$f" ]] || continue
+	[[ -f "$f" ]] && binding_files+=("$f")
+done
+
+# A valid revision body: inputs, a pin or contextual policy, and a reason, nothing else.
+valid_revision='type == "object" and (keys == ["inputs", "revision_reason", "version_policy"])
+	and (.inputs | type == "object")
+	and (.revision_reason | type == "string" and test("\\S"))
+	and (.version_policy == {"contextual": {}}
+		or ((.version_policy | type == "object" and keys == ["pin"])
+			and (.version_policy.pin | type == "number" and . >= 1 and . == floor)))'
+
+# Every binding fixture is checked before any binding is written.
+seen=""
+for f in ${binding_files[@]+"${binding_files[@]}"}; do
+	jq -e "(keys - [\"later_revisions\", \"name\", \"procedure_id\", \"repository\", \"revision\"] == [])
+		and (.repository | type == \"string\") and (.name | type == \"string\") and (.procedure_id | type == \"string\")
+		and (.revision | $valid_revision) and ((.later_revisions // []) | type == \"array\")" "$f" >/dev/null 2>&1 ||
+		die "$f: needs repository, name, procedure_id and a revision with exactly inputs, version_policy and revision_reason, and optionally later_revisions, nothing else"
+	bad="$(jq -r "(.later_revisions // []) | to_entries[] | . as {key: \$k, value: \$v} | select((\$v | type == \"object\" and keys == [\"base_revision\", \"revision\"]
+		and .base_revision == \$k + 1 and (.revision | $valid_revision)) | not) | \$k + 2" "$f")"
+	[[ -z "$bad" ]] || die "$f: later revision $(head -1 <<<"$bad") must be {\"base_revision\": $(($(head -1 <<<"$bad") - 1)), \"revision\": {inputs, version_policy, revision_reason}}, in order from revision 2"
+	pair="$(jq -r '.repository + " " + .name' "$f")"
+	grep -qxF -- "$pair" <<<"$seen" && die "$f: another fixture also defines binding $pair"
+	seen+="$pair"$'\n'
+	procedure="$(id_of "$(jq -r .procedure_id "$f")")"
+	[[ -n "$procedure" ]] || die "$f binds a procedure that is not stored"
+	latest="$("$cli" get "$procedure" | jq -r .latest_version)"
+	for pin in $(jq -r '[.revision] + [(.later_revisions // [])[].revision] | .[].version_policy.pin // empty' "$f"); do
+		((pin <= latest)) || die "$f pins version $pin of $(jq -r .procedure_id "$f"), which has $latest"
+	done
+done
+
+# fixture_revision FILE N prints revision N of FILE as {inputs, version_policy, revision_reason}.
+fixture_revision() {
+	if (($2 == 1)); then jq -S '.revision' "$1"; else jq -S --argjson i "$(($2 - 2))" '.later_revisions[$i].revision' "$1"; fi
+}
+
+for f in ${binding_files[@]+"${binding_files[@]}"}; do
 	repository="$(jq -r .repository "$f")"
 	name="$(jq -r .name "$f")"
 	procedure="$(id_of "$(jq -r .procedure_id "$f")")"
-	[[ -n "$procedure" ]] || die "$f binds a procedure that is not stored"
+	represented=$((1 + $(jq '(.later_revisions // []) | length' "$f")))
 	listed="$("$cli" bindings "$repository")" || die "bindings $repository failed: $listed"
 	existing="$(jq -c --arg n "$name" '.bindings[] | select(.name == $n)' <<<"$listed")"
 	if [[ -n "$existing" ]]; then
 		id="$(jq -r .id <<<"$existing")"
 		[[ "$(jq -r .procedure_id <<<"$existing")" == "$procedure" ]] || die "$repository $name binds another procedure"
-		got="$("$cli" get-binding-revision "$id" 1 | jq -S '{inputs, version_policy, revision_reason}')"
-		[[ "$got" == "$(jq -S '.revision' "$f")" ]] || die "$repository $name revision 1 differs from $f; revisions are never overwritten"
 		log "$repository $name: reused binding $id"
 	else
-		created="$(jq -c --arg id "$procedure" '.procedure_id = $id' "$f" | "$cli" bind)" || die "bind $repository $name failed: $created"
+		created="$(jq -c --arg id "$procedure" '{repository, name, procedure_id: $id, revision}' "$f" | "$cli" bind)" || die "bind $repository $name failed: $created"
 		id="$(jq -r .id <<<"$created")"
-		log "$repository $name: created binding $id"
+		log "$repository $name: created binding $id with revision 1"
 	fi
-	bindings="$(jq -c --arg r "$repository" --arg n "$name" --arg id "$id" '. + [{repository: $r, name: $n, id: $id}]' <<<"$bindings")"
+	stored="$("$cli" get-binding "$id")" || die "get-binding $id failed: $stored"
+	latest="$(jq -r .latest_revision <<<"$stored")"
+	for ((n = 1; n <= represented; n++)); do
+		want="$(fixture_revision "$f" $n)"
+		if ((n <= latest)); then
+			got="$(jq -S --argjson n $n '.revisions[] | select(.revision == $n) | {inputs, version_policy, revision_reason}' <<<"$stored")"
+			[[ "$got" == "$want" ]] || die "$repository $name revision $n in the store differs from $f; revisions are never overwritten"
+			continue
+		fi
+		out="$(jq -c --argjson i $((n - 2)) '.later_revisions[$i]' "$f" | "$cli" revise-binding "$id" 2>/dev/null)" || {
+			[[ "$(jq -r '.error.code // empty' <<<"$out" 2>/dev/null)" == revision_conflict ]] &&
+				die "$repository $name: revision $n was not appended: its base_revision $((n - 1)) is stale, the store's latest revision is now $(jq -r '.error.latest_revision // "unknown"' <<<"$out") (another writer appended); nothing was overwritten, and revisions 1..$((n - 1)) stay as loaded. Reconcile the fixture with the store, then load again."
+			die "revise-binding $repository $name revision $n failed: $out"
+		}
+		latest=$n
+		log "$repository $name: appended revision $n"
+	done
+	if ((latest > represented)); then
+		log "$repository $name: the store also has revisions $((represented + 1))..$latest beyond the fixtures; its latest revision is $latest, not the fixtures' $represented"
+	fi
+	log "$repository $name: $id, revisions 1..$represented match the fixtures"
+	bindings="$(jq -c --arg r "$repository" --arg n "$name" --arg id "$id" --argjson k $represented --argjson l "$latest" \
+		'. + [{repository: $r, name: $n, id: $id, fixture_revisions: $k, latest_revision: $l}]' <<<"$bindings")"
 done
 
 jq -n --argjson r "$repositories" --argjson p "$procedures" --argjson b "$bindings" '{repositories: $r, procedures: $p, bindings: $b}'

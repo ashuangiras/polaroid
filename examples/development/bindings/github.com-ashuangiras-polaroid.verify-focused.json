@@ -18,5 +18,27 @@
       "contextual": {}
     },
     "revision_reason": "Bounded code changes with focused regression coverage (#65): every offline check, with the tests of the affected packages only; packages is set at run time. Not full verification."
-  }
+  },
+  "later_revisions": [
+    {
+      "base_revision": 1,
+      "revision": {
+        "inputs": {
+          "scope": "focused",
+          "build_command": "make build",
+          "artifacts": [
+            "bin/polaroidd",
+            "bin/polaroid"
+          ],
+          "gate_commands": [
+            "make focused PKGS='{packages}'"
+          ]
+        },
+        "version_policy": {
+          "pin": 2
+        },
+        "revision_reason": "#75: pins polaroid.change.focused version 2 (the precise boundary for description wording). Contextual resolution would keep version 1, which has evidence, until version 2 had a run of its own."
+      }
+    }
+  ]
 }

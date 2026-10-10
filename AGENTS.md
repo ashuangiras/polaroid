@@ -50,11 +50,12 @@ Polaroid is a versioned procedural memory service for agents, written in Go, wit
 
 | Command | Does |
 | --- | --- |
-| `make check` | Runs fmt-check, vet, lint (golangci-lint 2.14.0), the build when `bin/` is not current, test, race, deps-check, docs-check and records-check. |
+| `make check` | Runs fmt-check, vet, lint (golangci-lint 2.14.0), the build when `bin/` is not current, test, race, deps-check, docs-check, records-check and loader-check. |
 | `make test` / `make race` | Runs the tests of `PKGS` (default `./...`), or the same tests with the race detector. |
-| `make focused PKGS='...'` | The offline checks of `make check`, with the tests of `PKGS` only and without docs-check and records-check. |
+| `make focused PKGS='...'` | The offline checks of `make check`, with the tests of `PKGS` only and without docs-check, records-check and loader-check. |
 | `make docs-check` | Checks every relative link and anchor in the tracked Markdown files. |
 | `make records-check` | Loads the fixtures in `examples/` into an isolated catalog twice and resolves their bindings. `RECORDS_FROM=BACKUP` starts from a copy of a `polaroid backup`. |
+| `make loader-check` | Checks in an isolated catalog how `scripts/load-fixtures.sh` creates, compares, appends and refuses binding revisions (the `later_revisions` convention in [examples/README.md](examples/README.md)). |
 | `make build` / `make binaries` | Builds `bin/polaroidd` and `bin/polaroid`, or builds them only when `bin/` was not built from the current source state. |
 | `make vuln` | Runs govulncheck. Needs network. |
 | `make demo` | Runs the live create, revise, conflict, two-repository binding, execution and restart demonstration, then scripted replays of the procedural-memory loop on the development procedures and of the multi-repository fixtures, and an upgrade of a schema-6 database. Needs `jq` and `sqlite3`. |
