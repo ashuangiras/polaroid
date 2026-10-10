@@ -106,7 +106,7 @@ func (m *heldManager) Start(ctx context.Context, _ lifecycle.Layout) error {
 	m.all = append(m.all, cmd)
 	if line, err := bufio.NewReader(out).ReadString('\n'); err != nil || line != "ready\n" {
 		_ = cmd.Wait()
-		return fmt.Errorf("the daemon did not start: %q %v", line, err)
+		return fmt.Errorf("the daemon did not start: %q %w", line, err)
 	}
 	st, err := os.Stat(m.db)
 	if err != nil {

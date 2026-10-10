@@ -3,6 +3,7 @@ package recovery
 import (
 	"context"
 	"database/sql"
+	json "encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -552,6 +553,10 @@ func TestRestoreCoordinatesWithTheManagedService(t *testing.T) {
 		if !strings.Contains(steps, "polaroid restore -replace") {
 			t.Errorf("the recovery steps do not say how to put the original back:\n%s", steps)
 		}
+		out, jerr := json.Marshal(res)
+		if jerr != nil || !strings.Contains(string(out), `"outcome":"rollback-blocked"`) || !strings.Contains(string(out), `"original":`) || !strings.Contains(string(out), `"manual_recovery":[`) {
+			t.Errorf("the printed result lacks the outcome or the recovery paths: %s %v", out, jerr)
+		}
 	}
 	// failedStart, on the first start, records the restored file and, if
 	// hold, opens it as a daemon that did not become healthy would.
@@ -640,6 +645,34 @@ func TestRestoreCoordinatesWithTheManagedService(t *testing.T) {
 		if !slices.Equal(svc.calls, []string{"stop", "start"}) {
 			t.Errorf("calls %v: nothing may be asked of the service once the context expired", svc.calls)
 		}
+	})
+	t.Run("the service is not stopped after the stop: rollback blocked", func(t *testing.T) {
+		path, dir, backup, before := setup(t)
+		var restored os.FileInfo
+		svc := &fakeService{state: lifecycle.Running, pid: 101, db: path, startErrs: []error{errors.New("injected start failure")}}
+		svc.onStart = failedStart(t, path, false, &restored, nil)
+		svc.onStop = func() {
+			if len(svc.calls) > 2 {
+				svc.state = lifecycle.Starting
+			}
+		}
+		res, err := Restore(ctx, RestoreRequest{Backup: backup, Destination: path, BackupDir: dir, Service: svc, Replace: true})
+		blocked(t, path, before, restored, res, err, "the service is starting")
+	})
+	t.Run("the context expires during the stop: rollback blocked", func(t *testing.T) {
+		path, dir, backup, before := setup(t)
+		var restored os.FileInfo
+		cctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		svc := &fakeService{state: lifecycle.Running, pid: 101, db: path, startErrs: []error{errors.New("injected start failure")}}
+		svc.onStart = failedStart(t, path, false, &restored, nil)
+		svc.onStop = func() {
+			if len(svc.calls) > 2 {
+				cancel()
+			}
+		}
+		res, err := Restore(cctx, RestoreRequest{Backup: backup, Destination: path, BackupDir: dir, Service: svc, Replace: true})
+		blocked(t, path, before, restored, res, err, "context canceled")
 	})
 	t.Run("sidecars remain after stopping: aborted and restarted", func(t *testing.T) {
 		path, dir, backup, before := setup(t)
