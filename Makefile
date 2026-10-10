@@ -11,7 +11,7 @@ GOVULNCHECK_VERSION   := v1.8.0
 E2E_INTEROP           ?= 1
 
 .DEFAULT_GOAL := help
-.PHONY: help fmt fmt-check vet lint build test race deps-check check vuln demo run ci e2e e2e-mcp clean
+.PHONY: help fmt fmt-check vet lint build test race deps-check check vuln demo run ci e2e e2e-mcp lifecycle clean
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z0-9-]+:.*## / {printf "  %-11s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -61,6 +61,9 @@ e2e: build ## End-to-end report of every feature against a real daemon (bin/e2e/
 
 e2e-mcp: build ## End-to-end report of /mcp; E2E_INTEROP=0 skips the independent clients (bin/e2e/MCP-REPORT.md)
 	E2E_INTEROP=$(E2E_INTEROP) ./scripts/e2e-mcp.sh
+
+lifecycle: ## Install, run and uninstall an isolated managed service with the REAL launchd or systemd user manager (exit 77: none reachable)
+	./scripts/lifecycle-check.sh
 
 clean: ## Remove build output
 	rm -rf $(BIN)

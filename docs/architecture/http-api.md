@@ -415,6 +415,18 @@ Example `invalid_request` response:
 
 `FILE` defaults to stdin, and so does `-`. Trailing `NAME=VALUE` arguments of the list commands become query parameters, for example `polaroid list repository=github.com/ashuangiras/polaroid scope=shared limit=20`. The server is `-server URL`, else `$POLAROID_URL`, else `http://127.0.0.1:7417`.
 
+### Local lifecycle commands
+
+`install`, `start`, `stop`, `restart`, `status`, `uninstall` and `version` send no request: they manage this user's installation and service ([ADR-0026](decisions/0026-per-user-installation-and-managed-service.md), README "Run Polaroid as a service"). Each prints the resulting status as one JSON object on stdout and a one-line summary on stderr; `version` prints the build. The status object has `state` and, where they apply, `action`, `detail`, `manager`, `service`, `definition`, `pid`, `build`, `binaries`, `endpoint`, `database`, `diagnostics`, `conflict` (`{pid, command}` of a process holding the endpoint that is not the managed one), `previous` and `problems`.
+
+| Command | Exit status |
+| --- | --- |
+| `status` | 0 `running` (managed process owns the endpoint and is healthy), 1 `failed` (crashed, unreachable, conflicting, or the last start failed), 3 `stopped`, 4 `not-installed`, 5 `starting` |
+| `install`, `start`, `restart` | 0 when the service is running and healthy; 1 otherwise; 4 (`start`, `restart`) when not installed |
+| `stop`, `uninstall` | 0 when stopped or uninstalled (also when it already was); 1 otherwise; 4 (`stop`) when not installed |
+
+All of them exit 2 for a usage error.
+
 ## Compatibility
 
 Within `/v1`, changes are additive only: new endpoints, or new optional response fields. Clients must ignore response fields they do not know. Requests stay strict, so a client sending a field the server does not yet support gets `400`, not silent data loss. A breaking change needs a new version prefix and an ADR.

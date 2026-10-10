@@ -85,6 +85,7 @@ Polaroid's own development procedures (build, checks, verify a change) are recor
 | `make run ARGS="..."` | Builds and runs `polaroidd`. |
 | `make ci` | Runs `check`, `vuln`, `demo`, `e2e` and `e2e-mcp` with `E2E_INTEROP=0`, which is exactly what GitHub Actions runs. |
 | `make e2e` / `make e2e-mcp` | Runs the end-to-end scripts against a real daemon and writes a report of every command, its output and each check to `bin/e2e/`. `e2e-mcp` also tries the TypeScript SDK and MCP Inspector when npm is available, and inspects a local VS Code install; `E2E_INTEROP=0` skips those checks and reports them as skipped. |
+| `make lifecycle` | Installs, crashes, stops, upgrades and uninstalls an isolated managed service with the real launchd or systemd user manager (exit 77 when none is reachable). CI runs it on Linux. |
 
 ## Configuration
 
@@ -95,7 +96,7 @@ Polaroid's own development procedures (build, checks, verify a change) are recor
 
 Flags override environment variables. On SIGINT or SIGTERM, the daemon stops accepting connections and waits up to 10 seconds for in-flight requests to finish. There is no authentication yet, so keep the daemon on loopback ([ADR-0006](docs/architecture/decisions/0006-local-unauthenticated-api.md)).
 
-The CLI uses `-server URL`, else `$POLAROID_URL`, else `http://127.0.0.1:7417`. It prints each response body (JSON) to stdout, and exits with 0 on success, 1 when the request fails and 2 for a usage error. Run `bin/polaroid help` for the full command list.
+The CLI uses `-server URL`, else `$POLAROID_URL`, else `http://127.0.0.1:7417`. It prints each response body (JSON) to stdout, and exits with 0 on success, 1 when the request fails and 2 for a usage error. Run `bin/polaroid help` for the full command list. The service commands (`install`, `start`, `stop`, `restart`, `status`, `uninstall`, `version`) are local and work while the daemon is stopped; see [Run Polaroid as a service](#run-polaroid-as-a-service).
 
 ### Where the catalog lives
 
@@ -104,7 +105,62 @@ The CLI uses `-server URL`, else `$POLAROID_URL`, else `http://127.0.0.1:7417`. 
 - **Layout.** `~/.polaroid/data/polaroid.db` (with SQLite's `-wal` and `-shm` files) and `~/.polaroid/backups/`, which is created only when a backup is written. There are no configuration or log files there, and binaries are never placed there.
 - **Permissions (Linux and macOS).** The daemon creates missing `~/.polaroid` and `~/.polaroid/data` directories with mode `0700`, and a missing database with mode `0600`, so that SQLite's `-wal` and `-shm` files are `0600` too. It never changes the mode of an existing directory or file, nor anything at a path given with `-db` or `POLAROID_DB`; at start-up it warns about each existing default-location entry that other users can access. Fix those with `chmod` yourself. Other platforms use the same location without these guarantees.
 - **Older databases.** Before #41 the default was `polaroid.db` in the working directory. Nothing is discovered, merged or moved automatically. Keep using an old file with `-db /path/to/polaroid.db` or `POLAROID_DB=/path/to/polaroid.db`, or move it once: stop `polaroidd`, run `scripts/migrate-catalog.sh /path/to/polaroid.db`, then start `polaroidd` without `-db`. The script takes a SQLite online backup (which includes committed transactions still in the `-wal` file) into `~/.polaroid/backups/`, checks it, restores it to `~/.polaroid/data/polaroid.db` with mode `0600`, and refuses if that destination already exists. It keeps the source and the backup. To roll back, stop the daemon and start it with `-db` naming the source; anything written to the new catalog meanwhile is not in the source.
-- **Data outlives the build.** `make clean`, rebuilding and replacing binaries never touch `~/.polaroid`. Any future uninstall will keep it unless you explicitly ask for it to be deleted.
+- **Data outlives the build.** `make clean`, rebuilding and replacing binaries never touch `~/.polaroid`, and neither does `polaroid uninstall`.
+
+## Run Polaroid as a service
+
+On macOS and Linux, Polaroid can run as a per-user service that starts at login and restarts after a crash, with no root access and without the source checkout ([ADR-0026](docs/architecture/decisions/0026-per-user-installation-and-managed-service.md)). Other platforms get an error; run `polaroidd` directly there.
+
+```sh
+make build                              # in a git checkout; any directory with both binaries works
+bin/polaroid install -from bin          # copies polaroid and polaroidd to ~/.local/bin, registers and starts the service
+export PATH="$HOME/.local/bin:$PATH"    # add this line to your shell's startup file yourself; install never edits it
+polaroid status                         # JSON; exit 0 when running and healthy
+```
+
+- **Install versus start.** `install` copies the binaries, writes the service definition, registers it to start at login, starts it, and waits (`-wait`, 30s by default) until the managed process serves the endpoint and `/healthz` answers. It reports `running`, or `failed` with the reason. `start` only starts an installed service, with the same wait. Repeating `install` with the same build changes nothing and only makes sure the service runs.
+- **What it installs.**
+  - `~/.local/bin/polaroid` and `~/.local/bin/polaroidd`, copied from the directory named by `-from`. Polaroid never guesses a source or downloads one.
+  - The service definition. macOS: `~/Library/LaunchAgents/io.github.ashuangiras.polaroid.plist`. Linux: `~/.config/systemd/user/polaroid.service`.
+  - The installation record, `~/.local/state/polaroid/install.json`: the build and the SHA-256 of every installed file. `polaroid version` and `polaroidd -version` print a binary's build.
+  - `install` refuses to overwrite a binary or definition that the record does not account for.
+- **The service.** It runs `~/.local/bin/polaroidd -addr 127.0.0.1:7417 -db ~/.polaroid/data/polaroid.db`, with the absolute paths written into the definition and `HOME` set there too. It needs nothing from your shell (`PATH`, `POLAROID_DB`, the working directory).
+  - **Other address or catalog:** run `polaroid install -from DIR -addr 127.0.0.1:7500` or `-db /abs/path.db`. The values are recorded in the definition and kept by later installs; the address must be loopback.
+  - **Restarts:** after an unexpected exit the service restarts. macOS: launchd respawns it at most once every 10 seconds. Linux: systemd waits 2 seconds, at most 5 starts per minute.
+  - **Stopping:** `polaroid stop` stops it gracefully (SIGTERM) until the next `polaroid start` or login, and it does not respawn.
+- **When it runs.** At login, until logout. A LaunchAgent runs in a macOS GUI login session. A systemd user service runs while your user manager does, which is from your first login to your last logout. Neither starts before you log in. Keeping it running without a login on Linux (`loginctl enable-linger`) is your administrator's decision; `install` never enables it.
+- **Status.** `polaroid status` prints JSON with the state, the managed PID, the build, the binaries, the endpoint, the database and the diagnostics location. The service is `running` only when the process the service manager reports is the one listening on the endpoint, and it is healthy. Any other process holding the endpoint, such as a `polaroidd` you started by hand, is reported under `conflict` and never stopped. `start` and `install` refuse to start the service while the endpoint is taken. Exit statuses:
+
+  | Exit | State |
+  | --- | --- |
+  | 0 | `running` |
+  | 1 | `failed` (crashed, unreachable, conflicting, or its last start failed) |
+  | 3 | `stopped` |
+  | 4 | `not-installed` |
+  | 5 | `starting` |
+
+- **Diagnostics.**
+  - macOS: `~/Library/Logs/Polaroid/polaroidd.log` (directory `0700`, file `0600`). It holds the daemon's log, standard output and error. At 4 MiB it rotates to `polaroidd.log.1`, so at most two files exist.
+  - Linux: the journal, `journalctl --user -u polaroid.service`, kept within journald's configured limits.
+  - A start that does not become healthy is stopped again, so that the manager does not keep retrying it. `status` then reports `failed` with the reason until the next successful start or `stop`.
+- **Upgrades.** `make build` the new version, then `polaroid install -from bin`. It does the following, in order:
+  1. Stop the service gracefully.
+  2. Keep the current binaries, definition and record in `~/.local/state/polaroid/previous/`.
+  3. Replace both binaries by staged atomic renames, so the CLI and daemon are never a mismatched pair.
+  4. Start the service and verify that it is healthy.
+
+  If a replacement or registration step fails, the previous installation is restored and restarted. If the new build fails to start, the service is left stopped and nothing is rolled back automatically: the new `polaroidd` may already have migrated the database, and an older `polaroidd` refuses a newer schema. Recover in one of two ways:
+  - Fix forward with a corrected build.
+  - Restore a backup taken before the upgrade, then `polaroid install -from ~/.local/state/polaroid/previous`.
+
+  Back up first with `sqlite3 ~/.polaroid/data/polaroid.db ".backup ~/.polaroid/backups/pre-upgrade.db"`.
+- **Uninstall.** `polaroid uninstall` does the following:
+  1. Stop and unregister the service.
+  2. Remove the definition, both binaries (if they are still the installed ones), the macOS log files and `~/.local/state/polaroid`.
+  3. Keep `~/.polaroid`: the catalog and its backups.
+
+  There is no purge command.
+- **Validation.** `make lifecycle` runs an isolated installation against the real launchd or systemd user manager: a temporary `HOME` whose path contains spaces, its own service name (`-service-name`, meant for such checks only), port and catalog. It never touches your installation.
 
 ## Repository map
 
@@ -117,6 +173,7 @@ The CLI uses `-server URL`, else `$POLAROID_URL`, else `http://127.0.0.1:7417`. 
 | `internal/transport/http` | The HTTP API |
 | `internal/transport/mcp` | The MCP server at `/mcp` |
 | `internal/transport/wire` | Record and error JSON shapes shared by both transports |
+| `internal/lifecycle`, `internal/version` | Per-user installation, the managed service, and build identity |
 | [examples/](examples) | Example procedure records, and Polaroid's own development procedures |
 | [docs/architecture/](docs/architecture) | [Overview](docs/architecture/overview.md), [records](docs/architecture/records.md), [HTTP API](docs/architecture/http-api.md), [MCP](docs/architecture/mcp.md), [decisions](docs/architecture/decisions/README.md) |
 | [docs/development/](docs/development) | [Workflow](docs/development/workflow.md), [status](docs/development/status.md), [roadmap](docs/development/roadmap.md), [dependencies](docs/development/dependencies.md), [procedural loop](docs/development/procedural-loop.md) |

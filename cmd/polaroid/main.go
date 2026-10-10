@@ -182,9 +182,15 @@ func usage() string {
 		fmt.Fprintf(&b, "  %-40s %s\n", strings.TrimSpace(cmd.name+" "+cmd.args), cmd.summary)
 	}
 	fmt.Fprintf(&b, "  %-40s %s\n", "help", "show this help")
+	b.WriteString("\nLocal commands, for this user's installation and service (no request to the daemon):\n")
+	for _, cmd := range localCommands {
+		fmt.Fprintf(&b, "  %-40s %s\n", strings.TrimSpace(cmd.name+" "+cmd.args), cmd.summary)
+	}
 	fmt.Fprintf(&b, "\nThe server is -server, else $POLAROID_URL, else %s.\n", defaultServer)
 	b.WriteString("Each response body is printed to stdout, also when the request fails.\n")
 	b.WriteString("Exit status: 0 success, 1 request failed, 2 usage error.\n")
+	b.WriteString("Local commands print the resulting status as JSON. status exits 0 running, 1 failed or unreachable,\n")
+	b.WriteString("3 stopped, 4 not installed, 5 starting; the others exit 0 done, 1 failed, 2 usage, 4 not installed.\n")
 	return b.String()
 }
 
@@ -264,6 +270,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 	if fs.Arg(0) == "help" {
 		fmt.Fprint(stdout, usage())
 		return exitOK
+	}
+	if isLocal(fs.Arg(0)) {
+		return runLocal(fs.Arg(0), fs.Args()[1:], stdout, stderr)
 	}
 
 	err := dispatch(server, *timeout, fs.Arg(0), fs.Args()[1:], stdin, stdout)

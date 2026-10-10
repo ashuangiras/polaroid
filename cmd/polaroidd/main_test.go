@@ -195,12 +195,14 @@ func TestParseConfig(t *testing.T) {
 		home func() (string, error)
 		want config
 	}{
-		{"defaults", nil, nil, atHome, config{addr: defaultAddr, dbPath: defaultDB, dbSource: dbFromDefault}},
+		{"defaults", nil, nil, atHome, config{addr: defaultAddr, dbPath: defaultDB, dbSource: dbFromDefault, defaultLocation: true}},
 		{"environment", nil, map[string]string{"POLAROID_ADDR": "127.0.0.1:9000", "POLAROID_DB": "/tmp/p.db"}, noHome, config{addr: "127.0.0.1:9000", dbPath: "/tmp/p.db", dbSource: dbFromEnv}},
 		{"relative environment path kept as given", nil, map[string]string{"POLAROID_DB": "rel/p.db"}, noHome, config{addr: defaultAddr, dbPath: "rel/p.db", dbSource: dbFromEnv}},
 		{"flags override environment", []string{"-addr", "localhost:9001", "-db", "x.db"}, map[string]string{"POLAROID_ADDR": "127.0.0.1:9000", "POLAROID_DB": "/tmp/p.db"}, noHome, config{addr: "localhost:9001", dbPath: "x.db", dbSource: dbFromFlag}},
 		{"a flag overrides an empty environment value", []string{"-db", "x.db"}, map[string]string{"POLAROID_DB": ""}, noHome, config{addr: defaultAddr, dbPath: "x.db", dbSource: dbFromFlag}},
-		{"empty POLAROID_ADDR is unset", nil, map[string]string{"POLAROID_ADDR": ""}, atHome, config{addr: defaultAddr, dbPath: defaultDB, dbSource: dbFromDefault}},
+		{"empty POLAROID_ADDR is unset", nil, map[string]string{"POLAROID_ADDR": ""}, atHome, config{addr: defaultAddr, dbPath: defaultDB, dbSource: dbFromDefault, defaultLocation: true}},
+		{"the default location named explicitly is still the default location", []string{"-db", defaultDB, "-log-file", "/tmp/l"}, nil, atHome, config{addr: defaultAddr, dbPath: defaultDB, dbSource: dbFromFlag, defaultLocation: true, logFile: "/tmp/l"}},
+		{"-version needs no database or home", []string{"-version"}, map[string]string{"POLAROID_DB": ""}, noHome, config{addr: defaultAddr, version: true}},
 	}
 	for _, tc := range cases {
 		got, err := parseConfig(tc.args, env(tc.env), tc.home, io.Discard)

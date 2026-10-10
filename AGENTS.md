@@ -58,5 +58,7 @@ Polaroid is a versioned procedural memory service for agents, written in Go, wit
 | `internal/transport/mcp` | MCP server at `/mcp`: tools, resources, argument decoding |
 | `internal/transport/wire` | Record and error JSON shapes shared by both transports |
 | `internal/archtest` | Package-boundary tests |
+| `internal/lifecycle` | Per-user installation and the managed service (launchd, systemd user services); no domain, storage or transport code |
+| `internal/version` | Build identity from the embedded VCS metadata |
 | `examples/` | Example procedure records (task knowledge), and Polaroid's development procedures in `examples/development/`, loaded with `scripts/load-fixtures.sh` |
 | `docs/` | Architecture, decisions, workflow, status, roadmap |

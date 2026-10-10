@@ -10,6 +10,7 @@ import (
 
 	// Importing the checked packages makes `go test` re-run this test
 	// whenever they change, instead of reusing a cached pass.
+	_ "github.com/ashuangiras/polaroid/internal/lifecycle"
 	_ "github.com/ashuangiras/polaroid/internal/memory"
 	_ "github.com/ashuangiras/polaroid/internal/storage/sqlite"
 	_ "github.com/ashuangiras/polaroid/internal/transport/http"
@@ -33,6 +34,10 @@ func TestPackageBoundaries(t *testing.T) {
 		{"internal/transport/wire", slices.Concat(storage, []string{module + "/internal/transport/http", module + "/internal/transport/mcp", "github.com/modelcontextprotocol"})},
 		{"internal/transport/http", slices.Concat(storage, []string{module + "/internal/transport/mcp", "github.com/modelcontextprotocol"})},
 		{"internal/transport/mcp", slices.Concat(storage, []string{module + "/internal/transport/http"})},
+		// Lifecycle code manages files, a service manager and processes,
+		// never procedures or their storage (ADR-0026).
+		{"internal/lifecycle", slices.Concat(storage, []string{"net/http/httptest", module + "/internal/memory", module + "/internal/transport"})},
+		{"cmd/polaroid", []string{"database/sql", "modernc.org/sqlite", module + "/internal/storage", module + "/internal/memory", module + "/internal/transport"}},
 	}
 	for _, rule := range rules {
 		deps := goList(t, root, "-deps", "-f", "{{.ImportPath}}", module+"/"+rule.pkg)

@@ -38,3 +38,33 @@ jobs:
 
       - name: Run checks, vulnerability scan, demo and end-to-end scripts
         run: make ci
+
+  lifecycle:
+    # The real systemd user manager (ADR-0026). Lingering is enabled for the
+    # runner's user in this disposable VM only, so that a user manager runs
+    # without a login; polaroid install itself never enables it.
+    name: make lifecycle (systemd user service)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go (version from go.mod)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Start a systemd user manager for the runner's user
+        run: |
+          sudo loginctl enable-linger "$USER"
+          runtime="/run/user/$(id -u)"
+          for _ in $(seq 1 30); do [ -S "$runtime/bus" ] && break; sleep 1; done
+          echo "XDG_RUNTIME_DIR=$runtime" >> "$GITHUB_ENV"
+          XDG_RUNTIME_DIR="$runtime" systemctl --user show-environment >/dev/null
+          systemctl --version | head -1
+
+      - name: Install, crash, stop, upgrade and uninstall an isolated managed service
+        run: make lifecycle
