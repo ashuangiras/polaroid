@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ashuangiras/polaroid/internal/lifecycle"
@@ -152,7 +153,7 @@ func MakePlan(ctx context.Context, req RestoreRequest) (p Plan) {
 		}
 	}
 	if !p.Destination.Managed && len(p.Destination.Sidecars) > 0 {
-		block("%v exist beside the catalog: a process may have it open, or one ended without closing it. Restore only an offline catalog: stop every process using it; if none is running, run polaroid backup -db %q once (its last connection closes the catalog cleanly) and retry", p.Destination.Sidecars, dest)
+		block("found %s beside the catalog: a process may have it open, or one ended without closing it. Restore only an offline catalog: stop every process using it; if none is running, run polaroid backup -db %q once (its last connection closes the catalog cleanly) and retry", strings.Join(p.Destination.Sidecars, " and "), dest)
 	}
 
 	if p.Backup.Valid && p.Backup.SchemaVersion < p.SupportedSchemaVersion {
@@ -195,7 +196,7 @@ func Restore(ctx context.Context, req RestoreRequest) (Result, error) {
 	p := MakePlan(ctx, req)
 	res := Result{Plan: p, Outcome: Unchanged}
 	if !p.Ready {
-		return res, fmt.Errorf("%w: %v", ErrRefused, p.Blockers)
+		return res, fmt.Errorf("%w: %s", ErrRefused, strings.Join(p.Blockers, "; "))
 	}
 	if p.RequiresReplace && !req.Replace {
 		return res, ErrConfirmationRequired
@@ -245,7 +246,7 @@ func Restore(ctx context.Context, req RestoreRequest) (Result, error) {
 		return cause
 	}
 	if sc := sqlite.Sidecars(dest); len(sc) > 0 {
-		return res, restart(fmt.Errorf("%w: %v exist beside the catalog after stopping it: a process may still have it open", ErrRefused, sc))
+		return res, restart(fmt.Errorf("%w: found %s beside the catalog after stopping it: a process may still have it open", ErrRefused, strings.Join(sc, " and ")))
 	}
 
 	keep := ""
@@ -256,7 +257,7 @@ func Restore(ctx context.Context, req RestoreRequest) (Result, error) {
 		}
 		res.RecoveryBackup = rb.Path
 		if sc := sqlite.Sidecars(dest); len(sc) > 0 {
-			return res, restart(fmt.Errorf("%w: %v appeared beside the catalog during its recovery backup: a process opened it", ErrRefused, sc))
+			return res, restart(fmt.Errorf("%w: found %s beside the catalog after its recovery backup: a process opened it", ErrRefused, strings.Join(sc, " and ")))
 		}
 		keep = dest + ".pre-restore-" + stamp
 		if err := linkFile(dest, keep); err != nil {
