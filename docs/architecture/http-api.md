@@ -85,6 +85,13 @@ A version may list the procedures it composes, in `version.references` on create
 
 They are returned in the same order and form, compacted. A version without references has no `references` field, so versions written before references existed are served unchanged. An unknown target, a missing pinned version, a duplicate name or a malformed `inputs` mapping is `400 invalid_request`. Each failing reference is named in `fields`, for example `version.references[0].procedure_id` or `version.references[1].inputs.module`.
 
+A reference may add `"condition": "<text>"`, which makes it **conditional**: it applies only when the condition holds, which the agent decides and records ([ADR-0029](decisions/0029-conditional-references-and-applicability-decisions.md)). Without `condition` (or with `null`) a reference is required, as every reference before it was. A blank condition is `400` on `version.references[i].condition`. The condition is returned with the reference, and omitted for a required one; Polaroid never reads it.
+
+```json
+{"name": "integration", "procedure_id": "…", "version_policy": {"contextual": {}}, "inputs": {},
+ "condition": "The change can affect behaviour the integration suite observes: code, build files, schema or interfaces."}
+```
+
 A version whose graph would contain a cycle is rejected with `409 reference_cycle`. The `cycle` field lists the path: each step is a node and the reference followed out of it, and the last step is the repeated procedure, which has no `reference`.
 
 ```json
@@ -96,19 +103,22 @@ A graph deeper than 32 references or larger than 2048 nodes is rejected with `42
 
 ### Composition graph
 
-`GET /v1/procedures/{id}/versions/{n}/graph[?repository=…&environment=…[&commit=…&inputs=…]]` returns a nested tree.
+`GET /v1/procedures/{id}/versions/{n}/graph[?repository=…&environment=…[&commit=…&inputs=…[&decisions=…]]]` returns a nested tree.
 
 - Each node has `procedure_id`, `canonical_key`, `version` (the exact version selected), `scope` (that version's own declaration), `applicability` (when declared), `verified_by` and `selection_evidence` (only when the node has evidence in the context), `target_verification` (only with a target) and `references`, which is empty for a leaf.
-- Each reference has its stored `name` and `version_policy`, then `selected_by` (`pin`, `evidence` or `latest`), its stored `inputs`, and the selected child `node`.
+- Each reference has its stored `name` and `version_policy`, `condition` (conditional references only), then `selected_by` (`pin`, `evidence` or `latest`), `skipped_by` (only when the node's evidence recorded the reference as not applicable: that execution's ID, so the child was selected without it), `decision` (only with a target, for conditional references: `applicable`, `not_applicable` or `undecided`), its stored `inputs`, and the selected child `node`. Every reference is listed, conditional ones included, whatever evidence decided.
 - Without `repository` and `environment`, pinned references select the pin and contextual references the target's latest version at the moment of the read.
 - With them, the graph is resolved from evidence in that repository and environment ([records.md](records.md#contextual-resolution-implemented)). They must be given together.
 - `commit` and `inputs` (a JSON object, URL-encoded) add a target ([records.md](records.md#selection-evidence-and-target-verification-implemented)). They must be given together, and only with `repository` and `environment`; otherwise each missing one is `400`. A malformed commit, or `inputs` that is not a JSON object with unique member names, is `400` naming the field.
+- `decisions` (a JSON object, URL-encoded) gives the target's applicability decisions for conditional references, keyed by reference path: the names from the root joined by `/`, for example `{"integration": false, "verify/lifecycle": true}`. It needs `commit` and `inputs`. A value that is not a boolean, a malformed path, or a path that does not reach a conditional reference of the selected graph outside a reference decided not applicable, is `400` on `decisions`.
 - Each parameter may appear once, and any other query parameter is `400`.
 - The whole walk reads one consistent snapshot.
 
 `selection_evidence` is `{"execution_id", "repository", "repository_id", "commit", "environment": {"name"}}`: the execution that selected the node, which may have run at any commit and with any inputs, with the identifier it was recorded under and, when registered, its repository (`repository_id`, [ADR-0022](decisions/0022-repository-identity-in-evidence.md)). `verified_by` repeats its ID, for compatibility. Neither says anything about another commit.
 
 `target_verification` has the shape of an entry of the [verifications list](#verification): `combination` is the node's exact selected combination at the target (repository, `commit`, environment, the node's effective `inputs` in canonical form, and the selected child-version tree), `verified` is the status of its latest execution there, and `latest_execution_id` and `execution_ids` list those executions. If nothing has run in that combination, `verified` is `false`, `execution_ids` is `[]` and `latest_execution_id` is omitted.
+
+With conditional references, the expected child tree follows the target's `decisions`: a reference decided not applicable is expected as `{"reference": "…", "skipped": true}` and gets no `target_verification` below it; an applicable one is expected executed. A node with a conditional reference below it that `decisions` does not decide reports `"undecided": ["<path>", …]`, `verified: false` and `execution_ids: []`: no execution is looked up, and nothing is inferred from earlier runs ([ADR-0029](decisions/0029-conditional-references-and-applicability-decisions.md)).
 
 ```json
 {"procedure_id":"…root","canonical_key":"compose.root","version":1,"verified_by":"…run","selection_evidence":{"execution_id":"…run","repository":"github.com/ashuangiras/polaroid","commit":"0123…","environment":{"name":"ci.ubuntu-latest"}},"references":[
@@ -121,7 +131,7 @@ A missing procedure or version is `404`. A cycle is `409 reference_cycle`. It is
 
 ### Resolve a binding
 
-`GET /v1/bindings/{id}/resolution?environment=ci.ubuntu-latest[&commit=…&inputs=…]` resolves the binding's latest revision in the binding's repository and that environment. A pin selects its version. A contextual policy selects the highest version verified there, at any commit, or else the latest version. `commit` and `inputs` add a target, exactly as for the graph endpoint; `inputs` are the root's effective inputs, usually the revision's `inputs` plus anything the run adds.
+`GET /v1/bindings/{id}/resolution?environment=ci.ubuntu-latest[&commit=…&inputs=…[&decisions=…]]` resolves the binding's latest revision in the binding's repository and that environment. A pin selects its version. A contextual policy selects the highest version verified there, at any commit, or else the latest version. `commit` and `inputs` add a target, exactly as for the graph endpoint; `inputs` are the root's effective inputs, usually the revision's `inputs` plus anything the run adds.
 
 ```json
 {"binding_id":"…","binding_revision":2,"repository":"github.com/ashuangiras/polaroid","environment":{"name":"ci.ubuntu-latest"},
@@ -272,6 +282,19 @@ Content-Type: application/json
 
 A parent execution adds `"children": [{"reference": "pinned-child", "execution_id": "…"}, …]`, listing child executions recorded earlier. They are returned in the same order, and the field is absent when there are none. A link to an unknown reference or execution is `400` naming `children[i].reference` or `children[i].execution_id`. So is a child that ran another procedure, a version other than the pin, another repository or commit, or a child already linked to another parent. So is a child whose `inputs` differ from those the reference maps from the parent's `inputs`, compared canonically; the message gives both ([ADR-0024](decisions/0024-child-inputs-follow-the-reference-mapping.md)), for example `ran with inputs {"service":"b"}, but reference "build" maps the parent's inputs to {"service":"a"} (ADR-0024)`. See [records.md](records.md#subprocedure-execution-implemented).
 
+An execution of a version with conditional references adds `"decisions"`, one per conditional reference, returned in the same order and absent when there are none ([ADR-0029](decisions/0029-conditional-references-and-applicability-decisions.md)):
+
+```json
+"decisions": [{"reference": "integration", "applicable": false,
+                "rationale": "Only docs/guide.md changed (git diff --name-only); the integration suite reads no Markdown.",
+                "evidence": {"changed_files": ["docs/guide.md"]}}]
+```
+
+- `reference` names a conditional reference; `applicable` (boolean) and `rationale` (not blank) are required; `evidence` is an optional JSON object, stored compacted and never interpreted.
+- These are `400`, naming `decisions[i].reference` or `decisions[i].applicable`: a reference the version does not have; a required reference, which cannot be skipped; a second decision for the same reference; and `applicable: false` while `children` links a child for that reference. A missing `applicable` or a blank `rationale` is `400` on that field, and an unknown member is `400`.
+- A missing decision, or an applicable one without a linked child, is accepted, so failed and partial runs stay recordable; such an execution is never verified.
+- Polaroid checks the decision's structure. Whether the rationale is true is the recording agent's claim.
+
 ### List executions
 
 `GET /v1/executions` lists executions, oldest first, optionally filtered by `procedure_id`, `version` (which needs `procedure_id`), `repository` (by identity: every identifier of a registered repository) and `commit`, and paged with `limit` and `after`. Without filters it lists every execution; `procedure_id` used to be required, and still works as before.
@@ -294,9 +317,9 @@ Verification is derived from stored executions on every read; nothing is stored 
    "children":[{"reference":"latest-child","version":3}]}}
 ```
 
-- `verified` is true when the execution succeeded and every reference of its version has a linked child that ran with the inputs the reference maps and is itself verified.
-- `problems` is absent when `verified` is true. Otherwise it lists the direct reasons in this order: `outcome_failed`, then per reference in version order, either `missing_child` (with `reference`), or `child_inputs_mismatch` and `child_not_verified`, each with `reference` and the child's `execution_id`, when they apply. `child_inputs_mismatch` reports a stored link whose child ran with other inputs than the reference maps; recording one is refused now, but links stored before the rule, or with direct SQL, are served as stored. A child's own problems are read from the child.
-- `combination` has `repository`, `commit`, `environment.name`, the canonical `inputs`, and `children`. `children` lists each linked child's `reference`, `version` and own `children`, in the version's reference order, and is absent when there are none.
+- `verified` is true when the execution succeeded and every reference of its version has a linked child that ran with the inputs the reference maps and is itself verified, except a conditional reference the execution decided not applicable; every conditional reference needs a decision.
+- `problems` is absent when `verified` is true. Otherwise it lists the direct reasons in this order: `outcome_failed`, then per reference in version order, either `missing_decision` (a conditional reference without a decision, with `reference`), `missing_child` (with `reference`), or `child_inputs_mismatch` and `child_not_verified`, each with `reference` and the child's `execution_id`, when they apply. `child_inputs_mismatch` reports a stored link whose child ran with other inputs than the reference maps; recording one is refused now, but links stored before the rule, or with direct SQL, are served as stored. A child's own problems are read from the child.
+- `combination` has `repository`, `commit`, `environment.name`, the canonical `inputs`, and `children`. `children` lists each linked child's `reference`, `version` and own `children`, and each conditional reference decided not applicable as `{"reference": "…", "skipped": true}`, in the version's reference order, and is absent when there are none. A rationale's wording is not part of the combination.
 - An unknown execution is `404`.
 
 `GET /v1/procedures/{id}/versions/{n}/verifications` lists the version's combinations, ordered by their first execution:
@@ -391,14 +414,14 @@ Example `invalid_request` response:
 | `polaroid get-by-key KEY` | `GET /v1/procedures/by-key/{key}` |
 | `polaroid origin ID [FILE]` | `POST /v1/procedures/{id}/origin` |
 | `polaroid get-version ID N` | `GET /v1/procedures/{id}/versions/{n}` |
-| `polaroid graph ID N [REPO ENV [COMMIT INPUTS]]` | `GET /v1/procedures/{id}/versions/{n}/graph[?repository=…&environment=…[&commit=…&inputs=…]]` |
+| `polaroid graph ID N [REPO ENV [COMMIT INPUTS [DECISIONS]]]` | `GET /v1/procedures/{id}/versions/{n}/graph[?repository=…&environment=…[&commit=…&inputs=…[&decisions=…]]]` |
 | `polaroid revise ID [FILE]` | `POST /v1/procedures/{id}/versions` |
 | `polaroid bindings REPOSITORY [NAME=VALUE...]` | `GET /v1/bindings?repository={repository}[&…]` |
 | `polaroid bind [FILE]` | `POST /v1/bindings` |
 | `polaroid get-binding ID` | `GET /v1/bindings/{id}` |
 | `polaroid get-binding-revision ID N` | `GET /v1/bindings/{id}/revisions/{n}` |
 | `polaroid revise-binding ID [FILE]` | `POST /v1/bindings/{id}/revisions` |
-| `polaroid resolve BINDING_ID ENV [COMMIT INPUTS]` | `GET /v1/bindings/{id}/resolution?environment={env}[&commit=…&inputs=…]` |
+| `polaroid resolve BINDING_ID ENV [COMMIT INPUTS [DECISIONS]]` | `GET /v1/bindings/{id}/resolution?environment={env}[&commit=…&inputs=…[&decisions=…]]` |
 | `polaroid record [FILE]` | `POST /v1/executions` |
 | `polaroid get-execution ID` | `GET /v1/executions/{id}` |
 | `polaroid executions [PROCEDURE_ID [REPOSITORY]] [NAME=VALUE...]` | `GET /v1/executions[?procedure_id={id}][&repository={repository}][&…]` |
@@ -449,3 +472,8 @@ Changes for [#39](https://github.com/ashuangiras/polaroid/issues/39) ([ADR-0024]
 
 - `POST /v1/executions` with a child whose inputs differ from those its reference maps, which used to be accepted, is `400` naming `children[i].execution_id`.
 - Verification can report the new problem code `child_inputs_mismatch`. A parent whose stored link has such a child, previously verified, is now unverified, and so are its ancestors; verification lists, contextual resolution and target verification follow. Executions and links read back unchanged. No migration.
+
+Changes for [#50](https://github.com/ashuangiras/polaroid/issues/50) ([ADR-0029](decisions/0029-conditional-references-and-applicability-decisions.md)), all additive; migration 8:
+
+- New optional request and response fields: `condition` on references, `decisions` on executions. New query parameter `decisions` on the graph and resolution endpoints. New response fields: `skipped` entries in combination `children` (whose `version` is then absent), `condition`, `skipped_by` and `decision` on graph edges, and `undecided` on `target_verification`. New problem code `missing_decision`.
+- Existing references are required and existing executions have no decisions, so every stored record, verification, combination, selection and target verification is unchanged. Requests without the new fields behave as before.
