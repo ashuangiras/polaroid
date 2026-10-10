@@ -646,9 +646,78 @@ checks@2 true $checks39"
 jq -e '.outcome == "succeeded" and .inputs.working_tree == "dirty" and (has("children") | not)' <<<"$(bin/polaroid get-execution "$dirty_build")" >/dev/null ||
 	fail "the dirty build changed"
 dev_commit="$saved_commit"
+
+step "23. Task-aware verification: a conditional reference runs when it applies and is skipped, with a reason, when it does not (#50, ADR-0029; scripted regression evidence)"
+scoped="$(scripts/load-fixtures.sh examples/task-aware 2>/dev/null)" || fail "the loader did not load examples/task-aware"
+scoped_id="$(jq -r '.procedures["change.verify.scoped"]' <<<"$scoped")"
+fast_id="$(jq -r '.procedures["repo.checks.fast"]' <<<"$scoped")"
+integration_id="$(jq -r '.procedures["repo.checks.integration"]' <<<"$scoped")"
+app=example.com/fixtures/web-app
+scoped_inputs='{"fast_commands":["make check"],"integration_commands":["make e2e"]}'
+run50() { # run50 PROCEDURE COMMIT INPUTS [CHILDREN [DECISIONS]]: a scripted run, printing its ID
+	jq -n --arg p "$1" --arg r "$app" --arg c "$2" --argjson in "$3" --argjson ch "${4:-null}" --argjson d "${5:-null}" --arg s "$scripted" \
+		'{procedure_id: $p, version: 1, repository: $r, commit: $c, environment: {name: "demo.ci", attributes: {}},
+		  inputs: $in, outcome: "succeeded", evidence: {scripted: $s}}
+		 + (if $ch then {children: $ch} else {} end) + (if $d then {decisions: $d} else {} end)' |
+		bin/polaroid record | jq -r '.id // error("record failed: \(.)")'
+}
+decision50() { jq -cn --argjson a "$1" --arg r "$2" '[{reference: "integration", applicable: $a, rationale: $r}]'; }
+link50() { jq -cn --arg c "$1" --arg i "${2:-}" '[{reference: "checks", execution_id: $c}] + (if $i == "" then [] else [{reference: "integration", execution_id: $i}] end)'; }
+graph50="$(bin/polaroid graph "$scoped_id" 1)"
+jq -e '[.references[] | [.name, (.condition != null)]] == [["checks", false], ["integration", true]]' <<<"$graph50" >/dev/null ||
+	fail "the graph does not show the required checks and the conditional integration suite: $graph50"
+echo "change.verify.scoped requires checks and runs integration only when: $(jq -r '.references[1].condition' <<<"$graph50")"
+
+code50=5050505050505050505050505050505050505050
+docs50=5151515151515151515151515151515151515151
+echo "task A, a change to internal/server.go: both subprocedures apply and run"
+code_checks="$(run50 "$fast_id" "$code50" '{"commands":["make check"]}')"
+code_integration="$(run50 "$integration_id" "$code50" '{"commands":["make e2e"]}')"
+code_parent="$(run50 "$scoped_id" "$code50" "$scoped_inputs" "$(link50 "$code_checks" "$code_integration")" \
+	"$(decision50 true "internal/server.go changed (git diff --name-only): source code the integration suite exercises.")")"
+echo "task B, a change to docs/guide.md and README.md only: integration does not apply and is skipped with its reason"
+docs_checks="$(run50 "$fast_id" "$docs50" '{"commands":["make check"]}')"
+docs_parent="$(run50 "$scoped_id" "$docs50" "$scoped_inputs" "$(link50 "$docs_checks")" \
+	"$(decision50 false "Only docs/guide.md and README.md changed (git diff --name-only); the system never reads them and the integration suite does not test them.")")"
+for run in "$code_parent" "$docs_parent"; do
+	jq -e '.verified' <<<"$(bin/polaroid verification "$run")" >/dev/null || fail "execution $run is not verified: $(bin/polaroid verification "$run")"
+done
+[[ "$(bin/polaroid verification "$docs_parent" | jq -c '.combination.children')" == '[{"reference":"checks","version":1},{"reference":"integration","skipped":true}]' ]] ||
+	fail "the documentation run's combination does not record the skip: $(bin/polaroid verification "$docs_parent")"
+echo "both are verified; task B's combination records integration as skipped; the checks ran in both"
+echo "work avoided by task B (scripted): 1 of 2 subprocedure executions (repo.checks.integration) and its command, make e2e"
+
+echo "an omitted decision, or an applicable reference without its child, is recorded but never verified"
+undecided50="$(run50 "$scoped_id" "$docs50" "$scoped_inputs" "$(link50 "$(run50 "$fast_id" "$docs50" '{"commands":["make check"]}')")")"
+jq -e '.verified == false and .problems == [{code: "missing_decision", reference: "integration"}]' <<<"$(bin/polaroid verification "$undecided50")" >/dev/null ||
+	fail "an undecided run verified: $(bin/polaroid verification "$undecided50")"
+unrun50="$(run50 "$scoped_id" "$code50" "$scoped_inputs" "$(link50 "$(run50 "$fast_id" "$code50" '{"commands":["make check"]}')")" "$(decision50 true "internal/server.go changed")")"
+jq -e '.verified == false and .problems == [{code: "missing_child", reference: "integration"}]' <<<"$(bin/polaroid verification "$unrun50")" >/dev/null ||
+	fail "an applicable reference without its child verified: $(bin/polaroid verification "$unrun50")"
+if bin/polaroid record <<<"$(jq -n --arg p "$scoped_id" --arg r "$app" --arg c "$docs50" --argjson in "$scoped_inputs" --argjson d "$(jq -c '.[0].reference = "checks"' <<<"$(decision50 false "fast")")" \
+	'{procedure_id: $p, version: 1, repository: $r, commit: $c, environment: {name: "demo.ci", attributes: {}}, inputs: $in, outcome: "succeeded", evidence: {x: 1}, decisions: $d}')" >/dev/null 2>&1; then
+	fail "a required reference was skipped"
+fi
+echo "skipping the required checks is refused"
+
+echo "target verification takes the target's own decisions and never inherits a skip:"
+target50() { bin/polaroid graph "$scoped_id" 1 "$app" demo.ci "$1" "$scoped_inputs" ${2:+"$2"} | jq -c '.target_verification | {verified, latest_execution_id, undecided}'; }
+undecided_at_docs="$(target50 "$docs50")"
+docs_at_docs="$(target50 "$docs50" '{"integration":false}')"
+code_at_docs="$(target50 "$docs50" '{"integration":true}')"
+echo "  at ${docs50:0:7} without decisions:        $undecided_at_docs"
+echo "  at ${docs50:0:7}, integration not applicable: $docs_at_docs"
+echo "  at ${docs50:0:7}, integration applicable:     $code_at_docs"
+[[ "$undecided_at_docs" == '{"verified":false,"latest_execution_id":null,"undecided":["integration"]}' &&
+	"$docs_at_docs" == '{"verified":true,"latest_execution_id":"'"$docs_parent"'","undecided":null}' &&
+	"$code_at_docs" == '{"verified":false,"latest_execution_id":null,"undecided":null}' ]] ||
+	fail "unexpected target verification at the documentation commit"
+[[ "$(target50 "$code50" '{"integration":true}')" == '{"verified":true,"latest_execution_id":"'"$code_parent"'","undecided":null}' ]] ||
+	fail "at the code commit, the complete run must verify the target; the incomplete run is another combination"
+echo "  at ${code50:0:7}, integration applicable:     verified by task A's run; the later run without its integration child is another combination"
 dev_before="$(dev_snapshot)"
 
-step "23. Restart polaroidd and confirm every record persisted"
+step "24. Restart polaroidd and confirm every record persisted"
 stop_daemon
 start_daemon
 [[ "$(bin/polaroid get-by-key "$key")" == "$history" ]] || fail "history differs after restart"
@@ -659,7 +728,7 @@ start_daemon
 echo "every history, binding, execution and verification is byte-for-byte identical after restart"
 stop_daemon
 
-step "24. Upgrade a database written at schema version 6 (#35): history reads back, and registration associates it without rewriting it"
+step "25. Upgrade a database written at schema version 6 (#35): history reads back, and registration associates it without rewriting it"
 legacy="$work/schema-6.db"
 for f in internal/storage/sqlite/migrations/000[1-6]_*.sql; do sqlite3 "$legacy" <"$f"; done
 sqlite3 "$legacy" <<'SQL'
