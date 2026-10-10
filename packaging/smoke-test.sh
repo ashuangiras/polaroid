@@ -94,8 +94,10 @@ echo "polaroid smoke test: $DIR"
 echo "temporary directory: $WORK"
 
 echo "[1] Versions"
-V1=$("$P" version 2>&1) && contains "$V1" '"name":"polaroid"' && ok "polaroid version: $V1" || bad "polaroid version" "$V1"
-V2=$("$PD" -version 2>&1) && contains "$V2" '"name":"polaroidd"' && ok "polaroidd -version: $V2" || bad "polaroidd -version" "$V2"
+V1=$("$P" version 2>&1)
+if contains "$V1" '"name":"polaroid"'; then ok "polaroid version: $V1"; else bad "polaroid version" "$V1"; fi
+V2=$("$PD" -version 2>&1)
+if contains "$V2" '"name":"polaroidd"'; then ok "polaroidd -version: $V2"; else bad "polaroidd -version" "$V2"; fi
 R1=$(printf '%s' "$V1" | sed -n 's/.*"revision":"\([0-9a-f]*\)".*/\1/p')
 R2=$(printf '%s' "$V2" | sed -n 's/.*"revision":"\([0-9a-f]*\)".*/\1/p')
 check "both report the same full 40-character commit" test "${#R1}" -eq 40 -a "$R1" = "$R2"
