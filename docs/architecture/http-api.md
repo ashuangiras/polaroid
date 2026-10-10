@@ -417,7 +417,7 @@ Example `invalid_request` response:
 
 ### Local lifecycle commands
 
-`install`, `start`, `stop`, `restart`, `status`, `uninstall` and `version` send no request: they manage this user's installation and service ([ADR-0026](decisions/0026-per-user-installation-and-managed-service.md), README "Run Polaroid as a service"). Each prints the resulting status as one JSON object on stdout and a one-line summary on stderr; `version` prints the build. The status object has `state` and, where they apply, `action`, `detail`, `manager`, `service`, `definition`, `pid`, `build`, `binaries`, `endpoint`, `database`, `diagnostics`, `conflict` (`{pid, command}` of a process holding the endpoint that is not the managed one), `previous` and `problems`.
+`install`, `start`, `stop`, `restart`, `status`, `uninstall` and `version` send no request: they manage this user's installation and service ([ADR-0026](decisions/0026-per-user-installation-and-managed-service.md), README "Run Polaroid as a service"). Each prints the resulting status as one JSON object on stdout and a one-line summary on stderr; `version` prints the build, `{"name", "version", "revision", "modified", "time", "go"}`, where `version` is the main module version Go embeds from the VCS: the tag at the built commit, a pseudo-version, or `(devel)` ([ADR-0028](decisions/0028-prerelease-verification-builds.md)); `polaroidd -version` prints the same. The status object has `state` and, where they apply, `action`, `detail`, `manager`, `service`, `definition`, `pid`, `build`, `binaries`, `endpoint`, `database`, `diagnostics`, `conflict` (`{pid, command}` of a process holding the endpoint that is not the managed one), `previous` and `problems`.
 
 | Command | Exit status |
 | --- | --- |

@@ -1,6 +1,7 @@
 // Package version reports the build of the running binary from the metadata
-// the Go toolchain embeds: the VCS revision, whether the tree was modified,
-// the commit time and the Go version.
+// the Go toolchain embeds: the main module's version (the VCS tag at the
+// built commit, else a pseudo-version), the VCS revision, whether the tree
+// was modified, the commit time and the Go version.
 package version
 
 import (
@@ -12,6 +13,7 @@ import (
 // without VCS information, for example by go test or outside a checkout.
 type Build struct {
 	Name     string `json:"name"`
+	Version  string `json:"version,omitempty"`
 	Revision string `json:"revision"`
 	Modified bool   `json:"modified"`
 	Time     string `json:"time,omitempty"`
@@ -25,6 +27,7 @@ func Current(name string) Build {
 	if !ok {
 		return b
 	}
+	b.Version = info.Main.Version
 	for _, s := range info.Settings {
 		switch s.Key {
 		case "vcs.revision":

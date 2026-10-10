@@ -104,6 +104,10 @@ func TestRecoverFromPrevious(t *testing.T) {
 	if revA == "" || revA == reportedBuild(t, filepath.Join(builds[1], "polaroidd")).Revision {
 		t.Fatalf("builds A and B must have distinct revisions (A %q)", revA)
 	}
+	// Untagged commits get a pseudo-version naming the commit.
+	if v := reportedBuild(t, filepath.Join(a, "polaroid")).Version; !strings.HasPrefix(v, "v0.0.0-") || !strings.HasSuffix(v, "-"+revA[:12]) {
+		t.Fatalf("build A reports version %q, want the pseudo-version of %s", v, revA)
+	}
 	for name, tc := range map[string]struct {
 		upgrade string
 		source  func(t *testing.T, l Layout) string
