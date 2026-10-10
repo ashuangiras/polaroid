@@ -31,6 +31,7 @@ REAL_HOME=$HOME
 GOCACHE="$(go env GOCACHE)" GOMODCACHE="$(go env GOMODCACHE)" GOPATH="$(go env GOPATH)"
 export GOCACHE GOMODCACHE GOPATH
 export HOME="$ROOT/home with spaces"
+unset POLAROID_DB
 mkdir -p "$HOME"
 NAME="polaroid-check-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 PORT=$((20000 + RANDOM % 20000))
@@ -260,7 +261,45 @@ else
 	fi
 fi
 
-echo "[13] Uninstall keeps the catalog; reinstall serves it"
+echo "[13] Backup and restore of the managed catalog, coordinated with the real manager (ADR-0030)"
+BACKUPS="$HOME/.polaroid/backups"
+mode_of() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
+after() { curl -sf "$URL/v1/procedures/by-key/lifecycle.after" >/dev/null; }
+cli backup
+BK=$(field .path)
+check "backup of the running managed catalog: exit 0, managed source, default directory" bash -c "[[ $RC == 0 && '$BK' == '$BACKUPS'/polaroid-* && '$(field .metadata.source.managed)' == true && '$(field .metadata.source.path)' == '$DB' ]]"
+check "backups are private: directory 700, database 600" bash -c "[[ \$($(declare -f mode_of); mode_of '$BACKUPS') == 700 && \$($(declare -f mode_of); mode_of '$BK/polaroid.db') == 600 ]]"
+curl -sf -X POST -H 'Content-Type: application/json' "$URL/v1/procedures" \
+	-d '{"canonical_key":"lifecycle.after","version":{"philosophy":"p","method":"m","contract":{},"instructions":{},"revision_reason":"r"}}' >/dev/null
+check "a record written after the backup is served" after
+cli restore -plan "$BK"
+check "restore -plan: ready, managed, running service, requires -replace" bash -c "[[ $RC == 0 && '$(field .ready)' == true && '$(field .destination.managed)' == true && '$(field .service.state)' == running && '$(field .requires_replace)' == true ]]"
+P4=$(manager_pid)
+cli restore -replace "$BK"
+RECOVERY=$(field .recovery_backup)
+check "restore -replace while running: restored, the service running again as a new process" bash -c "[[ $RC == 0 && '$(field .outcome)' == restored && '$(field .service.state)' == running && -n '$(manager_pid)' && '$(manager_pid)' != '$P4' ]]"
+check "the restored service is healthy" healthy
+check "the record written after the backup is gone" bash -c "! curl -sf '$URL/v1/procedures/by-key/lifecycle.after' >/dev/null"
+check "the record from before the backup is intact" test "$(record)" == "$BEFORE"
+check "the recovery backup is in the default directory and holds the replaced catalog" bash -c "[[ '$RECOVERY' == '$BACKUPS'/polaroid-*-pre-restore* ]] && '$CLI' inspect-backup '$RECOVERY' | jq -e '.valid and .records.procedures == 2' >/dev/null"
+check "the catalog is private and no restore leftovers remain" bash -c "[[ \$($(declare -f mode_of); mode_of '$DB') == 600 && -z \$(ls -A '$(dirname "$DB")' | grep -Ev '^polaroid\.db(-wal|-shm)?\$') ]]"
+cli stop
+SUM=$(sha256 "$DB")
+"$B0/polaroidd" -addr "$ADDR" -db "$ROOT/manual.db" 2>"$ROOT/manual.log" &
+MANUAL=$!
+wait_for 10 healthy
+cli restore -replace "$RECOVERY"
+check "restore refuses while an unowned process holds the endpoint: exit 3, unchanged" bash -c "[[ $RC == 3 && '$(field .outcome)' == unchanged && '$(sha256 "$DB")' == '$SUM' ]]"
+kill "$MANUAL"
+wait "$MANUAL" 2>/dev/null
+MANUAL=""
+cli restore -replace "$RECOVERY"
+check "restore -replace while stopped: restored, the service left stopped" bash -c "[[ $RC == 0 && '$(field .outcome)' == restored && '$(field .plan.service.state)' == stopped && '$(field .service)' == null && -z '$(manager_pid)' ]] && ! curl -sf $URL/healthz >/dev/null"
+cli start
+check "after start, the recovery backup's record is back" bash -c "[[ $RC == 0 ]] && curl -sf '$URL/v1/procedures/by-key/lifecycle.after' >/dev/null"
+check "the record from before the backup is intact" test "$(record)" == "$BEFORE"
+
+echo "[14] Uninstall keeps the catalog; reinstall serves it"
 cli uninstall
 check "uninstall: exit 0, not-installed" state_is 0 not-installed
 check "binaries, definition and state are gone" bash -c "[[ ! -e '$BIN/polaroid' && ! -e '$BIN/polaroidd' && ! -e '$HOME/.local/state/polaroid' && ! -e '$HOME/Library/LaunchAgents/$LABEL.plist' && ! -e '$HOME/.config/systemd/user/$UNIT' ]]"
