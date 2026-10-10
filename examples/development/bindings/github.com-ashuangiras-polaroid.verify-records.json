@@ -1,0 +1,23 @@
+{
+  "repository": "github.com/ashuangiras/polaroid",
+  "name": "verify-records",
+  "procedure_id": "polaroid.change.records",
+  "revision": {
+    "inputs": {
+      "scope": "records",
+      "build_command": "make build",
+      "artifacts": [
+        "bin/polaroidd",
+        "bin/polaroid"
+      ],
+      "gate_commands": [
+        "make records-check",
+        "make demo"
+      ]
+    },
+    "version_policy": {
+      "contextual": {}
+    },
+    "revision_reason": "Procedure-record and binding changes (#65): load the fixtures into isolated catalogs, resolve every binding and replay the scripted procedural-memory loop. Not full verification."
+  }
+}

@@ -30,17 +30,32 @@ Polaroid is a versioned procedural memory service for agents, written in Go, wit
 
 ## Before you call it done
 
-- Run `make check`. It needs no network once the Go modules are downloaded. Also run `make vuln`, `make demo`, `make e2e` and `make e2e-mcp` when network, `jq` and `sqlite3` are available. CI runs `make ci`, which is all of them, with the end-to-end interop checks off (`E2E_INTEROP=0`).
-- Report only checks you actually ran, with their real outcome. List the checks you did not run and why.
-- Leave a handoff in [docs/development/status.md](docs/development/status.md) and in the pull request or issue: completed work, evidence, blockers and the next action.
+- Verify through the Polaroid binding of `github.com/ashuangiras/polaroid` that matches the change (`polaroid bindings github.com/ashuangiras/polaroid`), follow the versions it selects, and record the executions. Each scoped procedure lists what it covers, what it excludes, and when to escalate. A small diff is not proof of low risk: when unsure, use `verify-change`.
+
+  | Binding | Procedure | For | Gate |
+  | --- | --- | --- | --- |
+  | `verify-docs` | `polaroid.change.docs` | Prose-only documentation that no program, script or test reads | `make docs-check` |
+  | `verify-records` | `polaroid.change.records` | Procedure, repository and binding fixtures | `make records-check`, `make demo` |
+  | `verify-focused` | `polaroid.change.focused` | A bounded code change with a regression test, outside the areas below | `make focused PKGS='...'` |
+  | `verify-change` | `dev.change.verify` | Everything else: storage, migrations, recovery, ownership, lifecycle, public contracts, dependencies, shared behavior, the Makefile, scripts and workflows | `make check`, `make vuln`, `make demo`, `make e2e`, `make e2e-mcp E2E_INTEROP=0` |
+
+  Add `make lifecycle` when the change can alter how Polaroid is installed or runs as a service (`polaroid.lifecycle.check`). A scoped result is reported with its scope, never as verification of the commit.
+- Go's test cache applies, except to `internal/archtest`, `internal/lifecycle` and `internal/recovery`, which the Makefile always runs fresh (`scripts/go-test.sh` says why). Report `(cached)` results as cached. Composed targets reuse `bin/` only when it was built from the current source state (`scripts/build.sh`).
+- An identical target that is already verified (same commit, working tree, environment, inputs, selected versions and decisions) may be cited instead of rerun. Citing records nothing. Rerun `make vuln` instead of citing a run from an earlier day, because its advisory database changes. Verification never transfers to another commit, even one with an identical tree.
+- Hosted CI follows the policy recorded as the `hosted-ci` binding: local-only. Do not wait for or dispatch the `ci` workflow during development; it runs only by manual dispatch. Releases are a separate task, done only when the owner asks (`polaroid.release.publish`), and they wait for the release workflow. Completing a change never publishes a release or upgrades the shared service.
+- Report only checks you actually ran, with their real outcome, and say which results were cached. List the checks you did not run and why.
+- Leave a handoff in [docs/development/status.md](docs/development/status.md), in the same pull request, and on the issue: completed work, evidence, blockers and the next action.
 
 ## Commands
 
 | Command | Does |
 | --- | --- |
-| `make check` | Runs fmt-check, vet, lint (golangci-lint 2.14.0), build, test, race and deps-check. |
-| `make test` / `make race` | Runs the tests, or the tests with the race detector. |
-| `make build` | Builds `bin/polaroidd` and `bin/polaroid`. |
+| `make check` | Runs fmt-check, vet, lint (golangci-lint 2.14.0), the build when `bin/` is not current, test, race, deps-check, docs-check and records-check. |
+| `make test` / `make race` | Runs the tests of `PKGS` (default `./...`), or the same tests with the race detector. |
+| `make focused PKGS='...'` | The offline checks of `make check`, with the tests of `PKGS` only and without docs-check and records-check. |
+| `make docs-check` | Checks every relative link and anchor in the tracked Markdown files. |
+| `make records-check` | Loads the fixtures in `examples/` into an isolated catalog twice and resolves their bindings. `RECORDS_FROM=BACKUP` starts from a copy of a `polaroid backup`. |
+| `make build` / `make binaries` | Builds `bin/polaroidd` and `bin/polaroid`, or builds them only when `bin/` was not built from the current source state. |
 | `make vuln` | Runs govulncheck. Needs network. |
 | `make demo` | Runs the live create, revise, conflict, two-repository binding, execution and restart demonstration, then scripted replays of the procedural-memory loop on the development procedures and of the multi-repository fixtures, and an upgrade of a schema-6 database. Needs `jq` and `sqlite3`. |
 | `make e2e` / `make e2e-mcp` | Runs the end-to-end scripts: every feature, and `/mcp` with independent clients, against a real daemon. Reports go to `bin/e2e/`. `E2E_INTEROP=0` skips the independent-client checks. |

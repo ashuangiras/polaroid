@@ -86,7 +86,7 @@ While `polaroidd` runs, point any MCP client that supports streamable HTTP and p
 
 The server's instructions describe the agent loop. The tools, their arguments and their errors are in [docs/architecture/mcp.md](docs/architecture/mcp.md).
 
-Polaroid's own development procedures (build, checks, verify a change) are records too, in [examples/development](examples/development). Load them with `scripts/load-fixtures.sh examples/development`, and an agent can verify a change by resolving the `verify-change` binding of `github.com/ashuangiras/polaroid`. [docs/development/procedural-loop.md](docs/development/procedural-loop.md) shows an agent following them, correcting a stale instruction and recording the evidence.
+Polaroid's own development procedures (build, checks, verify a change at full or narrower scope, hosted CI by recorded policy) are records too, in [examples/development](examples/development). Load them with `scripts/load-fixtures.sh examples/development`, and an agent can verify a change by resolving the binding of `github.com/ashuangiras/polaroid` that matches it: `verify-docs`, `verify-records`, `verify-focused` or `verify-change` ([AGENTS.md](AGENTS.md)). [docs/development/procedural-loop.md](docs/development/procedural-loop.md) shows an agent following them, correcting a stale instruction and recording the evidence.
 
 ## Commands
 
@@ -94,16 +94,19 @@ Polaroid's own development procedures (build, checks, verify a change) are recor
 | --- | --- |
 | `make fmt` / `make fmt-check` | Formats the code, or fails if any file is not formatted. |
 | `make vet` / `make lint` | Runs `go vet`, or golangci-lint 2.14.0 with the configuration in [.golangci.yml](.golangci.yml). |
-| `make build` | Builds both binaries into `bin/`. |
-| `make test` / `make race` | Runs all tests, or all tests under the race detector. |
+| `make build` | Builds both binaries into `bin/`, and records the source state they were built from. `make binaries` builds only when `bin/` was not built from the current source state; `demo`, `e2e`, `check` and `run` use it. |
+| `make test` / `make race` | Runs the tests of `PKGS` (default all), or the same tests under the race detector. Go's test cache applies, except to `internal/archtest`, `internal/lifecycle` and `internal/recovery`, which always run. |
 | `make deps-check` | Verifies the [dependency and license inventory](docs/development/dependencies.md). |
+| `make docs-check` | Checks every relative link and anchor in the Markdown files. |
+| `make records-check` | Loads the fixture records into an isolated catalog twice and resolves their bindings. |
 | `make check` | Runs every offline check above. |
+| `make focused PKGS='...'` | Runs the offline checks with the tests of `PKGS` only, for a bounded change. |
 | `make vuln` | Runs govulncheck. |
 | `make demo` | Runs the live demonstration against a real daemon, including a scripted replay of the procedural-memory loop on the development procedures. |
 | `make run ARGS="..."` | Builds and runs `polaroidd`. |
-| `make ci` | Runs `check`, `vuln`, `demo`, `e2e` and `e2e-mcp` with `E2E_INTEROP=0`, which is exactly what GitHub Actions runs. |
+| `make ci` | Runs `check`, `vuln`, `demo`, `e2e` and `e2e-mcp` with `E2E_INTEROP=0`, which is exactly what the `ci` workflow runs when dispatched by hand. |
 | `make e2e` / `make e2e-mcp` | Runs the end-to-end scripts against a real daemon and writes a report of every command, its output and each check to `bin/e2e/`. `e2e-mcp` also tries the TypeScript SDK and MCP Inspector when npm is available, and inspects a local VS Code install; `E2E_INTEROP=0` skips those checks and reports them as skipped. |
-| `make lifecycle` | Installs, crashes, stops, upgrades, backs up, restores and uninstalls an isolated managed service with the real launchd or systemd user manager (exit 77 when none is reachable). CI runs it on Linux. |
+| `make lifecycle` | Installs, crashes, stops, upgrades, backs up, restores and uninstalls an isolated managed service with the real launchd or systemd user manager (exit 77 when none is reachable). The `ci` workflow runs it on Linux when dispatched. |
 
 ## Configuration
 

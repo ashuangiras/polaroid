@@ -1,0 +1,59 @@
+{
+  "canonical_key": "dev.ci.hosted",
+  "version": {
+    "philosophy": "Hosted CI is evidence from another machine about one pushed commit, and it costs the repository's owner money or minutes. Whether a change must wait for it is the repository's policy, decided once by its owner and recorded where agents read it, not rediscovered by each agent from account settings. When the policy requires it, its result is waited for and recorded like any other check; when it does not, not waiting is the policy, not a skipped check.",
+    "method": "Read the repository's recorded CI policy. When it requires hosted verification, make sure the exact commit is pushed, trigger the workflows if they only run on request, wait for their runs on that commit with a bounded wait, and record each run's conclusion.",
+    "goal": "Confirm, when a repository's recorded policy requires hosted verification, that its hosted CI passed at one exact pushed commit.",
+    "applicability": {
+      "shared": {}
+    },
+    "contract": {
+      "inputs": {
+        "working_tree": "Must be `clean`: hosted CI only sees pushed commits."
+      },
+      "policy": {
+        "where": "The repository's binding named `hosted-ci`, which binds this procedure. Its latest revision's inputs are the policy: `policy` (`required` or `local-only`), `workflows` (the workflow files to wait for), `trigger` (`automatic` or `manual`), `timeout_minutes` (the bound on waiting), and `reason`.",
+        "default": "With no recorded policy: a repository whose hosted CI is paid for (a paid plan, or minutes the owner buys) defaults to `required`. On a free plan, or when unknown, ask the owner once. Either way, record the answer as the `hosted-ci` binding so later agents read it instead of checking the account again."
+      },
+      "preconditions": [
+        "The commit to check is pushed to the repository's hosting service.",
+        "The repository's policy is recorded, or the owner can be asked."
+      ],
+      "expected_outcome": "Under a `required` policy, every listed workflow has a completed run at the exact commit, each concluded success.",
+      "verification": [
+        "Evidence names the policy binding and revision, each workflow's run ID and URL, the run's head commit (equal to the target commit), and each job's conclusion."
+      ],
+      "boundaries": [
+        "A hosted run verifies only its head commit; a run at another commit, even with an identical tree, is not evidence for this one.",
+        "Under a `local-only` policy this procedure does not run: the caller decides its reference not applicable and cites the policy binding as the rationale.",
+        "Never changes the policy on its own: a change of policy is the owner's decision, recorded as a new binding revision.",
+        "Does not merge, publish or deploy."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "policy",
+          "action": "Read the repository's `hosted-ci` binding (list the repository's bindings, then read the latest revision). Note its ID, revision and inputs. If none exists, determine the default as the contract says, and record the policy as a new `hosted-ci` binding of this procedure before continuing."
+        },
+        {
+          "id": "commit",
+          "action": "Check that working_tree is `clean` and that the commit is on the remote (`git branch -r --contains COMMIT`, or push it)."
+        },
+        {
+          "id": "trigger",
+          "action": "For `trigger: manual`, start each workflow on the branch that holds the commit (`gh workflow run WORKFLOW --ref BRANCH`), then find the run whose head SHA is the commit (`gh run list --workflow WORKFLOW --commit COMMIT`). For `automatic`, find the run the push started."
+        },
+        {
+          "id": "wait",
+          "action": "Wait for each run once, bounded by timeout_minutes (for example `timeout 1800 gh run watch RUN --exit-status`), without polling in between. A run that does not finish within the bound is reported as not finished, never as passed."
+        },
+        {
+          "id": "record",
+          "action": "Record outcome `succeeded` only if every listed workflow's run at the commit concluded success. Otherwise record `failed` with the failing jobs and their logs' first error, or the runs that did not finish."
+        }
+      ]
+    },
+    "revision_reason": "Initial version, created for #65 (refs #62): hosted CI was either always awaited or, after the owner's decision on #59, silently not, with nothing recorded. It is now a separate procedure that a verification references conditionally, and each repository records its policy once, as the inputs of its `hosted-ci` binding."
+  }
+}

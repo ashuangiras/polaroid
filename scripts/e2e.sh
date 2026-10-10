@@ -160,9 +160,9 @@ stop_daemon() {
 ########################################################################
 section "Build" \
 	"Two binaries: \`polaroidd\` (the daemon, which owns the SQLite file and serves the JSON API) and \`polaroid\` (a thin CLI over the API). Pure Go; no C toolchain." \
-	"\`make build\`, then \`bin/polaroidd -h\` and \`bin/polaroid help\`."
-show 'make build'
-check "make build succeeds" rc_is 0
+	"\`make build\`, then \`bin/polaroidd -h\` and \`bin/polaroid help\`. (\`make binaries\` builds only when \`bin/\` was not built from the current source state; this report uses it, so that \`make e2e\` reuses what \`make\` just built.)"
+show 'make -s binaries'
+check "bin/ holds a build of the current source state" rc_is 0
 show 'bin/polaroidd -h'
 check "polaroidd prints its flags (-addr, -db) and exits 0" rc_is 0
 check "usage mentions -addr and -db" out_has "-db"

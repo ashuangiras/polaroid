@@ -34,5 +34,6 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0028](0028-prerelease-verification-builds.md) | Prerelease verification builds published from tags on main | Accepted |
 | [0029](0029-conditional-references-and-applicability-decisions.md) | Conditional references and recorded applicability decisions | Accepted |
 | [0030](0030-catalog-backup-and-restore.md) | Catalog backup, inspection and restore with the packaged binaries | Accepted |
+| [0031](0031-scoped-verification-and-local-only-ci.md) | Scoped verification procedures, work done once, and local-only hosted CI | Accepted |
 
 Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.

@@ -1,0 +1,154 @@
+{
+  "base_version": 3,
+  "version": {
+    "philosophy": "A change is verified for one exact state: a repository, a commit and working-tree state, an environment, the versions of the procedures that ran, and the scope of the checks they ran. Evidence says what ran and what did not, and it is recorded so that a later agent can rely on it, or see where it stops. Work is done once: a build that the gate would repeat, a check that already ran at the identical target, or a hosted run the repository's policy does not ask for, adds time and no evidence.",
+    "method": "Establish the exact target: repository, full commit, working-tree state, effective inputs (including the scope) and environment. Resolve at that target with the decisions for the conditional references, and read the selected versions. If the identical target is already verified and nothing requires a fresh run, report that evidence and stop, recording nothing. Otherwise build if the inputs name a build, run the checks once, wait for hosted CI only if the repository's recorded policy requires it, record each child before the parent that links them, and confirm at the same target.",
+    "goal": "Verify one commit of a repository by running its gates, at the scope the inputs name, through the referenced procedures, and record the evidence.",
+    "applicability": {
+      "shared": {}
+    },
+    "contract": {
+      "inputs": {
+        "scope": "What the gate covers: `full` (the repository's full gate) or a named narrower scope, such as `docs`, set by the binding or the calling procedure. Absent means `full`.",
+        "build_command": "Optional; passed to the build reference. Absent means the gate builds what it needs itself, or needs nothing built, and the build reference is not applicable.",
+        "artifacts": "Passed to the build reference.",
+        "gate_commands": "Passed to the checks reference.",
+        "packages": "Optional, set at run time by a calling procedure; passed to the checks reference for a {packages} placeholder.",
+        "working_tree": "`clean`, or `modified:` with the SHA-256 of the uncommitted changes. Set by the agent at run time, never by a binding."
+      },
+      "preconditions": [
+        "A local checkout of the repository, with the change to verify committed or its working-tree state recorded.",
+        "A Polaroid binding of this procedure in the repository, or a calling procedure that references it, which supplies the commands and paths.",
+        "A Polaroid service whose resolution accepts a target `commit`, `inputs` and `decisions` and reports `target_verification` for each selected node."
+      ],
+      "expected_outcome": "Either an existing verified execution of the identical target is reported, with nothing recorded; or the applicable children of this run succeeded and are linked to this run's parent, every conditional reference has a decision, the parent is verified, and resolving at the same target reports it verified with this run's executions as the latest.",
+      "verification": [
+        "get_verification on the parent execution reports verified, with a combination naming the repository, commit, environment, inputs (with the scope) and the child-version tree, skipped references included.",
+        "resolve_binding (or get_graph, for an explicitly chosen version or a caller's graph) with the same commit, inputs and decisions reports `target_verification.verified: true` for the root, with `latest_execution_id` equal to this run's parent, and for each executed child."
+      ],
+      "boundaries": [
+        "Verification holds only for the recorded repository, commit, environment, inputs and child versions. It says nothing about another repository, environment, commit or working-tree state. A rebase, amend or merge that produces a new commit is a new target, unverified until a run is recorded there, even when its tree is identical.",
+        "Verification holds only for its scope: the gate commands that ran. A run whose scope is not `full` never stands for full verification of the commit, and its evidence says so.",
+        "Selection evidence (`selected_by: evidence`, `verified_by`, `selection_evidence`) explains why a version was chosen, and may come from any commit. It supports choosing a candidate; it never certifies the target.",
+        "Only `target_verification` speaks about the target. A missing `target_verification`, `verified: false`, `undecided` paths or empty `execution_ids` mean unverified.",
+        "A successful or verified child does not establish its parent. The parent is verified only by its own recorded execution, linked to verified children.",
+        "Citing an existing verified execution of the identical target is an evidence lookup, not a run of this procedure: it records nothing. Never record an execution for work that did not run in this invocation, never copy another execution's evidence, and never link a child that another parent already links.",
+        "Polaroid stores what agents submit and derives verification from those records. It does not check that the commands ran or that the evidence is true; the agent that records an execution is responsible for that.",
+        "Does not merge, push (except as the hosted-ci reference needs), publish a release or upgrade any installed service, and does not close work items."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "context",
+          "action": "From the module root, record the full commit from `git rev-parse HEAD` (40 or 64 hex characters; a branch name or an abbreviated hash is not a target), the repository identifier from `git remote get-url origin` (host and path, lowercase, without scheme, user, port or `.git`), and an environment name in canonical-key form that identifies this machine, for example `darwin-arm64.local`, with attributes such as the OS, architecture and tool versions."
+        },
+        {
+          "id": "working-tree",
+          "action": "Run `git status --porcelain`. If it prints nothing, working_tree is `clean`. Otherwise commit the changes first, or set working_tree to `modified:` followed by the SHA-256 of `git diff HEAD` and the untracked files. Never record a modified tree as `clean`."
+        },
+        {
+          "id": "inputs",
+          "action": "When bound directly, read the latest revision of this procedure's binding; the effective inputs are its inputs plus working_tree. When a calling procedure references this one, the effective inputs are its reference mapping applied to the caller's effective inputs, as the node's `target_verification.combination.inputs` shows. Note the binding ID and revision when there is one; the parent execution records them."
+        },
+        {
+          "id": "decide",
+          "action": "Decide each conditional reference before resolving, and keep the rationale and evidence for the record. `build` applies when the effective inputs name a build_command. `hosted-ci` applies as its condition says: read the repository's `hosted-ci` binding (its latest revision's `policy`); cite the binding ID and revision in the decision's evidence."
+        },
+        {
+          "id": "resolve",
+          "action": "Resolve with the environment, `commit` set to the full commit, `inputs` set to the effective inputs, and `decisions` keyed by reference path (for example `build` and `hosted-ci`, or `verify/build` under a caller). Check that the binding revision it resolved is the one whose inputs you used. Note, for every node, the selected version, `selected_by`, `selection_evidence` and `target_verification`."
+        },
+        {
+          "id": "read",
+          "action": "For the root and each applicable reference, read the selected version in full (philosophy, method, contract and instructions) before following it, and the reference's input mapping. Read each version once; do not re-read what has not changed."
+        },
+        {
+          "id": "selection",
+          "action": "Treat selection evidence as the reason a candidate was chosen, not as a result for your commit. Resolution may keep an older version that has evidence over a newer one that has none: follow the version resolution selected. If you deliberately run another version, for example a newer version's first run, read its graph with get_graph for that version, with the same repository, environment, commit, inputs and decisions, follow that graph, and state in the parent's evidence that the version was chosen explicitly, not by resolution."
+        },
+        {
+          "id": "existing-evidence",
+          "action": "If the root's `target_verification` is already verified, the identical target was verified before: the same repository, commit, working-tree state, environment, effective inputs (scope included), selected versions and decisions. Cite it instead of running, with its `latest_execution_id`, unless a check in the gate needs a fresh result (the repository's guidance names such checks, for example a vulnerability scan against a newer advisory database, or a change in the environment that its attributes do not capture). Citing is a lookup: record nothing, and say in your report that nothing ran. If any part of the target differs, it is a new target: run."
+        },
+        {
+          "id": "children",
+          "action": "Follow the applicable references in order: `build`, then `checks`, then `hosted-ci` (which needs the commit pushed). Each runs once per invocation, at its selected version and with its effective inputs; the parent runs no commands of its own. Assess each child's outcome against its own contract, not only exit statuses. Record each child execution as soon as it finishes: the procedure and exact version, this repository and commit, the environment, its effective inputs, its outcome and its evidence (every command with its exit status and a deterministic excerpt, cached results counted as cached, and what did not run)."
+        },
+        {
+          "id": "recheck",
+          "action": "Before recording each execution, check that `git rev-parse HEAD`, `git status --porcelain`, the effective inputs and the environment are still the ones you established. If any changed during the run, stop and reassess: establish the state each command actually ran at, record only what you can state truthfully for that state, and verify a new state with a new run."
+        },
+        {
+          "id": "parent",
+          "action": "Record this procedure's execution with the exact version followed, binding_id and binding_revision when bound directly, this repository and commit, the environment, the effective inputs, `children` linking the child executions of this run, and `decisions` for `build` and `hosted-ci` with their rationale and evidence. Its outcome is `succeeded` only if every applicable child succeeded and met its contract. Its evidence names the scope, the child execution IDs, how each version was selected, and the target verification seen before the run. A child execution can be linked to one parent only; if a parent was already recorded over it, run the child again."
+        },
+        {
+          "id": "confirm",
+          "action": "Read the parent's verification with get_verification. Then resolve again with the same commit, inputs and decisions (for an explicitly chosen version or under a caller, call get_graph again) and report `target_verification` for the root and each executed child, with their `latest_execution_id`. The target is verified by this run only if the root is verified there and its latest execution is this run's parent. Report anything else as not verified, with the problems."
+        },
+        {
+          "id": "scope",
+          "action": "Report the result for the exact commit and scope only. If the change is later rebased, amended or merged into a new commit, that commit is unverified until a run there is recorded: cite the verified commit by its own SHA, and never relabel the evidence as verification of the new one. A narrower scope is reported as that scope, never as verification of the commit."
+        },
+        {
+          "id": "on-failure",
+          "action": "If a step fails, decide what failed before changing anything: wrong or outdated instructions, an environment blocker, or a defect in the product being verified. Only wrong instructions justify a new procedure version: append it with base_version set to the version you followed, run it, and record the new execution. Repair an environment blocker and record it; file a product defect as a work item. Never edit or delete earlier records."
+        }
+      ]
+    },
+    "references": [
+      {
+        "name": "build",
+        "procedure_id": "go.module.build",
+        "version_policy": {
+          "contextual": {}
+        },
+        "inputs": {
+          "build_command": {
+            "input": "build_command"
+          },
+          "artifacts": {
+            "input": "artifacts"
+          },
+          "working_tree": {
+            "input": "working_tree"
+          }
+        },
+        "condition": "The effective inputs name a build_command: the gate needs artifacts built at the target before it runs. Without one, the gate builds what it needs itself (for example through a target that reuses binaries only when they were built from the current source state), or needs nothing built."
+      },
+      {
+        "name": "checks",
+        "procedure_id": "go.module.checks",
+        "version_policy": {
+          "pin": 4
+        },
+        "inputs": {
+          "gate_commands": {
+            "input": "gate_commands"
+          },
+          "packages": {
+            "input": "packages"
+          },
+          "working_tree": {
+            "input": "working_tree"
+          }
+        }
+      },
+      {
+        "name": "hosted-ci",
+        "procedure_id": "dev.ci.hosted",
+        "version_policy": {
+          "pin": 1
+        },
+        "inputs": {
+          "working_tree": {
+            "input": "working_tree"
+          }
+        },
+        "condition": "The repository's recorded CI policy requires hosted verification: the latest revision of its `hosted-ci` binding has `policy` `required`, or no policy is recorded and dev.ci.hosted's default makes it required. A `local-only` policy makes it not applicable; cite the binding and revision."
+      }
+    ],
+    "revision_reason": "#65 (refs #62). The baseline run of version 3 built the binaries seven times, ran the unit tests twice, and could only ever run the full gate, fresh. (1) `build` is conditional: it applies when the inputs name a build_command, and a gate that builds what it needs, reusing binaries built from the current source state, needs no separate build. (2) `checks` pins go.module.checks version 4, which runs each gate command once and allows Go's test cache where the gate allows it. (3) The `scope` input names what the gate covers, so scoped procedures can call this one without implying full verification. (4) An identical, already verified target may be cited instead of rerun, as a lookup that records nothing. (5) Waiting for hosted CI is the conditional reference `hosted-ci` (dev.ci.hosted), decided from the repository's recorded policy."
+  }
+}

@@ -1,0 +1,92 @@
+{
+  "canonical_key": "polaroid.change.docs",
+  "version": {
+    "philosophy": "Prose that nothing executes cannot break the build, so building and testing Go code proves nothing about it. What can be wrong is the prose itself: a false claim, a broken link, a command that does not work. Those are checked directly. A small diff is not proof that a file is prose: a file a program, script or test reads, a command a reader will run, or a sentence that states a contract can carry behavior, and then the change needs the checks for that behavior.",
+    "method": "List the changed files and classify each against the applicable and excluded kinds; escalate on any exclusion or doubt. Check every changed claim against the code or a command, then verify the commit through the shared verification at scope `docs`, whose gate checks every Markdown link and anchor without building anything.",
+    "goal": "Verify a prose-only documentation change to Polaroid: its claims, links and anchors, without building or testing unrelated Go code.",
+    "applicability": {
+      "repository": "github.com/ashuangiras/polaroid"
+    },
+    "contract": {
+      "inputs": {
+        "scope": "`docs`; passed to the verify reference.",
+        "gate_commands": "Passed to the verify reference, for example [\"make docs-check\"].",
+        "working_tree": "Set by the agent at run time; passed to the verify reference."
+      },
+      "applies_to": [
+        "Markdown prose read only by people: README.md, AGENTS.md, docs/**/*.md, .github/copilot-instructions.md, .github/instructions/*.md, .github/pull_request_template.md, examples/**/README.md.",
+        "Corrections of wording, facts, structure and links in those files, including contract documents (docs/architecture/*.md) when the change makes the text match the implemented behavior without changing what the contract promises."
+      ],
+      "excluded": [
+        "Any file that a build, test, script, workflow or program reads, even if it is Markdown: for example docs/development/dependencies.md (read by scripts/check-deps.sh) and packaging/README.md (shipped in every archive). Check with `git grep -n -- PATH -- Makefile scripts .github/workflows '*.go' '*.sh'`.",
+        "Go files, even comment-only changes; JSON, YAML, shell and Makefile changes; examples/** records; packaging/**; generated output.",
+        "A changed or added command, code sample or snippet that a reader is told to run, unless the run is part of this procedure's evidence (run it against an isolated catalog, never the live one).",
+        "A change to what a contract document promises (records, API, MCP, CLI behavior), or to an accepted ADR's decision: that is a change of contract and needs the procedure for the code it governs.",
+        "Status and handoff notes that claim verification: the claims they make must be checked like any other."
+      ],
+      "preconditions": [
+        "The change is committed on a branch, or its working-tree state is recorded."
+      ],
+      "expected_outcome": "Every changed file is applicable, every changed claim is checked against the code or a command, and the verify child is verified at the commit with scope `docs`.",
+      "verification": [
+        "Evidence lists the changed files (git diff --name-only BASE...COMMIT) with each one's classification, and the grep showing that no build, test or script reads them.",
+        "Evidence lists each changed factual claim with the file, command or test that confirms it.",
+        "The verify child is verified at the commit; its checks child ran `make docs-check` with `docs-check: PASS`."
+      ],
+      "escalation": [
+        "Any excluded file, or any file whose readers are unclear: stop before the verify reference, record nothing for this procedure, and verify through the procedure for that kind of change (polaroid.change.records, polaroid.change.focused, or the full `verify-change` binding). When unsure which, use `verify-change`.",
+        "A claim that turns out false against the code: fix the text, or file the code defect as a work item; never change code under this procedure."
+      ],
+      "boundaries": [
+        "Scope `docs` covers the changed prose and every Markdown link and anchor in the repository. It is not verification of the commit's code, which it does not build or test, and never stands for full verification.",
+        "Does not merge, publish, upgrade or close work items."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "files",
+          "action": "List the changed files with `git diff --name-only BASE...HEAD`, where BASE is the merge base with main (`git merge-base origin/main HEAD`), and `git status --porcelain` for uncommitted ones. Classify each against applies_to and excluded, and run the reader grep for each.",
+          "escalate_when": "A file is excluded or its readers are unclear: follow the escalation."
+        },
+        {
+          "id": "claims",
+          "action": "For each changed sentence that states a fact (a command, a path, a number, a behavior), confirm it against the code, the Makefile or a command's output, and keep the confirmation for the evidence. Run any changed command a reader is told to run, against an isolated catalog, or escalate."
+        },
+        {
+          "id": "verify",
+          "action": "Commit, then follow the `verify` reference at that exact commit. It runs with scope `docs`: its `build` reference is decided not applicable (no build_command), `hosted-ci` follows the repository's policy, and its checks run the gate commands once."
+        },
+        {
+          "id": "record",
+          "action": "Record this execution with the base and commit, the file classification, the claim checks, the escalation decision (none needed), and `children` linking the verify execution. Its outcome is `succeeded` only if every file was applicable, every claim held and the verify child is verified."
+        },
+        {
+          "id": "report",
+          "action": "Report the result as documentation verification of that commit at scope `docs`, never as verification of the commit."
+        }
+      ]
+    },
+    "references": [
+      {
+        "name": "verify",
+        "procedure_id": "dev.change.verify",
+        "version_policy": {
+          "pin": 4
+        },
+        "inputs": {
+          "scope": {
+            "input": "scope"
+          },
+          "gate_commands": {
+            "input": "gate_commands"
+          },
+          "working_tree": {
+            "input": "working_tree"
+          }
+        }
+      }
+    ],
+    "revision_reason": "Initial version, created for #65 (refs #62): the #62 baseline verified a one-paragraph documentation fix with the full gate, building the binaries seven times and running every Go test three times (440 s of 679 s), none of which could detect a wrong sentence or a broken link."
+  }
+}

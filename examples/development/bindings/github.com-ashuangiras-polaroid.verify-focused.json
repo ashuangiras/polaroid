@@ -1,0 +1,22 @@
+{
+  "repository": "github.com/ashuangiras/polaroid",
+  "name": "verify-focused",
+  "procedure_id": "polaroid.change.focused",
+  "revision": {
+    "inputs": {
+      "scope": "focused",
+      "build_command": "make build",
+      "artifacts": [
+        "bin/polaroidd",
+        "bin/polaroid"
+      ],
+      "gate_commands": [
+        "make focused PKGS='{packages}'"
+      ]
+    },
+    "version_policy": {
+      "contextual": {}
+    },
+    "revision_reason": "Bounded code changes with focused regression coverage (#65): every offline check, with the tests of the affected packages only; packages is set at run time. Not full verification."
+  }
+}

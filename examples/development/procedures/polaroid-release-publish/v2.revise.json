@@ -1,0 +1,117 @@
+{
+  "base_version": 1,
+  "version": {
+    "philosophy": "A release is evidence for an independent reviewer: its assets must come from one merged, verified commit, never replace a published version, and be checked again after download exactly as a reviewer would. Upgrading the shared instance is a separate decision: a release whose binaries did not change gives the instance nothing.",
+    "method": "Tag the merged commit whose tree is the verified one, let the release workflow package, test, publish and re-test, then download the assets without credentials, check them independently and follow the archive reference on this host; decide the upgrade reference from what changed since the running build.",
+    "goal": "Publish a Polaroid prerelease from merged main with the existing release workflow, and verify the downloadable assets independently.",
+    "applicability": {
+      "repository": "github.com/ashuangiras/polaroid"
+    },
+    "contract": {
+      "inputs": {
+        "tag": "The new prerelease tag, vX.Y.Z-label; it must not exist yet.",
+        "platform": "This host's os/arch, passed to the archive reference.",
+        "endpoint": "The shared instance's base URL, passed to the upgrade reference.",
+        "catalog": "The shared instance's database, passed to the upgrade reference.",
+        "binaries_from": "Where the upgrade would take its binaries: the published archive for this host.",
+        "build_commit": "The tagged commit, passed to the upgrade reference."
+      },
+      "preconditions": [
+        "The change is merged to main and its implementation commit is verified; the merged commit's tree equals the verified tree (git rev-parse C^{tree}).",
+        "The verified commit meets the repository's hosted-CI policy (its `hosted-ci` binding): under `local-only`, as for Polaroid, its local verification through `verify-change` is the evidence and no hosted CI is awaited; under `required`, CI passed at that commit."
+      ],
+      "expected_outcome": "A new prerelease exists for tag, with the four archives, SHA256SUMS and build-manifest.json; earlier releases are untouched; the manifest names the tagged commit; every job of the release run passed; the downloaded assets match SHA256SUMS; the archive check passed on this host; the upgrade reference has a recorded decision.",
+      "verification": [
+        "gh release view tag shows a prerelease with exactly the six assets; the previous release's assets and publish time are unchanged.",
+        "Downloaded without credentials: shasum -c SHA256SUMS is OK for every archive, and build-manifest.json source.commit equals the tag's commit.",
+        "The release run's jobs, including the published-asset test, passed; their smoke-test summaries are recorded.",
+        "The archive child (assets published) is verified at the tag's commit."
+      ],
+      "boundaries": [
+        "Never deletes, replaces or re-uploads a published release or asset; a defect gets a new tag.",
+        "Never tags a commit that is not on main.",
+        "Upgrades the shared instance only through the upgrade reference (polaroid.service.manage).",
+        "Runs only when the owner asks for a release. Completing, verifying or merging a development change never publishes one."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "commit",
+          "action": "Find the merged commit on main whose tree equals the verified commit's tree. Read the repository's `hosted-ci` binding: under `local-only`, cite the verified commit's `verify-change` execution; under `required`, confirm hosted CI passed at the merged commit."
+        },
+        {
+          "id": "tag",
+          "action": "Create an annotated tag at that commit with release notes for the change, and push only that tag.",
+          "escalate_when": "The tag or its release already exists: choose the next label, never replace."
+        },
+        {
+          "id": "workflow",
+          "action": "Wait for the release run to complete, once and bounded (for example `timeout 2700 gh run watch RUN --exit-status`): every job must pass, including the archive tests, publish and the published-asset test. A release is never reported before its run finished.",
+          "done_when": "The run ID and each job's result are recorded."
+        },
+        {
+          "id": "independent",
+          "action": "Download every asset without credentials; check SHA256SUMS, the manifest's commit and the archive listing, and scan for private paths, credentials and database files."
+        },
+        {
+          "id": "archive",
+          "action": "Follow the archive reference with the downloaded archive for this host (assets published).",
+          "required_by": "ADR-0028: a release is checked as a reviewer receives it."
+        },
+        {
+          "id": "upgrade",
+          "action": "Decide whether the shared instance should run the new build: it applies when the binaries' behaviour or the schema changed since the build it runs. Follow the upgrade reference if it applies; otherwise record why not.",
+          "when": "The upgrade reference's condition holds."
+        },
+        {
+          "id": "record",
+          "action": "Record this execution with the tag, release URL, run ID and job results, the checksums, the manifest commit, the scan, the children and the upgrade decision."
+        }
+      ]
+    },
+    "references": [
+      {
+        "name": "archive",
+        "procedure_id": "polaroid.archive.check",
+        "version_policy": {
+          "contextual": {}
+        },
+        "inputs": {
+          "platform": {
+            "input": "platform"
+          },
+          "assets": {
+            "value": "published"
+          }
+        }
+      },
+      {
+        "name": "upgrade",
+        "procedure_id": "polaroid.service.manage",
+        "version_policy": {
+          "contextual": {}
+        },
+        "inputs": {
+          "operation": {
+            "value": "upgrade"
+          },
+          "endpoint": {
+            "input": "endpoint"
+          },
+          "catalog": {
+            "input": "catalog"
+          },
+          "binaries_from": {
+            "input": "binaries_from"
+          },
+          "build_commit": {
+            "input": "build_commit"
+          }
+        },
+        "condition": "The owner asked for the shared instance to run this release, and the release changes what it runs: Go code built into polaroid or polaroidd, or a migration, changed since the build the instance runs. Changes only to packaging scripts, the archive's smoke test, workflows or documentation do not."
+      }
+    ],
+    "revision_reason": "#65 (refs #62): Polaroid's hosted-CI policy is local-only (GitHub Free), recorded as its `hosted-ci` binding, and CI no longer runs on pushes to main, so the commit step cites the local verification instead of CI on main. Publishing still waits for the release run's packaging, archive tests and publication. A release, and the upgrade of the shared instance, happen only when the owner asks; development completion never triggers them."
+  }
+}

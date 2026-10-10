@@ -30,13 +30,13 @@
 # Finally it restarts the daemon and confirms every record is unchanged, and
 # upgrades a database written at schema version 6.
 #
-# Usage: scripts/demo.sh   (run `make build` first, or use `make demo`; needs jq and sqlite3)
+# Usage: scripts/demo.sh   (or `make demo`; needs jq and sqlite3)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 command -v jq >/dev/null 2>&1 || { echo "demo: jq is required" >&2; exit 1; }
 command -v sqlite3 >/dev/null 2>&1 || { echo "demo: sqlite3 is required" >&2; exit 1; }
-[[ -x bin/polaroidd && -x bin/polaroid ]] || { echo "demo: run 'make build' first" >&2; exit 1; }
+make -s binaries
 
 example=examples/procedures/go-dependency-add
 work="$(mktemp -d)"
@@ -247,20 +247,23 @@ expect_combinations() {
 }
 
 # stage NAME DIR:N...: a copy of $dev as it was at an earlier change, with
-# only the listed procedures, each up to version N, and the bindings, but no
-# repositories or origins, which came later (#35).
+# only the listed procedures, each up to version N, and the bindings of those
+# procedures, but no repositories or origins, which came later (#35).
 stage() {
-	local out="$work/development-$1" spec name n f v
+	local out="$work/development-$1" spec name n f v keys=()
 	shift
-	mkdir -p "$out/procedures"
-	cp -R "$dev/bindings" "$out/bindings"
+	mkdir -p "$out/procedures" "$out/bindings"
 	for spec in "$@"; do
 		name=${spec%:*} n=${spec#*:}
+		keys+=("$(jq -r .canonical_key "$dev/procedures/$name/v1.create.json")")
 		mkdir -p "$out/procedures/$name"
 		for f in "$dev/procedures/$name"/v*.json; do
 			v="$(basename "$f")" && v=${v#v} && v=${v%%.*}
 			if ((v <= n)); then cp "$f" "$out/procedures/$name/"; fi
 		done
+	done
+	for f in "$dev"/bindings/*.json; do
+		if printf '%s\n' "${keys[@]}" | grep -qxF "$(jq -r .procedure_id "$f")"; then cp "$f" "$out/bindings/"; fi
 	done
 	echo "$out"
 }
@@ -553,15 +556,25 @@ jq -e --argjson v2 "$verify_v2" '.applicability == {shared: {}} and (.goal | len
 	<<<"$(bin/polaroid get-version "$verify_id" 3)" >/dev/null || fail "dev.change.verify version 3 is not version 2 classified as shared"
 store="$(bin/polaroid list)"
 [[ "$(scripts/load-fixtures.sh "$dev" 2>/dev/null)" == "$full" && "$(bin/polaroid list)" == "$store" ]] || fail "loading $dev again changed the store"
-[[ "$(bin/polaroid list scope=shared | jq -r '[.procedures[].canonical_key] | join(" ")')" == "dev.change.verify go.module.build go.module.checks go.test.run" ]] ||
-	fail "unexpected shared procedures: $(bin/polaroid list scope=shared)"
-[[ "$(bin/polaroid list "repository=$dev_repo" scope=local | jq -r '[.procedures[].canonical_key] | join(" ")')" == "polaroid.archive.check polaroid.catalog.migrate polaroid.lifecycle.check polaroid.operations.change polaroid.packaging.change polaroid.record-model.change polaroid.release.publish polaroid.service.manage" ]] ||
-	fail "Polaroid's local procedures are not the eight expected: $(bin/polaroid list "repository=$dev_repo" scope=local)"
+# fixture_keys SCOPE: the canonical keys whose latest fixture version has that scope.
+fixture_keys() {
+	local d latest
+	for d in "$dev"/procedures/*/; do
+		latest="$(find "$d" -name 'v*.json' | sort -V | tail -1)"
+		if jq -e --arg s "$1" '.version.applicability | has($s)' "$latest" >/dev/null; then jq -r .canonical_key "$d/v1.create.json"; fi
+	done | LC_ALL=C sort | paste -sd ' ' -
+}
+shared_keys="$({ fixture_keys shared | tr ' ' '\n'; echo go.test.run; } | LC_ALL=C sort | paste -sd ' ' -)"
+local_keys="$(fixture_keys repository)"
+[[ "$(bin/polaroid list scope=shared | jq -r '[.procedures[].canonical_key] | join(" ")')" == "$shared_keys" ]] ||
+	fail "the shared procedures are not $shared_keys: $(bin/polaroid list scope=shared)"
+[[ "$(bin/polaroid list "repository=$dev_repo" scope=local | jq -r '[.procedures[].canonical_key] | join(" ")')" == "$local_keys" ]] ||
+	fail "Polaroid's local procedures are not the fixtures' $local_keys: $(bin/polaroid list "repository=$dev_repo" scope=local)"
 bin/polaroid list repository=example.com/fixtures/go-service | jq -e 'all(.procedures[]; .scope != "local")' >/dev/null ||
 	fail "Polaroid's local procedures are offered to another repository"
 jq -e --arg r "$(jq -r --arg r "$dev_repo" '.repositories[$r]' <<<"$full")" '.origin.repository_id == $r' <<<"$(bin/polaroid get "$record_model_id")" >/dev/null ||
 	fail "polaroid.record-model.change has no origin in $dev_repo"
-echo "dev.change.verify version 3 is version 2 declared shared; a second load changed nothing; polaroid.record-model.change, polaroid.catalog.migrate, polaroid.lifecycle.check, polaroid.service.manage, polaroid.archive.check, polaroid.packaging.change, polaroid.release.publish and polaroid.operations.change are local to $dev_repo"
+echo "dev.change.verify version 3 is version 2 declared shared; a second load changed nothing; shared: $shared_keys; local to $dev_repo: $local_keys"
 echo "a new version without evidence does not move selection: the evidenced versions stay selected"
 expect_dev_target "$dev_commit" "root@2 true $parent_c
 build@1 true $build_c
@@ -601,7 +614,8 @@ if refused37="$(bin/polaroid list limit=1 scope=shared after="$(jq -r .next <<<"
 jq -e '.error.fields[0].field == "after"' <<<"$refused37" >/dev/null || fail "unexpected refusal: $refused37"
 echo "2. a snapshot traversal returned the $(jq length <<<"$before37") procedures of its first page, though two were created meanwhile (one before its cursor); a cursor reused with other parameters is refused"
 
-[[ "$(bin/polaroid get "$verify_id" | jq -c '[.scope] + [.versions[].scope]')" == '["shared","unspecified","unspecified","shared"]' ]] || fail "dev.change.verify scope labels"
+verify_scopes="$(for f in $(find "$dev/procedures/dev-change-verify" -name 'v*.json' | sort -V); do jq -r '.version.applicability // {unspecified: {}} | keys[0]' "$f"; done | jq -Rsc 'split("\n")[:-1] | [.[-1]] + .')"
+[[ "$(bin/polaroid get "$verify_id" | jq -c '[.scope] + [.versions[].scope]')" == "$verify_scopes" ]] || fail "dev.change.verify scope labels are not $verify_scopes"
 [[ "$(bin/polaroid resolve "$dev_binding" demo.ci "$dev_commit" "$dev_inputs" | jq -r '"\(.graph.version) \(.graph.scope)"')" == "2 unspecified" ]] ||
 	fail "resolution does not report the selected version's own scope"
 echo "3. dev.change.verify is listed as shared (version 3), but resolution selects version 2, whose own scope is unspecified"

@@ -1,6 +1,6 @@
 # 0028. Prerelease verification builds published from tags on main
 
-**Status:** Accepted.
+**Status:** Accepted. **Amended:** 2026-10-10 by [ADR-0031](0031-scoped-verification-and-local-only-ci.md): the release workflow's dry run is dispatched by hand, not started by pull requests.
 **Date:** 2026-10-10
 
 ## Context

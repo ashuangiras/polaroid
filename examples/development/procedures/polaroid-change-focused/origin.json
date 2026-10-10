@@ -1,0 +1,4 @@
+{
+  "repository_id": "github.com/ashuangiras/polaroid",
+  "reason": "Created in Polaroid during #65: bounded code changes had no verification narrower than the full gate."
+}
