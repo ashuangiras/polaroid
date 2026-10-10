@@ -16,7 +16,7 @@ import (
 func Listener(port int) (Process, error) {
 	inodes := map[string]bool{}
 	for _, table := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
-		f, err := os.Open(table)
+		f, err := os.Open(table) //nolint:gosec // one of the two fixed /proc tables
 		if err != nil {
 			continue
 		}
@@ -49,7 +49,7 @@ func Listener(port int) (Process, error) {
 		for _, fd := range fds {
 			if target, err := os.Readlink(filepath.Join(dir, "fd", fd.Name())); err == nil && inodes[target] {
 				pid, _ := strconv.Atoi(filepath.Base(dir))
-				comm, _ := os.ReadFile(filepath.Join(dir, "comm"))
+				comm, _ := os.ReadFile(filepath.Join(dir, "comm")) //nolint:gosec // /proc/PID/comm of a process found above
 				return Process{PID: pid, Command: strings.TrimSpace(string(comm))}, nil
 			}
 		}
