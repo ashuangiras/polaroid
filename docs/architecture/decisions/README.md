@@ -29,5 +29,6 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0023](0023-pagination-guarantees-and-scope-labels.md) | Lists are live traversals with bound cursors; discovery can page a snapshot; every version names its scope | Accepted |
 | [0024](0024-child-inputs-follow-the-reference-mapping.md) | A child execution must have run with the inputs its reference maps | Accepted |
 | [0025](0025-per-user-default-database.md) | The default database is per-user, in ~/.polaroid | Accepted |
+| [0026](0026-per-user-installation-and-managed-service.md) | Per-user installation and a managed service: launchd on macOS, systemd user services on Linux | Accepted |
 
 Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.
