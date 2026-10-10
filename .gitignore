@@ -10,3 +10,4 @@
 *.out
 *.test
 *.prof
+/dist/
