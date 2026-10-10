@@ -33,5 +33,6 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0027](0027-install-stages-its-source.md) | Install stages its source first; binary recovery is separate from data restore | Accepted |
 | [0028](0028-prerelease-verification-builds.md) | Prerelease verification builds published from tags on main | Accepted |
 | [0029](0029-conditional-references-and-applicability-decisions.md) | Conditional references and recorded applicability decisions | Accepted |
+| [0030](0030-catalog-backup-and-restore.md) | Catalog backup, inspection and restore with the packaged binaries | Accepted |
 
 Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.
