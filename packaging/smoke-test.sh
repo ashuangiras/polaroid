@@ -21,6 +21,8 @@ DIR=$(cd "$(dirname "$0")" && pwd)
 P="$DIR/polaroid"
 PD="$DIR/polaroidd"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/polaroid-smoke.XXXXXX") || exit 2
+# polaroidd logs -db as a clean absolute path, so name it that way: TMPDIR may end in /, hold //, be relative or a symlink.
+WORK=$(cd "$WORK" && pwd -P) || exit 2
 DB="$WORK/data/smoke.db"
 ISOLATED_HOME="$WORK/home"
 mkdir -p "$WORK/data" "$ISOLATED_HOME"
@@ -113,7 +115,9 @@ if ! start_daemon; then
 fi
 ok "polaroidd listens on $URL with -db $DB"
 check "the address is loopback" contains "$URL" "http://127.0.0.1:"
-check "the start-up line names the temporary database" grep -qF "db=$DB db_source=flag" "$WORK/daemon.log"
+# slog writes the value bare, or in double quotes with \ and " escaped when it holds a space, = or quote.
+DB_QUOTED=\"$(printf '%s' "$DB" | sed 's/[\\"]/\\&/g')\"
+check "the start-up line names the temporary database" grep -qF -e "db=$DB db_source=flag" -e "db=$DB_QUOTED db_source=flag" "$WORK/daemon.log"
 check "GET /healthz answers" curl -sf "$URL/healthz"
 check "polaroid health succeeds" cli health
 

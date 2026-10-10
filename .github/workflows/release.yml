@@ -14,6 +14,7 @@ on:
     paths:
       - .github/workflows/release.yml
       - scripts/package.sh
+      - scripts/smoke-archive-check.sh
       - packaging/**
       - internal/version/**
   workflow_dispatch:
@@ -76,6 +77,7 @@ jobs:
         run: |
           scripts/package.sh "$TAG" dist
           cp "$RUNNER_TEMP/tag-message.md" dist-notes.md
+          mkdir release-tests && cp scripts/smoke-archive-check.sh release-tests/
           cat dist/SHA256SUMS dist/build-manifest.json
 
       - name: Keep the assets for the test and publish jobs
@@ -85,6 +87,7 @@ jobs:
           path: |
             dist/
             dist-notes.md
+            release-tests/
           if-no-files-found: error
           retention-days: 30
 
@@ -141,6 +144,10 @@ jobs:
           done
           run ./smoke-test.sh
           [[ -z $(ls -A "$home") ]] || { echo "::error::the smoke test wrote to HOME"; exit 1; }
+          echo "ARCHIVE_DIR=$review/$name" >>"$GITHUB_ENV"
+
+      - name: Smoke-test the archive under the platform's normal TMPDIR and a path with spaces, and its cleanup after failures (#52)
+        run: bash staged/release-tests/smoke-archive-check.sh "$ARCHIVE_DIR"
 
   test-without-systemd:
     name: test linux/amd64 archive in a container without systemd (Alpine)
@@ -216,7 +223,7 @@ jobs:
             echo "| darwin/amd64 | \`polaroid_${TAG}_darwin_amd64.tar.gz\` | Natively on macos-15-intel |"
             echo "| darwin/arm64 | \`polaroid_${TAG}_darwin_arm64.tar.gz\` | Natively on macos-latest (arm64) |"
             echo
-            echo "Each test verified \`SHA256SUMS\`, extracted the archive, checked both binaries' reported version and commit, and ran the archive's \`smoke-test.sh\` with no checkout, no Go and an empty \`HOME\`. After publishing, the same run downloads the published assets, compares them with the tested ones and repeats the linux/amd64 test (job \"test the published assets\")."
+            echo "Each test verified \`SHA256SUMS\`, extracted the archive, checked both binaries' reported version and commit, and ran the archive's \`smoke-test.sh\` with no checkout, no Go and an empty \`HOME\`: with the runner's temporary directory, with the platform's normal \`TMPDIR\` (on macOS the per-user directory, which ends in \`/\`), and with a \`TMPDIR\` containing spaces. It also checked that the script reports a failing daemon or check and still cleans up. After publishing, the same run downloads the published assets, compares them with the tested ones and repeats the linux/amd64 test (job \"test the published assets\")."
             echo
             echo "\`SHA256SUMS\` covers every archive. \`build-manifest.json\` gives the full commit, version, Go toolchain, targets and per-asset hashes."
             echo
@@ -282,3 +289,4 @@ jobs:
           mkdir -p "$tools"
           for t in sh curl mktemp mkdir rm ls cat sed grep head sleep dirname; do ln -s "$(command -v "$t")" "$tools/$t"; done
           env -i PATH="$tools" HOME="$home" TMPDIR="$RUNNER_TEMP" ./smoke-test.sh
+          bash ../../staged/release-tests/smoke-archive-check.sh .
