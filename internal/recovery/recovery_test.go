@@ -402,6 +402,18 @@ func TestRestoreFailuresLeaveTheCatalogUnchanged(t *testing.T) {
 			t.Errorf("recovery backup after a failed replacement: %+v", r)
 		}
 	})
+	t.Run("the backup changes after it was inspected", func(t *testing.T) {
+		backupDB := filepath.Join(b.Path, DatabaseFile)
+		original := readFile(t, backupDB)
+		afterPlan = func() {
+			damaged := append([]byte(nil), original...)
+			damaged[len(damaged)-1] ^= 0xff
+			writeFile(t, backupDB, damaged)
+		}
+		defer func() { afterPlan = func() {}; writeFile(t, backupDB, original) }()
+		res, err := Restore(ctx, req)
+		unchanged(t, res, err, "differs from the backup's")
+	})
 	t.Run("an unmanaged catalog that may be open", func(t *testing.T) {
 		writeFile(t, path+"-wal", nil)
 		defer func() { _ = os.Remove(path + "-wal") }()

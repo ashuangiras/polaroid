@@ -91,10 +91,12 @@ const (
 	RolledBack = "rolled-back"
 )
 
-// File operations, replaceable by tests to inject failures.
+// File operations, replaceable by tests to inject failures; afterPlan lets
+// tests change files between the plan and the staging.
 var (
 	linkFile   = os.Link
 	renameFile = os.Rename
+	afterPlan  = func() {}
 )
 
 // MakePlan reports what Restore would do, and what blocks it, without
@@ -198,6 +200,7 @@ func Restore(ctx context.Context, req RestoreRequest) (Result, error) {
 	if p.RequiresReplace && !req.Replace {
 		return res, ErrConfirmationRequired
 	}
+	afterPlan()
 	dest := p.Destination.Path
 	dir := filepath.Dir(dest)
 	stamp := now().UTC().Format("20060102T150405Z")
