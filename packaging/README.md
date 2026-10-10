@@ -92,7 +92,7 @@ For a real installation, run `./polaroid install -from .` with your normal `HOME
 ```
 
 - **Going back to a previous build:** `polaroid install -from ~/.local/state/polaroid/previous`. This is binary recovery: it keeps the current catalog, and an older `polaroidd` refuses a catalog whose schema a newer build upgraded.
-- **Restoring a backup** is a separate operation that loses the records written after it. Polaroid never does it automatically. Plan it with `polaroid restore -plan BACKUP`, then run `polaroid restore -replace BACKUP`: it keeps a recovery backup of the current catalog, stops and restarts the managed service, and puts the original back if the restored catalog does not start ([details](https://github.com/ashuangiras/polaroid#back-up-and-restore-the-catalog)). Rehearse it first on a copy with `-db /tmp/copy.db`.
+- **Restoring a backup** is a separate operation that loses the records written after it. Polaroid never does it automatically. Plan it with `polaroid restore -plan BACKUP`, then run `polaroid restore -replace BACKUP`: it keeps a recovery backup of the current catalog, stops and restarts the managed service, and puts the original back if the restored catalog does not start and the failed daemon is confirmed stopped. Otherwise it changes nothing more and reports `rollback-blocked` with the recovery steps ([details](https://github.com/ashuangiras/polaroid#back-up-and-restore-the-catalog)). Rehearse it first on a copy with `-db /tmp/copy.db`.
 
 ## Limitations
 

@@ -1,7 +1,7 @@
 # 0030. Catalog backup, inspection and restore
 
 **Status:** Accepted. Extends [ADR-0025](0025-per-user-default-database.md) and [ADR-0026](0026-per-user-installation-and-managed-service.md); changes the `cmd/polaroid` boundary of [overview.md](../overview.md).
-**Date:** 2026-10-10
+**Date:** 2026-10-10. **Amended:** 2026-10-10 by [#59](https://github.com/ashuangiras/polaroid/issues/59): a failed restart rolls back only after shutdown is confirmed, and otherwise reports `rollback-blocked` (see Failures).
 
 ## Context
 
@@ -64,7 +64,13 @@ Exit status: 0 valid, 1 invalid.
   7. On success, remove the hard link. The recovery backup stays.
 - **Failures:**
   - Any failure before step 5 leaves the catalog unchanged. The service is restarted if this run stopped it.
-  - If the restart fails, the restored file is kept as `<db>.failed-restore-<time>`. The original is renamed back, and the service is started again. The command reports the original, the failed copy and the recovery backup.
+  - If the restart fails, the run rolls back only when it can confirm that no process still has the restored catalog open ([#59](https://github.com/ashuangiras/polaroid/issues/59)). A failed start proves nothing: `polaroid` stops a daemon that did not become healthy, but that stop can fail too.
+    - **The boundary:** before any rollback file operation, it calls the lifecycle `Stop` again, which is bounded by `-wait`. It then requires all of these: the stop succeeded; the service reports `stopped`; no other process holds the endpoint; no `-wal` or `-shm` file is beside the catalog; and the caller's context has not expired.
+    - **Confirmed:** the restored file is kept as `<db>.failed-restore-<time>`, the original is renamed back, and the service is started on it. The outcome is `rolled-back`, even if that start fails too. The command reports the failed copy and the recovery backup.
+    - **Not confirmed:** nothing is linked, renamed or removed, and no sidecar is deleted. The restored catalog stays at the destination, the original at `<db>.pre-restore-<time>`, and the recovery backup in `DIR`. The outcome is `rollback-blocked`, with exit status 1. The result names `original`, `kept`, the service status and `manual_recovery`:
+      1. Stop every process using the catalog.
+      2. Keep the restored catalog and fix its start, or restore the recovery backup with `polaroid restore -replace`.
+      3. Remove `<db>.pre-restore-<time>` only afterwards.
 - **History:** restoring replaces everything written after the snapshot. Those records survive only in the recovery backup. Records are never merged, and stored rows are never edited.
 
 ## Consequences

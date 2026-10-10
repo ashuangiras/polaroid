@@ -208,7 +208,18 @@ polaroid restore -replace ~/.polaroid/backups/polaroid-20261010T120000Z  # repla
   - It refuses an invalid backup, a backup whose schema is newer than this `polaroid` supports, a destination whose schema is newer (that would be a downgrade), and an existing catalog without `-replace`. An older backup is migrated on the staged copy, and the plan says so.
   - **Offline.** The managed catalog is taken offline through the service: a `running` service is stopped and started again afterwards; any other state (`failed`, `starting`, an endpoint held by a process the installation does not own) is refused. Any other catalog must already be offline: a `-wal` or `-shm` file beside it is refused. That check is advisory: it cannot stop a process from opening the file during the restore.
   - **Order.** Stage and validate a copy beside the catalog; stop the managed service; take and validate a `pre-restore` recovery backup of the current catalog into `DIR` (on failure nothing is replaced); keep the current file as `<db>.pre-restore-<time>`; atomically rename the staged `0600` file over the catalog; start the service and wait until it is healthy (`-wait`, 30s by default); remove `<db>.pre-restore-<time>`. The JSON names the `recovery_backup`.
-  - **Rollback.** If the service does not start on the restored catalog, the restored file is kept as `<db>.failed-restore-<time>`, the original is put back and the service is started again; the outcome is `rolled-back` and exit 1.
+  - **Rollback.** If the service does not start on the restored catalog, `restore` stops it again and rolls back only once shutdown is confirmed. Confirmed means:
+    - the lifecycle stop succeeded within `-wait`;
+    - `status` reports `stopped`;
+    - no other process holds the endpoint;
+    - no `-wal` or `-shm` remains beside the catalog.
+
+    A failed start alone is no proof: the daemon may still be running with the restored catalog open.
+    - **Confirmed:** the restored file is kept as `<db>.failed-restore-<time>`, the original is put back and the service is started on it. The outcome is `rolled-back`, exit 1.
+    - **Not confirmed:** nothing is renamed or removed, and no `-wal`/`-shm` file is deleted. The outcome is `rollback-blocked`, exit 1. The restored catalog stays at `<db>`, the replaced one at `original` (`<db>.pre-restore-<time>`), and the `recovery_backup` stays valid. `manual_recovery` lists the steps:
+      1. Stop every process using the catalog: `polaroid stop` until `polaroid status` reports `stopped`, and stop any process the manager no longer tracks yourself (`lsof <db>` names it). Once nothing has the catalog open, `polaroid backup -db <db>` closes leftover `-wal`/`-shm` files cleanly.
+      2. Either fix the start and run `polaroid start` on the restored catalog, or go back with `polaroid restore -plan <recovery_backup>`, then `polaroid restore -replace <recovery_backup>`.
+      3. Remove `<db>.pre-restore-<time>` only afterwards.
   - **History.** Everything written after the snapshot is replaced, never merged; it survives in the recovery backup. To undo a restore, restore the recovery backup: `polaroid restore -replace <recovery_backup>`.
 
 **Crash and durability limits.** An interruption before the rename leaves the catalog unchanged, perhaps with a `.staging-*` or `.polaroid-restore-*` directory that is safe to delete. After it, the restored catalog is in place, the original is kept as `<db>.pre-restore-<time>` and the recovery backup exists; the service may be stopped, so run `polaroid start`. Files and directories are synced; on macOS `fsync` does not flush the drive's cache, so a power loss right after a backup or restore may lose it. Concurrent restores of one catalog are not coordinated.
