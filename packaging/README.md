@@ -41,7 +41,7 @@ Each prints one JSON object: `name`, `version` (the release tag), `revision` (th
 ./smoke-test.sh
 ```
 
-- **Needs:** a POSIX shell, `curl`, and `mktemp`, `sed`, `grep`, `tr`, `sleep`, `kill` and `ls`. No Go, no source checkout, no root and no service manager. It runs on Linux without systemd, for example in a minimal container.
+- **Needs:** a POSIX shell at `/bin/sh`, `curl`, and `mktemp`, `mkdir`, `rm`, `ls`, `cat`, `sed`, `grep`, `head`, `sleep` (fractional seconds) and `dirname`. No Go, no source checkout, no root and no service manager. It runs on Linux without systemd, for example in a minimal container.
 - **What it does:** it starts `polaroidd` directly with an explicitly named database in a new temporary directory, on `127.0.0.1` with a free port chosen by the kernel, and with `HOME` set to an empty temporary directory. Then it checks:
   - health;
   - procedure creation, retrieval and revision;

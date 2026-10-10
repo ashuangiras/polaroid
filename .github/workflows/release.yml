@@ -128,7 +128,11 @@ jobs:
           mkdir -p "$review" "$home"
           tar -xzf "$name.tar.gz" -C "$review"
           cd "$review/$name"
-          run() { env -i PATH=/usr/bin:/bin HOME="$home" TMPDIR="$RUNNER_TEMP" "$@"; }
+          # PATH holds exactly the smoke test's documented dependencies.
+          tools="$RUNNER_TEMP/tools"
+          mkdir -p "$tools"
+          for t in sh curl mktemp mkdir rm ls cat sed grep head sleep dirname; do ln -s "$(command -v "$t")" "$tools/$t"; done
+          run() { env -i PATH="$tools" HOME="$home" TMPDIR="$RUNNER_TEMP" "$@"; }
           ! run sh -c 'command -v go' || { echo "::error::go is on the test PATH"; exit 1; }
           for v in "$(run ./polaroid version)" "$(run ./polaroidd -version)"; do
             echo "$v"
@@ -274,4 +278,7 @@ jobs:
           mkdir -p "$home"
           tar -xzf "polaroid_${TAG}_linux_amd64.tar.gz"
           cd "polaroid_${TAG}_linux_amd64"
-          env -i PATH=/usr/bin:/bin HOME="$home" TMPDIR="$RUNNER_TEMP" ./smoke-test.sh
+          tools="$RUNNER_TEMP/tools"
+          mkdir -p "$tools"
+          for t in sh curl mktemp mkdir rm ls cat sed grep head sleep dirname; do ln -s "$(command -v "$t")" "$tools/$t"; done
+          env -i PATH="$tools" HOME="$home" TMPDIR="$RUNNER_TEMP" ./smoke-test.sh

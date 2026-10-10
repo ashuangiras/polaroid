@@ -5,8 +5,9 @@
 # create, get, revise, stale-base rejection, persistence across a restart and
 # one MCP tool call.
 #
-# Needs: a POSIX shell, curl, and mktemp, sed, grep, tr, sleep, kill and ls.
-# No Go, no source checkout, no root, no service manager.
+# Needs: a POSIX shell at /bin/sh, curl, and mktemp, mkdir, rm, ls, cat, sed,
+# grep, head, sleep (fractional seconds) and dirname. CI runs it with a PATH
+# holding only these. No Go, no source checkout, no root, no service manager.
 # It never registers a service, never reads or writes ~/.polaroid (the daemon
 # runs with HOME set to an empty temporary directory), and removes its
 # temporary directory at the end (set KEEP=1 to keep it for inspection).
