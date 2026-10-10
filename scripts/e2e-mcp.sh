@@ -24,6 +24,9 @@ REPORT=$OUT/MCP-REPORT.md
 BODY=$OUT/.mcp-body.md
 WORK="$(mktemp -d)"
 DB="$WORK/polaroid.db"
+# The daemon runs with this HOME, so it can never reach the real ~/.polaroid.
+mkdir -p "$WORK/home"
+unset POLAROID_DB
 TSDIR="${MCP_TS_DIR:-${TMPDIR:-/tmp}/polaroid-mcp-ts}"
 PROTO=2026-07-28
 COMMIT=0123456789abcdef0123456789abcdef01234567
@@ -81,7 +84,7 @@ start_daemon() {
 	local addr=""
 	starts=$((starts + 1))
 	LOG="$WORK/polaroidd.$starts.log"
-	bin/polaroidd -addr 127.0.0.1:0 -db "$DB" 2>"$LOG" &
+	HOME="$WORK/home" bin/polaroidd -addr 127.0.0.1:0 -db "$DB" 2>"$LOG" &
 	PID=$!
 	for _ in $(seq 1 100); do
 		addr="$(sed -n 's/.*msg="polaroidd listening" addr=\([^ ]*\).*/\1/p' "$LOG")"
@@ -90,7 +93,7 @@ start_daemon() {
 		sleep 0.1
 	done
 	URL="http://$addr"
-	md '```console' "\$ bin/polaroidd -addr 127.0.0.1:0 -db $DB &" "$(cat "$LOG")" '```'
+	md '```console' "\$ HOME=$WORK/home bin/polaroidd -addr 127.0.0.1:0 -db $DB &" "$(cat "$LOG")" '```'
 }
 stop_daemon() {
 	kill -TERM "$PID"

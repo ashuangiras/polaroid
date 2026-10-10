@@ -6,6 +6,7 @@
 //	polaroidd [-addr host:port] [-db path]
 //
 // Flags override the POLAROID_ADDR and POLAROID_DB environment variables.
+// Without either, the database is ~/.polaroid/data/polaroid.db (ADR-0025).
 // The daemon stops gracefully on SIGINT or SIGTERM.
 package main
 
@@ -32,13 +33,20 @@ import (
 
 const (
 	defaultAddr     = "127.0.0.1:7417"
-	defaultDBPath   = "polaroid.db"
 	shutdownTimeout = 10 * time.Second
 )
 
+// Where the database path came from, as logged at startup.
+const (
+	dbFromFlag    = "flag"
+	dbFromEnv     = "environment"
+	dbFromDefault = "default"
+)
+
 type config struct {
-	addr   string
-	dbPath string
+	addr     string
+	dbPath   string
+	dbSource string
 }
 
 func main() {
@@ -46,7 +54,7 @@ func main() {
 }
 
 func realMain() int {
-	cfg, err := parseConfig(os.Args[1:], os.Getenv, os.Stderr)
+	cfg, err := parseConfig(os.Args[1:], os.LookupEnv, os.UserHomeDir, os.Stderr)
 	if errors.Is(err, flag.ErrHelp) {
 		return 0
 	}
@@ -64,18 +72,19 @@ func realMain() int {
 	return 0
 }
 
-func parseConfig(args []string, getenv func(string) string, output io.Writer) (config, error) {
-	cfg := config{addr: defaultAddr, dbPath: defaultDBPath}
-	if v := getenv("POLAROID_ADDR"); v != "" {
+// parseConfig applies -db > POLAROID_DB > the per-user default. An empty -db
+// or set but empty POLAROID_DB is an error, so a mistyped variable never
+// selects the shared default.
+func parseConfig(args []string, lookupEnv func(string) (string, bool), userHomeDir func() (string, error), output io.Writer) (config, error) {
+	cfg := config{addr: defaultAddr}
+	if v, ok := lookupEnv("POLAROID_ADDR"); ok && v != "" {
 		cfg.addr = v
 	}
-	if v := getenv("POLAROID_DB"); v != "" {
-		cfg.dbPath = v
-	}
+	var dbFlag string
 	fs := flag.NewFlagSet("polaroidd", flag.ContinueOnError)
 	fs.SetOutput(output)
 	fs.StringVar(&cfg.addr, "addr", cfg.addr, "listen `address` (env POLAROID_ADDR)")
-	fs.StringVar(&cfg.dbPath, "db", cfg.dbPath, "SQLite database `file` (env POLAROID_DB)")
+	fs.StringVar(&dbFlag, "db", "", "SQLite database `file` (env POLAROID_DB; default ~/.polaroid/data/polaroid.db in the user's home directory)")
 	fs.Usage = func() {
 		fmt.Fprintln(output, "Usage: polaroidd [-addr host:port] [-db path]")
 		fs.PrintDefaults()
@@ -89,6 +98,25 @@ func parseConfig(args []string, getenv func(string) string, output io.Writer) (c
 	if _, _, err := net.SplitHostPort(cfg.addr); err != nil {
 		return config{}, fmt.Errorf("invalid listen address %q: %w", cfg.addr, err)
 	}
+	dbSet := false
+	fs.Visit(func(f *flag.Flag) { dbSet = dbSet || f.Name == "db" })
+	env, envSet := lookupEnv("POLAROID_DB")
+	switch {
+	case dbSet && dbFlag == "":
+		return config{}, errors.New("-db must not be empty")
+	case dbSet:
+		cfg.dbPath, cfg.dbSource = dbFlag, dbFromFlag
+	case envSet && env == "":
+		return config{}, errors.New("POLAROID_DB is set but empty: unset it to use ~/.polaroid/data/polaroid.db, or name a database file")
+	case envSet:
+		cfg.dbPath, cfg.dbSource = env, dbFromEnv
+	default:
+		path, err := defaultDBPath(userHomeDir)
+		if err != nil {
+			return config{}, err
+		}
+		cfg.dbPath, cfg.dbSource = path, dbFromDefault
+	}
 	return cfg, nil
 }
 
@@ -96,6 +124,15 @@ func parseConfig(args []string, getenv func(string) string, output io.Writer) (c
 // If ready is not nil it is called with the bound address once the server
 // accepts connections.
 func run(ctx context.Context, cfg config, logger *slog.Logger, ready func(net.Addr)) (err error) {
+	if cfg.dbSource == dbFromDefault {
+		exposed, err := prepareDefaultDB(cfg.dbPath)
+		if err != nil {
+			return err
+		}
+		for _, p := range exposed {
+			logger.Warn("the per-user database location is accessible to other users; polaroidd does not change existing permissions", "path", p)
+		}
+	}
 	store, err := sqlite.Open(ctx, cfg.dbPath)
 	if err != nil {
 		return err
@@ -136,7 +173,7 @@ func run(ctx context.Context, cfg config, logger *slog.Logger, ready func(net.Ad
 	if abs, err := filepath.Abs(dbPath); err == nil {
 		dbPath = abs
 	}
-	logger.Info("polaroidd listening", "addr", ln.Addr().String(), "db", dbPath)
+	logger.Info("polaroidd listening", "addr", ln.Addr().String(), "db", dbPath, "db_source", cfg.dbSource)
 	if ready != nil {
 		ready(ln.Addr())
 	}

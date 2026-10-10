@@ -1,7 +1,7 @@
 # Build output
 /bin/
 
-# Local databases (polaroidd defaults to ./polaroid.db) and SQLite WAL files
+# Local databases given with -db (the default is ~/.polaroid, outside the repository) and SQLite WAL files
 *.db
 *.db-shm
 *.db-wal
