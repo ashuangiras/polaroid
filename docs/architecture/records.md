@@ -57,6 +57,9 @@ A reference is a named use of another procedure by a version. It is part of the 
 | `procedure_id` | string | The target procedure, which must exist. |
 | `version_policy` | JSON object | The [binding policy type](#binding-revision-implemented): `{"pin": N}`, where the target must have version `N`, or `{"contextual": {}}`, resolved from evidence ([contextual resolution](#contextual-resolution-implemented)). |
 | `inputs` | JSON object | Required, and may be `{}`. Maps each child input name to exactly one source: `{"input": "<parent input name>"}` passes a parent input through, and `{"value": <any JSON>}` passes a literal. Stored compacted, otherwise as submitted. |
+| `condition` | string | Optional, not blank. Present: the reference is **conditional**, and the text says, for agents, when the referenced work applies. Absent: the reference is **required** ([ADR-0029](decisions/0029-conditional-references-and-applicability-decisions.md)). Never interpreted. |
+
+Conditional means conditional on applicability, not optional: when the condition holds, the work is required. Every reference stored before conditions existed is required.
 
 Polaroid validates the shape only. It does not check input names against either procedure's `contract`, which it never interprets. Field errors name the reference by position, for example `version.references[1].inputs.module`. An unknown target is `400` on `version.references[i].procedure_id`, and a missing pinned version is `400` on `version.references[i].version_policy.pin`. Every failing reference is listed.
 
@@ -162,6 +165,7 @@ An execution is an immutable record of one finished run, written once after the 
 | `outcome` | string | client | `succeeded` or `failed`. |
 | `evidence` | JSON object | client | Free-form and non-empty, for example commands with their exit codes, or links to external artifacts with digests. Limited only by the 1 MiB request size. |
 | `children` | list of `{reference, execution_id}` | client | Optional. The [child executions](#subprocedure-execution-implemented) that fulfilled the version's references, in the order given. Omitted from responses when there are none. |
+| `decisions` | list of `{reference, applicable, rationale, evidence}` | client | Optional. One [applicability decision](#applicability-decision-implemented) per conditional reference. Omitted from responses when there are none. |
 | `created_at` | RFC 3339 timestamp, UTC | server | |
 
 `environment.attributes`, `inputs` and `evidence` are stored like `contract`: compacted, but otherwise exactly as submitted.
@@ -180,15 +184,31 @@ A child execution is an ordinary execution that fulfilled one of a parent versio
 
 Each reference is fulfilled by at most one child, and none is required. Each execution is the child of at most one parent. Every violation is `400` naming `children[i].reference` or `children[i].execution_id`; an input mismatch's message gives the child's inputs and the mapped ones. Children may have children of their own, so a tree is recorded bottom-up. Links are written only in the parent's transaction and never change. The database enforces all of these rules too, except the input rule: a trigger cannot reproduce the canonical comparison, so a link written with direct SQL can break it. Such a link, like any stored before the rule, is still served unchanged, but it never verifies its parent ([below](#verification-implemented)).
 
+### Applicability decision (implemented)
+
+An execution records, for each conditional reference of its version, whether the referenced work applied to that run ([ADR-0029](decisions/0029-conditional-references-and-applicability-decisions.md)). Decisions are part of the execution, written with it and never changed.
+
+| Field | Type | Rules |
+| --- | --- | --- |
+| `reference` | string | A conditional reference of the version. At most one decision per reference. |
+| `applicable` | boolean | Required. `true`: the work applied, and a verified child is required. `false`: it did not, and no child may be linked for the reference. |
+| `rationale` | string | Required and not blank, for both answers: the basis of the decision, for example the files a change touched. |
+| `evidence` | JSON object | Optional supporting context, stored compacted and never interpreted. Omitted when absent. |
+
+- **Refused (`400` on `decisions[i]`):** a reference the version does not have; a required reference, which cannot be skipped and takes no decision; a duplicate; `applicable: false` with a child linked for the same reference.
+- **Accepted but never verified:** a missing decision, and an applicable decision without its child, so that failed and partial runs stay recordable. A skip is the decision itself: no child execution is recorded or fabricated for it.
+- **Trust boundary:** Polaroid checks the structure. Whether the condition held and whether the rationale is true are the recording agent's claims, kept for review. Polaroid never evaluates conditions or classifies tasks.
+- **Database:** constraints and triggers repeat the structural rules (one decision per reference, only for a conditional reference that exists, a non-blank rationale, an object `evidence`, no child for a reference decided not applicable in either insertion order, written only with the parent, never updated or deleted). UTF-8 and whitespace-only checks are the service's.
+
 ### Verification (implemented)
 
 Verification is derived from executions and their links on every read. Nothing is stored for it ([ADR-0012](decisions/0012-derived-verification.md)).
 
-- **Verified execution.** An execution is verified when it succeeded **and** every reference of its version is fulfilled by a linked child that ran with the inputs the reference maps and is itself verified, recursively. An execution of a version without references is verified when it succeeded. A parent without a child for some reference is never verified. Each direct reason is reported as `outcome_failed`, `missing_child`, `child_inputs_mismatch` (a stored link whose child's inputs differ from the mapped ones, [ADR-0024](decisions/0024-child-inputs-follow-the-reference-mapping.md)) or `child_not_verified`. A mismatched child that is itself unverified gets both of the last two, and every ancestor of an unverified execution is unverified. The same verification decides combination statuses, contextual selection and target verification.
+- **Verified execution.** An execution is verified when it succeeded **and** every reference of its version is fulfilled by a linked child that ran with the inputs the reference maps and is itself verified, recursively, except a conditional reference the execution [decided](#applicability-decision-implemented) not applicable. Every conditional reference needs a decision. An execution of a version without references is verified when it succeeded. A parent without a child for some required or applicable reference is never verified. Each direct reason is reported as `outcome_failed`, `missing_decision`, `missing_child`, `child_inputs_mismatch` (a stored link whose child's inputs differ from the mapped ones, [ADR-0024](decisions/0024-child-inputs-follow-the-reference-mapping.md)) or `child_not_verified`. A mismatched child that is itself unverified gets both of the last two, and every ancestor of an unverified execution is unverified. The same verification decides combination statuses, contextual selection and target verification.
 - **Combination.** An execution verifies one combination, made of these parts:
   - its repository **identity**, `commit` and `environment.name`. `environment.attributes` is not part of it. The identity of a registered identifier, canonical or alias, is its repository; an unregistered identifier is its own identity and matches only itself. Similar names, forks, equal commits or identical trees never make two identifiers one. A combination reports `repository` (the canonical identifier, or the unregistered identifier) and `repository_id` when registered ([ADR-0022](decisions/0022-repository-identity-in-evidence.md));
   - its `inputs` in canonical form: object members sorted, insignificant whitespace removed, and strings and non-integer numbers canonicalized as in RFC 8785. Integers are kept exact, so `1.0`, `1e0` and `1` are equal, but distinct large integers never are. Member order never matters, so equivalent inputs that arrive with their members in a different order, as some MCP clients send them, are the same combination. Array elements keep their order, so `[1, 2]` and `[2, 1]` are different inputs;
-  - its **child-version tree**: each linked child's reference name and version, with that child's own tree, in the version's reference order.
+  - its **child-version tree**: each linked child's reference name and version, with that child's own tree, and each conditional reference decided not applicable as `{"reference", "skipped": true}`, in the version's reference order. An execution that ran a conditional child and one that skipped it are different combinations; two skips with differently worded rationales are the same one.
 
   Success in one combination says nothing about another. Changing any child's version anywhere in the tree makes a new combination, which needs a fresh parent execution. Earlier executions stay with the combination they were recorded in.
 - **Status of a combination.** It is the verification of its **latest** execution, by `created_at` and then `id`, across every identifier of the identity. A failure after a success therefore makes the combination unverified until a newer execution succeeds, under whichever identifier either was recorded. Every execution remains listed in `execution_ids`.
@@ -201,7 +221,7 @@ Contextual references and contextual binding policies resolve from verification 
 - **Context:** a `repository` and an `environment` name. The commit and inputs are not part of it. The repository matches by identity.
 - **Verified in the context:** a version is verified in a context when its latest execution with that repository and environment is verified, whatever its commit and inputs. That execution is the version's *evidence*: selection evidence, not verification at any particular commit ([below](#selection-evidence-and-target-verification-implemented)).
 - **Selection:** the walk starts at the root, which carries its own evidence if it has any.
-  - **Under a node with evidence:** every reference selects the version of the child execution that the evidence linked for it, and that child execution becomes the child node's evidence. A verified combination is thus followed as a whole.
+  - **Under a node with evidence:** every reference selects the version of the child execution that the evidence linked for it, and that child execution becomes the child node's evidence. A verified combination is thus followed as a whole. A conditional reference the evidence decided not applicable has no child to follow: it selects as under a node without evidence, and the edge reports `skipped_by`, the evidence's ID ([ADR-0029](decisions/0029-conditional-references-and-applicability-decisions.md)).
   - **Under a node without evidence:**
     - a pinned reference selects its pin, with the pin's own evidence if any;
     - a contextual reference selects the **highest version number** verified in the context;
@@ -221,6 +241,7 @@ Resolution answers two different questions, and reports them separately ([ADR-00
   - its selected child-version tree, pins included.
 
   The status is that of the combination's latest execution, as for any [combination](#verification-implemented). With no execution there, the node is unverified. A child's success never verifies its parent, and a parent recorded with another child combination does not verify the selected one.
+- **Conditional references at a target.** The target names its own decisions, keyed by reference path (names from the root joined by `/`). A reference decided not applicable is expected skipped, and its subtree gets no target verification; an applicable one is expected executed. A node with an undecided conditional reference below it is unverified, lists the paths in `undecided` and looks up no execution: a target's applicability is never inferred from earlier runs, so a run that skipped work never verifies a target that decides the work applies ([ADR-0029](decisions/0029-conditional-references-and-applicability-decisions.md)). Graphs always show every reference and its condition.
 - **No inference.** Polaroid compares commits, environment names and canonical inputs exactly. It never inspects a checkout and never infers compatibility from ancestry, tree contents, branch names or time. Without a target, no node claims target verification. Working-tree state counts only as part of the inputs, where a procedure's contract puts it there (for example `working_tree` in [ADR-0017](decisions/0017-development-procedures-as-records.md)'s procedures).
 - **Selection is unchanged by a target**, and target verification never changes a recorded execution or its own verification.
 
@@ -247,6 +268,21 @@ A report without `subject`, including every report stored before subjects existe
 
 Reporting feedback changes no other record. The database enforces the field rules with `CHECK` constraints, checks that a subject exists with a trigger, and rejects `UPDATE` and `DELETE`.
 
+## Instruction steps (recommended convention)
+
+`instructions` is a free-form JSON object, and Polaroid never reads its members. This convention helps agents skip what does not apply and stop at the right point; procedures may adopt it, and nothing enforces it. A version lists `steps`, each an object:
+
+| Member | Meaning |
+| --- | --- |
+| `id`, `action` | A stable name and what to do. |
+| `when` | When the step is needed. Omit it for a step that is always needed. |
+| `required_by` | The repository policy or rule that makes the step mandatory whatever `when` says, for example `"AGENTS.md: make check before every change"`. |
+| `satisfied_when` | What already satisfies the step without doing it again, for example "the commit's build is already recorded and verified". |
+| `done_when` | The observable result that completes the step. |
+| `escalate_when` | When to stop and ask a person instead of continuing. |
+
+The agent judges each step against its task and states its judgment in the execution's `evidence`. Steps are not references, so Polaroid derives nothing from them. Work whose skipping must be recorded and must count for verification belongs in a [conditional reference](#subprocedure-reference-implemented), with a [decision](#applicability-decision-implemented) per run. Polaroid does not reuse earlier evidence for `satisfied_when`: an applicable reference still needs its own execution. The example procedures in `examples/task-aware/` follow this convention.
+
 ## Planned records (not implemented)
 
 No records are planned in the current increments. Later work (semantic discovery, access control, the PoC import) is listed in the [roadmap](../development/roadmap.md), and its records are designed when it is refined into issues.
@@ -258,3 +294,4 @@ No records are planned in the current increments. Later work (semantic discovery
 - Migration 7 ([#35](https://github.com/ashuangiras/polaroid/issues/35)) adds the repository registry, origins, `goal` and `applicability`, and the feedback subject columns. Existing versions read back unspecified, existing reports without a subject, and nothing is registered. Responses gain `scope` on procedures, and omit every absent new field, so existing versions, bindings, executions and reports are served as before. Requests that do not use the new fields behave as before, except that recording an execution, creating or revising a binding, or writing a version is refused where a declared applicability forbids it, which no stored version could declare before.
 - [#37](https://github.com/ashuangiras/polaroid/issues/37) has no migration. Responses add `scope` on every version and graph node, and `repository_id` on executions, selection evidence and combinations of registered identifiers. Derived verification and resolution now match evidence by repository identity: nothing changes for unregistered identifiers or repositories without aliases, while executions recorded under an alias join their repository's combinations, which may change those combinations' status, and whose `combination.repository` becomes the canonical identifier. No stored record changes.
 - [#39](https://github.com/ashuangiras/polaroid/issues/39) ([ADR-0024](decisions/0024-child-inputs-follow-the-reference-mapping.md)) has no migration, and it tightens one rule as a correctness fix, without a new API version: a child link the old rule accepted although its child ran with other inputs than the reference maps made a parent verified for work it never composed. Recording such a link is now `400` naming `children[i].execution_id`. Stored links, including any written that way earlier, read back unchanged, but their parents are no longer verified; they report `child_inputs_mismatch`, and their combinations, contextual selection and target verification change with them. Verification responses can carry the new problem code. The database does not enforce the rule.
+- Migration 8 ([#50](https://github.com/ashuangiras/polaroid/issues/50), [ADR-0029](decisions/0029-conditional-references-and-applicability-decisions.md)) adds `condition` to references (NULL: required, which every existing reference is) and the `execution_decisions` table. Every stored version, execution, verification, combination and selection reads back unchanged; the new fields are additive and omitted when absent.
