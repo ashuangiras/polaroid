@@ -1,0 +1,82 @@
+{
+  "canonical_key": "polaroid.catalog.migrate",
+  "version": {
+    "philosophy": "A catalog is append-only history that agents rely on. Moving it is a maintenance operation on a shared service: it is announced, it waits for active work, it never merges or replaces a catalog, it keeps every copy it started from, and it is judged by comparing what clients see before and after, not by trusting a file copy.",
+    "method": "Inventory over HTTP, stop the daemon, move the catalog with the repository's migration script (SQLite online backup, integrity check, private restore, refusal of an occupied destination), restart on the destination, and compare the inventory byte for byte.",
+    "goal": "Move a running Polaroid instance's catalog to its persistent per-user home, or another Polaroid home, without losing or changing any record or derived verification, and leave a recoverable source and backup.",
+    "applicability": {
+      "repository": "github.com/ashuangiras/polaroid"
+    },
+    "contract": {
+      "inputs": {
+        "source": "The database file the running instance serves, as found by inspecting the process, not as reported.",
+        "polaroid_home": "The destination Polaroid home; the per-user default is ~/.polaroid, which polaroidd uses without -db or POLAROID_DB.",
+        "endpoint": "The instance's base URL, for example http://127.0.0.1:7417.",
+        "script_commit": "The full commit of the repository whose scripts/migrate-catalog.sh and polaroidd build are used."
+      },
+      "preconditions": [
+        "A polaroidd build that supports the per-user default (ADR-0025) and the repository's scripts/migrate-catalog.sh at script_commit.",
+        "sqlite3, jq, curl and lsof available; permission to stop the shared instance briefly."
+      ],
+      "expected_outcome": "The instance serves the destination catalog, through the default location or an explicit path; every record and every derived verification read over HTTP is identical to before; the source and an integrity-checked backup are kept; no second writable catalog is served; launch commands and configuration no longer name the source.",
+      "verification": [
+        "The inventory (every procedure history, repository, binding, execution, feedback report, and the verification of every execution, plus representative target resolutions) is byte-identical before and after.",
+        "The script reports the same SQL dump digest for source, backup and destination, integrity_check ok, and destination mode 0600 on POSIX.",
+        "The restarted daemon's start-up line names the destination, and no process holds the source open.",
+        "MCP reads of representative records equal their HTTP reads."
+      ],
+      "boundaries": [
+        "Never replaces, merges or deletes a catalog: an occupied destination is reported and the procedure stops.",
+        "Never copies only the main database file; only the SQLite online backup through the script.",
+        "Never deletes the source or the backup.",
+        "Does not stop the instance while another operation is actively using it: defer the cutover.",
+        "No schema change, and no change to any record."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "identify",
+          "action": "Find the running instance: its process (ps, lsof: binary, working directory, open database, -wal and -shm files, parent), how it was launched (shell, service manager, editor task), its endpoint, and its log. The source is the database it actually has open. Check the destination, polaroid_home/data/polaroid.db and its -wal, -shm and -journal files: if any exists, stop and report it; never merge or replace."
+        },
+        {
+          "id": "active-work",
+          "action": "Check for active work: the newest execution and feedback times, the -wal file's modification time, and established connections to the endpoint. Announce the maintenance (for example on the work item) with the expected interruption. If something is actively writing, finish other work first and come back later."
+        },
+        {
+          "id": "inventory",
+          "action": "Read over HTTP into files: the procedure list and every procedure history, the repositories, the bindings of every repository, the execution list and every execution with its verification, the feedback list, and for each repository's bindings a resolution with a target commit and inputs that recorded executions verify. Record a digest of the files."
+        },
+        {
+          "id": "stop",
+          "action": "Stop the daemon with SIGTERM and wait until its process has exited and its log says it stopped. Confirm with lsof that no process holds the source or its -wal file."
+        },
+        {
+          "id": "migrate",
+          "action": "Run scripts/migrate-catalog.sh SOURCE [POLAROID_HOME] from the repository at script_commit. Exit 3 means the destination is occupied: stop and report. Keep its output: backup path, dump digest, destination mode and row counts."
+        },
+        {
+          "id": "restart",
+          "action": "Start polaroidd from a build kept apart from the data, without -db and POLAROID_DB for the per-user home (or with -db naming the destination), and confirm that its start-up line names the destination and db_source. Confirm with lsof that nothing holds the source, so only one writable catalog is served."
+        },
+        {
+          "id": "compare",
+          "action": "Repeat the inventory and compare it with the earlier one byte for byte. Read a few records over MCP and compare them with HTTP. On any difference, follow on-failure."
+        },
+        {
+          "id": "update",
+          "action": "Update every launch command, editor or service configuration and document that still starts the daemon on the source, so a restart selects the destination. Leave historical records as they are."
+        },
+        {
+          "id": "record",
+          "action": "Record this execution in the migrated catalog: the inputs, the process and launch found, the active-work check and announcement, the inventory digests, the script output, the restart line, the comparison, the updated launch commands, and the rollback command. Outcome succeeded only if every step held."
+        },
+        {
+          "id": "on-failure",
+          "action": "Roll back: stop the new daemon and start it with -db SOURCE. The source is unchanged, but lacks anything written to the destination since the restart. Keep the destination, the backup and the source for analysis; delete nothing."
+        }
+      ]
+    },
+    "revision_reason": "Initial version, for #41."
+  }
+}

@@ -1,0 +1,4 @@
+{
+  "repository_id": "github.com/ashuangiras/polaroid",
+  "reason": "Created in Polaroid during #41: no stored procedure covered moving a live catalog out of a build directory into the per-user home."
+}
