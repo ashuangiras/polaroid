@@ -62,6 +62,8 @@ Second-repository adoption trials are paused while the existing features are pre
 2. [#43 Per-user installation and managed service (launchd LaunchAgent, systemd user service)](https://github.com/ashuangiras/polaroid/issues/43) — **done** ([ADR-0026](../architecture/decisions/0026-per-user-installation-and-managed-service.md), [status](status.md))
 3. [#45 Recovery from previous/ reinstalls the failed build](https://github.com/ashuangiras/polaroid/issues/45) — **done** ([ADR-0027](../architecture/decisions/0027-install-stages-its-source.md))
 4. [#46 Downloadable prerelease verification builds with a repository-independent smoke test](https://github.com/ashuangiras/polaroid/issues/46) — **done** ([ADR-0028](../architecture/decisions/0028-prerelease-verification-builds.md))
+5. [#50 Conditional subprocedure references with recorded applicability decisions](https://github.com/ashuangiras/polaroid/issues/50) — **done** ([ADR-0029](../architecture/decisions/0029-conditional-references-and-applicability-decisions.md)), published as `v0.2.0-verify.1`
+6. [#52 smoke-test.sh fails one check on macOS when TMPDIR ends in /](https://github.com/ashuangiras/polaroid/issues/52) (fixes #46) — open
 
 ## Later (unordered, not yet scoped)
 
