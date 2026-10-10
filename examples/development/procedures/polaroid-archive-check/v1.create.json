@@ -1,0 +1,53 @@
+{
+  "canonical_key": "polaroid.archive.check",
+  "version": {
+    "philosophy": "Users receive archives, not the repository. A packaging check proves only what it runs against: the extracted archive and the script inside it, unmodified, in the temporary directories users actually have. A forced TMPDIR in the test environment hid #52 for two releases.",
+    "method": "Verify the archive against SHA256SUMS, check that build-manifest.json names the commit, extract it, check both binaries' version and revision, and run scripts/smoke-archive-check.sh against the extracted directory on a host of the archive's own OS and architecture, with no TMPDIR workaround.",
+    "goal": "Check one packaged release archive as users receive it: checksums, manifest commit, binary identity, and its own smoke-test.sh under the platform's normal temporary directory, a temporary directory with spaces, and failing runs that must still clean up.",
+    "applicability": {
+      "repository": "github.com/ashuangiras/polaroid"
+    },
+    "contract": {
+      "inputs": {
+        "platform": "The archive's os/arch, for example darwin/arm64; the host must be that platform (native, not emulated).",
+        "assets": "local: built with scripts/package.sh from a clean worktree of the commit, under a local-only tag that is deleted afterwards and never pushed; published: downloaded without credentials from the GitHub release."
+      },
+      "preconditions": [
+        "SHA256SUMS, build-manifest.json and the platform's archive, from the source the assets input names.",
+        "A native host for the platform; bash for the harness, and only smoke-test.sh's documented tools on the smoke test's PATH (the harness arranges it)."
+      ],
+      "expected_outcome": "The archive matches SHA256SUMS; the manifest's source.commit is the commit being checked; both binaries report it with modified false; scripts/smoke-archive-check.sh passes every scenario.",
+      "verification": [
+        "shasum -a 256 -c SHA256SUMS (or sha256sum -c) prints OK for the archive.",
+        "jq -r .source.commit build-manifest.json equals the execution's commit.",
+        "The harness summary `smoke-archive-check: passed=N failed=0` and its exit status 0 are recorded, with the normal TMPDIR it used."
+      ],
+      "boundaries": [
+        "Never sets TMPDIR=/tmp or any other workaround for the normal scenario.",
+        "Never edits the extracted smoke-test.sh; the failure scenarios substitute binaries beside a copy of it.",
+        "Never pushes a tag; a local-only tag is deleted after packaging.",
+        "Never touches the user's installed service or catalog: every run has an empty HOME and its own temporary database."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "assets",
+          "action": "For assets=local: in a clean worktree of the commit, create an annotated local-only tag v0.0.0-local.N, run scripts/package.sh v0.0.0-local.N OUTDIR, then delete the tag and the worktree. For assets=published: download the archive, SHA256SUMS and build-manifest.json from the release URL without credentials.",
+          "done_when": "The three files are present and git ls-remote --tags origin shows no local-only tag."
+        },
+        {
+          "id": "identity",
+          "action": "Check SHA256SUMS, the manifest's source.commit, and polaroid version / polaroidd -version (revision = commit, modified false) from the extracted directory."
+        },
+        {
+          "id": "harness",
+          "action": "Run scripts/smoke-archive-check.sh EXTRACTED_DIR from a checkout of the commit, in a shell with the platform's normal environment.",
+          "done_when": "It exits; record the summary line, each scenario's result and the normal TMPDIR.",
+          "escalate_when": "A scenario fails: keep the output and report it; do not retry with another TMPDIR."
+        }
+      ]
+    },
+    "revision_reason": "Initial version, created for #52: the release workflow smoke-tested every archive with TMPDIR forced to the runner's temporary directory, so the macOS per-user TMPDIR (ending in /) and paths with spaces were never exercised, and #46 and #50 checked archives ad hoc without a record."
+  }
+}
