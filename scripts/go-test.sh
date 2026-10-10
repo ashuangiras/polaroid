@@ -34,15 +34,29 @@ uncached="$(grep -xF -e "$fresh" <<<"$all" || true)"
 
 rc=0
 shown="$GO test${flags[*]:+ ${flags[*]}}"
+out="$(mktemp -d)"
+trap 'rm -rf "$out"' EXIT
+# The two groups run concurrently, as one go test of every package would;
+# their outputs are printed one after the other.
 if [[ -n "$cached" ]]; then
-	echo "$shown <$(wc -l <<<"$cached" | tr -d ' ') packages; the test cache applies>"
 	# shellcheck disable=SC2086 # one package per word
-	"$GO" test ${flags[@]+"${flags[@]}"} $cached || rc=1
+	"$GO" test ${flags[@]+"${flags[@]}"} $cached >"$out/cached" 2>&1 &
+	cached_pid=$!
 fi
 if [[ -n "$uncached" ]]; then
+	# shellcheck disable=SC2086
+	"$GO" test ${flags[@]+"${flags[@]}"} -count=1 $uncached >"$out/uncached" 2>&1 &
+	uncached_pid=$!
+fi
+if [[ -n "$cached" ]]; then
+	wait "$cached_pid" || rc=1
+	echo "$shown <$(wc -l <<<"$cached" | tr -d ' ') packages; the test cache applies>"
+	cat "$out/cached"
+fi
+if [[ -n "$uncached" ]]; then
+	wait "$uncached_pid" || rc=1
 	# shellcheck disable=SC2086 # one package per word
 	echo "$shown -count=1" $uncached
-	# shellcheck disable=SC2086
-	"$GO" test ${flags[@]+"${flags[@]}"} -count=1 $uncached || rc=1
+	cat "$out/uncached"
 fi
 exit "$rc"
