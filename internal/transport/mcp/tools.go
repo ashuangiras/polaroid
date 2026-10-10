@@ -308,6 +308,7 @@ func (t *tools) register(s *sdk.Server) {
 		})
 	add(s, t, "report_feedback", "Report a problem with Polaroid (a confusing error, a missing capability, a tool that misbehaved, a wrong procedure) "+
 		"or suggest an improvement. kind is problem or suggestion; summary is one line. "+
+		"reporter names you in canonical-key form: lowercase letters and digits joined by single '.', '-' or '_', for example copilot.vscode. "+
 		`subject says what it is about: {"type": "service"}, {"type": "repository", "repository_id"}, {"type": "procedure", "procedure_id"[, "version"]}, `+
 		`{"type": "binding", "binding_id"[, "revision"]} or {"type": "execution", "execution_id"}; repository and execution_id say where you were. `+
 		"context is an optional free-form object. Reports are never changed or deleted.", write,
