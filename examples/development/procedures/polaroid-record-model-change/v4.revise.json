@@ -1,0 +1,130 @@
+{
+  "base_version": 3,
+  "version": {
+    "philosophy": "Stored records are history that other agents rely on. A record-model change is compatible only if every record stored before it reads back with its original meaning and every existing request keeps its documented behavior; new meaning is added beside old records, never written over them. Deciding and documenting the contract before the code keeps the history honest.",
+    "method": "Settle the contract and its compatibility consequences first and record them in an ADR; change the stored schema only if it must change, with a new migration and an upgrade test from the previous schema; implement each rule once in the domain with real-storage and concurrency tests, expose it identically on every transport, document it, and verify the implementation commit through the change-verification procedure, adding the real-manager lifecycle check only when the change can affect installation or the service.",
+    "goal": "Change Polaroid's stored records, schema or the requests that read and write them, without changing what any stored record means.",
+    "applicability": {
+      "repository": "github.com/ashuangiras/polaroid"
+    },
+    "contract": {
+      "inputs": {
+        "work_item": "The issue that holds the change's acceptance criteria.",
+        "build_command": "Passed to the verify reference.",
+        "artifacts": "Passed to the verify reference.",
+        "gate_commands": "Passed to the verify reference.",
+        "working_tree": "Passed to the verify reference; set by the agent at run time.",
+        "live_store": "Optional: a long-lived database written by the previous build, such as the development store, to upgrade with the new build."
+      },
+      "preconditions": [
+        "A work item with testable acceptance criteria for a change to Polaroid's stored records, their schema, or the requests that read and write them.",
+        "A branch from an up-to-date main, and the current schema version known (the highest migration number)."
+      ],
+      "expected_outcome": "The change is implemented as additive contract changes, with a new migration only when the stored schema must change; every record stored before it reads back with its original meaning; old requests keep their documented behavior, and any change to what existing records derive is decided, tested and documented; the contract and its compatibility consequences are documented; and the implementation commit is verified through the verify reference, with the lifecycle check when it applies.",
+      "verification": [
+        "Records written by the previous build read back unchanged apart from added fields: with a migration, an upgrade test opens a database written at the previous schema version, holding every record kind the change touches, and shows IDs, histories, evidence and verification combinations unchanged, also after reopening.",
+        "Each new rule has a test that fails when the rule is removed (a mutation check), using real SQLite and real HTTP.",
+        "The verify reference's execution is verified at the implementation commit and linked as this execution's child.",
+        "The lifecycle reference has a recorded decision based on the files the change touches; when applicable, its child is verified at the implementation commit.",
+        "When live_store is given, the upgraded store returns every record it held, unchanged apart from the fields the change adds, and a backup taken before the upgrade is kept."
+      ],
+      "boundaries": [
+        "Never edits an applied migration and never updates or deletes stored rows; a new column means 'absent' for existing rows, never an invented value.",
+        "Does not add task-specific behavior or interpret free-form record content.",
+        "Does not change verification or selection of existing records unless the work item says so, and then documents it.",
+        "Never skips the verify reference or any of its gate commands (AGENTS.md).",
+        "Does not merge, push or close work items."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "contracts",
+          "action": "Read AGENTS.md, docs/development/status.md, docs/architecture/records.md, http-api.md, mcp.md and the ADRs the change touches, then the migrations, the domain package and the transports. List every stored record kind and every request (HTTP, MCP tool, CLI command) the change affects.",
+          "required_by": "AGENTS.md: read the current state and the contracts the change touches."
+        },
+        {
+          "id": "compatibility",
+          "action": "Before writing code, decide and write down for each affected record and request: what existing rows mean after the migration, what an old request does, what a response adds, and which lists change. Record each consequential decision in an ADR, committed on its own before the implementation. When the change alters what existing records derive (verification, selection, list membership), decide that effect explicitly, including for records written before the change, and test it.",
+          "required_by": "AGENTS.md: explain the observable behavior change and its compatibility consequences."
+        },
+        {
+          "id": "migration",
+          "action": "Decide whether the stored schema must change. Prefer deriving new meaning on read from the append-only records already stored. If it must change, add the next numbered migration file; never edit an applied one. New tables get immutability triggers (no UPDATE or DELETE) and CHECK constraints that repeat the domain rules; new columns on existing tables are nullable and mean 'absent' for existing rows. Never UPDATE existing rows. If it need not, add no migration, and say why in the record.",
+          "when": "Always decide; add a migration only when the stored schema must change."
+        },
+        {
+          "id": "upgrade-test",
+          "action": "If a migration was added: write a storage test that applies the previous migrations to a new file, inserts representative rows of every affected record kind with raw SQL, opens the file with the new build, and compares what the store returns with what was inserted; reopen and compare again. Include child links and verification combinations when executions are involved. If none was added: show that records written by the previous build read back unchanged apart from added fields, with a test or a scripted upgrade of a database it wrote."
+        },
+        {
+          "id": "domain",
+          "action": "Implement each rule once, in the domain package, which must not import HTTP or storage packages. The store enforces atomic rules (uniqueness, conflicts) inside its write transaction. Add tests with real SQLite and real HTTP; for every new uniqueness or registration rule add a concurrency test that synchronizes with barriers, never sleeps. Remove each new rule temporarily to see its tests fail, then restore it from a copy, not with git. A test that still passes with its rule removed passes for another reason: make the scenario discriminating. If a race is too narrow for an HTTP test to reach, test it at the storage layer and say so in the record.",
+          "done_when": "Every new rule has a test that failed with the rule removed."
+        },
+        {
+          "id": "parity",
+          "action": "Expose the change on HTTP, MCP and the CLI with the same field names, filters and errors. Update tool descriptions and the MCP server instructions where agents need to know, and the end-to-end scripts' expectations. Add or extend a `make demo` step for behavior a user would see, labelled as scripted regression evidence."
+        },
+        {
+          "id": "docs",
+          "action": "In the same change, update records.md, http-api.md, mcp.md, the README and the examples, and state the compatibility consequences explicitly.",
+          "required_by": "AGENTS.md: update the documentation in the same change."
+        },
+        {
+          "id": "verify",
+          "action": "Commit the implementation and follow the `verify` reference at that exact commit, with explicit target verification, recording its children before it. Its execution becomes this execution's child.",
+          "required_by": "AGENTS.md: make check, and make vuln, demo, e2e and e2e-mcp where available, before calling a change done."
+        },
+        {
+          "id": "lifecycle",
+          "action": "List the files the implementation changes against main (git diff --name-only main...HEAD) and decide whether the lifecycle reference's condition holds. If it does, follow it in the verification worktree and link its execution; if not, do not run it. Record the decision with the changed files as its basis either way.",
+          "when": "The lifecycle reference's condition holds.",
+          "escalate_when": "A changed file's effect on installation or the service is unclear: then it applies."
+        },
+        {
+          "id": "live-upgrade",
+          "action": "When live_store is the shared managed instance: after the change is merged and its build published or built clean, follow polaroid.service.manage with operation upgrade, which backs up, inventories, installs, confirms ownership and compares every record. Compare ignoring only the fields the change adds; on a difference, recover as that procedure says and report.",
+          "when": "live_store is given."
+        },
+        {
+          "id": "record",
+          "action": "Record this execution with the work item, the ADRs, the migration number or why none was needed, the upgrade and concurrency tests, the mutation checks performed with their observed failures, the live upgrade comparison when a live store was upgraded, the verify child, and the lifecycle decision (with its child when applicable). Its outcome is succeeded only if every step held and every linked child is verified."
+        }
+      ]
+    },
+    "references": [
+      {
+        "name": "verify",
+        "procedure_id": "dev.change.verify",
+        "version_policy": {
+          "contextual": {}
+        },
+        "inputs": {
+          "artifacts": {
+            "input": "artifacts"
+          },
+          "build_command": {
+            "input": "build_command"
+          },
+          "gate_commands": {
+            "input": "gate_commands"
+          },
+          "working_tree": {
+            "input": "working_tree"
+          }
+        }
+      },
+      {
+        "name": "lifecycle",
+        "procedure_id": "polaroid.lifecycle.check",
+        "version_policy": {
+          "contextual": {}
+        },
+        "inputs": {},
+        "condition": "The change can alter how Polaroid is installed, started, stopped, upgraded or recovered as a service: it touches internal/lifecycle, the local commands in cmd/polaroid/lifecycle.go, polaroidd's flags, logging, start-up or shutdown in cmd/polaroidd, scripts/lifecycle-check.sh, or the service definitions. A schema migration alone does not: the service runs whatever schema the installed build applies, and the upgrade is covered by the upgrade test and the live upgrade."
+      }
+    ],
+    "revision_reason": "Two findings from #43-#50. (1) The live-upgrade step still described stopping a hand-started daemon and starting the new build by hand; since #43 the shared instance is the managed service, upgraded with polaroid.service.manage, so the step now follows it. (2) make lifecycle ran in #43, #45 and #46 as evidence outside the gates, with no way to say when it applies; it is now the conditional reference lifecycle (polaroid.lifecycle.check, ADR-0029), decided per change from the changed files. The verify reference and every gate stay required. Steps carry the instruction-step convention's when/required_by/done_when/escalate_when where they apply."
+  }
+}

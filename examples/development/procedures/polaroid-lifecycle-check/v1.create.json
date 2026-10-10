@@ -1,0 +1,42 @@
+{
+  "canonical_key": "polaroid.lifecycle.check",
+  "version": {
+    "philosophy": "Install, upgrade, recovery and service behaviour can only be judged against a real service manager; simulated managers prove the logic, not launchd or systemd. The check is slow and needs a login session, so it is worth running when the change can affect that behaviour.",
+    "method": "Run make lifecycle in a clean worktree at the commit being verified, against this machine's real service manager, with an isolated installation that never touches the user's own, and keep its PASS/FAIL lines and summary.",
+    "goal": "Check Polaroid's per-user installation and managed service against the real service manager (launchd or systemd user services).",
+    "applicability": {
+      "repository": "github.com/ashuangiras/polaroid"
+    },
+    "contract": {
+      "inputs": {},
+      "preconditions": [
+        "A clean worktree at the commit being verified, built with make build.",
+        "A reachable service manager: a GUI login session on macOS, or a systemd user manager on Linux. Without one, make lifecycle exits 77 and the run is recorded as not performed, never as passed."
+      ],
+      "expected_outcome": "make lifecycle exits 0 with every check passed, and the user's own installation and catalog are untouched.",
+      "verification": [
+        "The summary line `lifecycle-check: <manager> passed=N failed=0` is recorded with the exit status.",
+        "polaroid status of the user's own installation reports the same PID before and after."
+      ],
+      "boundaries": [
+        "Never runs against the user's installation, service name, port or catalog.",
+        "Records exit 77 (no manager) as not performed."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "run",
+          "action": "From the clean worktree, run make lifecycle.",
+          "done_when": "It exits; record the manager, the summary line and the exit status.",
+          "escalate_when": "It exits 77 (no reachable manager), or a check fails for a reason outside the change (a stale isolated service left by an interrupted run)."
+        },
+        {
+          "id": "untouched",
+          "action": "Confirm the user's own installation still runs the same process: polaroid status before and after."
+        }
+      ]
+    },
+    "revision_reason": "Initial version: make lifecycle was run in #43, #45 and #46 as evidence outside the change-verification gates, with nowhere to record when it applies. As its own procedure it can be a conditional reference (#50)."
+  }
+}

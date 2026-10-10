@@ -1,0 +1,4 @@
+{
+  "repository_id": "github.com/ashuangiras/polaroid",
+  "reason": "Created in Polaroid during #50: make lifecycle was run as unrecorded extra evidence in #43, #45 and #46, and became a conditional reference of polaroid.record-model.change."
+}
