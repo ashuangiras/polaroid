@@ -78,18 +78,21 @@ type Migration struct {
 // Result is what restore prints.
 type Result struct {
 	Plan           Plan              `json:"plan"`
-	Outcome        string            `json:"outcome"` // restored, unchanged or rolled-back
+	Outcome        string            `json:"outcome"` // restored, unchanged, rolled-back or rollback-blocked
 	RecoveryBackup string            `json:"recovery_backup,omitempty"`
+	Original       string            `json:"original,omitempty"` // where the replaced catalog is kept when it was not put back
 	Kept           []string          `json:"kept,omitempty"`
 	Service        *lifecycle.Status `json:"service,omitempty"`
 	Detail         string            `json:"detail,omitempty"`
+	ManualRecovery []string          `json:"manual_recovery,omitempty"`
 }
 
 // Restore outcomes.
 const (
-	Restored   = "restored"
-	Unchanged  = "unchanged"
-	RolledBack = "rolled-back"
+	Restored        = "restored"
+	Unchanged       = "unchanged"
+	RolledBack      = "rolled-back"
+	RollbackBlocked = "rollback-blocked"
 )
 
 // File operations, replaceable by tests to inject failures; afterPlan lets

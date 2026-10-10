@@ -489,14 +489,14 @@ func TestRestoreCoordinatesWithTheManagedService(t *testing.T) {
 			}
 		})
 	}
-	t.Run("restart fails: the original is put back", func(t *testing.T) {
+	t.Run("restart fails, shutdown confirmed: the original is put back", func(t *testing.T) {
 		path, dir, backup, before := setup(t)
 		svc := &fakeService{state: lifecycle.Running, pid: 101, db: path, startErrs: []error{errors.New("injected start failure"), nil}}
 		res, err := Restore(ctx, RestoreRequest{Backup: backup, Destination: path, BackupDir: dir, Service: svc, Replace: true})
 		if err == nil || !strings.Contains(err.Error(), "injected start failure") || !strings.Contains(err.Error(), "original catalog was put back") || res.Outcome != RolledBack {
 			t.Fatalf("restore: %+v, %v", res.Outcome, err)
 		}
-		if digest(t, path) != before || !slices.Equal(svc.calls, []string{"stop", "start", "start"}) || svc.state != lifecycle.Running {
+		if digest(t, path) != before || !slices.Equal(svc.calls, []string{"stop", "start", "stop", "start"}) || svc.state != lifecycle.Running {
 			t.Fatalf("after the rollback: original %v, calls %v, state %s", digest(t, path) == before, svc.calls, svc.state)
 		}
 		if len(res.Kept) != 2 || !strings.Contains(res.Kept[0], ".failed-restore-") || digest(t, res.Kept[0]) != backupSum(t, backup) || !Inspect(ctx, res.Kept[1]).Valid {
@@ -509,6 +509,136 @@ func TestRestoreCoordinatesWithTheManagedService(t *testing.T) {
 		res, err := Restore(ctx, RestoreRequest{Backup: backup, Destination: path, BackupDir: dir, Service: svc, Replace: true})
 		if err == nil || !strings.Contains(err.Error(), "did not start on it either") || res.Outcome != RolledBack || digest(t, path) != before {
 			t.Fatalf("restore: %+v, %v", res.Outcome, err)
+		}
+		if len(res.Kept) != 2 || !strings.Contains(res.Kept[0], ".failed-restore-") || !Inspect(ctx, res.Kept[1]).Valid || res.Service == nil || res.Service.State != lifecycle.Failed {
+			t.Fatalf("evidence kept %v, service %+v", res.Kept, res.Service)
+		}
+	})
+
+	// blocked checks that a rollback that could not confirm shutdown changed
+	// no file: the restored catalog stays in place, the original and the
+	// recovery backup are kept, and the result says how to recover.
+	blocked := func(t *testing.T, path, before string, restored os.FileInfo, res Result, err error, why string) {
+		t.Helper()
+		if err == nil || errors.Is(err, ErrRefused) || res.Outcome != RollbackBlocked || !strings.Contains(err.Error(), why) {
+			t.Fatalf("restore: outcome %s, %v; want %s mentioning %q", res.Outcome, err, RollbackBlocked, why)
+		}
+		now, statErr := os.Stat(path)
+		if statErr != nil || !os.SameFile(restored, now) {
+			t.Fatalf("the catalog at %s is no longer the restored file: %v", path, statErr)
+		}
+		if res.Original == "" || !strings.Contains(res.Original, ".pre-restore-") || digest(t, res.Original) != before {
+			t.Fatalf("original %q not kept intact", res.Original)
+		}
+		if r := Inspect(ctx, res.RecoveryBackup); !r.Valid || r.Records["procedures"] != 3 {
+			t.Fatalf("recovery backup %q: %+v", res.RecoveryBackup, r)
+		}
+		if !slices.Equal(res.Kept, []string{res.Original, res.RecoveryBackup}) {
+			t.Errorf("kept %v", res.Kept)
+		}
+		for _, name := range entries(t, filepath.Dir(path)) {
+			switch name {
+			case "polaroid.db", "polaroid.db-wal", "polaroid.db-shm", filepath.Base(res.Original):
+			default:
+				t.Errorf("unexpected file beside the catalog after a blocked rollback: %s", name)
+			}
+		}
+		steps := strings.Join(res.ManualRecovery, "\n")
+		for _, want := range []string{path, res.Original, res.RecoveryBackup} {
+			if !strings.Contains(steps, want) || !strings.Contains(err.Error(), want) {
+				t.Errorf("the recovery steps and the error must name %q:\n%s\n%v", want, steps, err)
+			}
+		}
+		if !strings.Contains(steps, "polaroid restore -replace") {
+			t.Errorf("the recovery steps do not say how to put the original back:\n%s", steps)
+		}
+	}
+	// failedStart, on the first start, records the restored file and, if
+	// hold, opens it as a daemon that did not become healthy would.
+	failedStart := func(t *testing.T, path string, hold bool, restored *os.FileInfo, holder **api) func(int) {
+		return func(n int) {
+			if n != 1 {
+				return
+			}
+			st, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			*restored = st
+			if hold {
+				*holder = serve(t, path)
+			}
+		}
+	}
+
+	t.Run("restart fails and the failed process cannot be stopped: rollback blocked", func(t *testing.T) {
+		path, dir, backup, before := setup(t)
+		var restored os.FileInfo
+		var holder *api
+		svc := &fakeService{state: lifecycle.Running, pid: 101, db: path, startErrs: []error{errors.New("injected start failure")},
+			stopErrs: []error{nil, errors.New("injected: the failed process did not stop")}}
+		svc.onStart = failedStart(t, path, true, &restored, &holder)
+		res, err := Restore(ctx, RestoreRequest{Backup: backup, Destination: path, BackupDir: dir, Service: svc, Replace: true})
+		blocked(t, path, before, restored, res, err, "injected: the failed process did not stop")
+		if !slices.Equal(svc.calls, []string{"stop", "start", "stop"}) {
+			t.Errorf("calls %v: rollback must not start the service on a catalog it did not put back", svc.calls)
+		}
+		if sc := sqlite.Sidecars(path); len(sc) == 0 {
+			t.Error("the live process's -wal/-shm files are gone")
+		}
+		// The process that kept running still uses the catalog at the destination.
+		holder.post("/v1/procedures", procedureBody("recovery.after-failure", ""))
+		if code, _ := holder.call("GET", "/v1/procedures/by-key/recovery.current", ""); code != 404 {
+			t.Errorf("the live process does not serve the restored snapshot: %d", code)
+		}
+		holder.close()
+		a := serve(t, path)
+		if code, _ := a.call("GET", "/v1/procedures/by-key/recovery.after-failure", ""); code != 200 {
+			t.Errorf("a write by the live process is not in the catalog at %s: %d", path, code)
+		}
+		a.close()
+	})
+	t.Run("shutdown reported but sidecars remain: rollback blocked, sidecars kept", func(t *testing.T) {
+		path, dir, backup, before := setup(t)
+		var restored os.FileInfo
+		svc := &fakeService{state: lifecycle.Running, pid: 101, db: path, startErrs: []error{errors.New("injected start failure")}}
+		svc.onStart = func(n int) {
+			failedStart(t, path, false, &restored, nil)(n)
+			if n == 1 {
+				writeFile(t, path+"-wal", []byte("the failed process's log"))
+			}
+		}
+		res, err := Restore(ctx, RestoreRequest{Backup: backup, Destination: path, BackupDir: dir, Service: svc, Replace: true})
+		blocked(t, path, before, restored, res, err, path+"-wal")
+		if b := readFile(t, path+"-wal"); string(b) != "the failed process's log" {
+			t.Error("the -wal file was changed or removed")
+		}
+	})
+	t.Run("ownership ambiguous after stopping: rollback blocked", func(t *testing.T) {
+		path, dir, backup, before := setup(t)
+		var restored os.FileInfo
+		svc := &fakeService{state: lifecycle.Running, pid: 101, db: path, startErrs: []error{errors.New("injected start failure")}}
+		svc.onStart = func(n int) {
+			failedStart(t, path, false, &restored, nil)(n)
+			svc.conflict = n == 1
+		}
+		res, err := Restore(ctx, RestoreRequest{Backup: backup, Destination: path, BackupDir: dir, Service: svc, Replace: true})
+		blocked(t, path, before, restored, res, err, "held by")
+	})
+	t.Run("the caller's context expires: rollback blocked", func(t *testing.T) {
+		path, dir, backup, before := setup(t)
+		var restored os.FileInfo
+		cctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		svc := &fakeService{state: lifecycle.Running, pid: 101, db: path, startErrs: []error{errors.New("injected start failure")}}
+		svc.onStart = func(n int) {
+			failedStart(t, path, false, &restored, nil)(n)
+			cancel()
+		}
+		res, err := Restore(cctx, RestoreRequest{Backup: backup, Destination: path, BackupDir: dir, Service: svc, Replace: true})
+		blocked(t, path, before, restored, res, err, "context canceled")
+		if !slices.Equal(svc.calls, []string{"stop", "start"}) {
+			t.Errorf("calls %v: nothing may be asked of the service once the context expired", svc.calls)
 		}
 	})
 	t.Run("sidecars remain after stopping: aborted and restarted", func(t *testing.T) {
