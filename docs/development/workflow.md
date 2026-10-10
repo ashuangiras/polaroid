@@ -25,7 +25,8 @@ Run the gates and keep their real output:
 | Vulnerabilities | `make vuln` | Needs network. |
 | Live demonstration | `make demo` | Needs `jq` and `sqlite3`. Runs real binaries. Its last steps replay the procedural-memory loop and the multi-repository fixtures with scripted outcomes, and upgrade a schema-6 database. |
 | End-to-end scripts | `make e2e`, `make e2e-mcp` | Need bash 4+, `curl`, `jq` and `sqlite3`. Reports go to `bin/e2e/`. `e2e-mcp` also runs independent MCP clients from npm and inspects a local VS Code; `E2E_INTEROP=0` skips them. |
-| CI | the `ci` workflow | Runs `make ci`, which is all of the above with `E2E_INTEROP=0`, on `ubuntu-latest`. |
+| Managed service | `make lifecycle` | Installs, crashes, stops, upgrades, restores and uninstalls an isolated managed service against the real launchd (needs a GUI login session) or systemd user manager. It exits 77 when no manager is reachable, which means not run. Required when a change can alter how Polaroid is installed or run as a service (the condition of the `polaroid.lifecycle.check` procedure). |
+| CI | the `ci` workflow | Two jobs on `ubuntu-latest`: `make ci`, which is all of the above except `make lifecycle`, with `E2E_INTEROP=0`; and `make lifecycle` against a systemd user manager. |
 
 A gate counts only if you ran it. If a tool or the network is unavailable, write "not run", with the reason. A check you have only ever seen pass is unproven. For a new check, show that it fails on a deliberate violation before you rely on it.
 
