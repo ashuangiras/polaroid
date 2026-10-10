@@ -244,8 +244,11 @@ type fakeService struct {
 	db        string
 	conflict  bool
 	stopErr   error
+	stopErrs  []error // results of successive stops, before stopErr applies
 	startErrs []error
 	onStop    func()
+	onStart   func(n int) // called at the start of the nth start
+	starts    int
 	calls     []string
 }
 
@@ -259,8 +262,12 @@ func (s *fakeService) Status(context.Context) lifecycle.Status {
 
 func (s *fakeService) Stop(ctx context.Context) (lifecycle.Status, error) {
 	s.calls = append(s.calls, "stop")
-	if s.stopErr != nil {
-		return s.Status(ctx), s.stopErr
+	err := s.stopErr
+	if len(s.stopErrs) > 0 {
+		err, s.stopErrs = s.stopErrs[0], s.stopErrs[1:]
+	}
+	if err != nil {
+		return s.Status(ctx), err
 	}
 	s.state, s.pid = lifecycle.Stopped, 0
 	if s.onStop != nil {
@@ -271,6 +278,10 @@ func (s *fakeService) Stop(ctx context.Context) (lifecycle.Status, error) {
 
 func (s *fakeService) Start(ctx context.Context) (lifecycle.Status, error) {
 	s.calls = append(s.calls, "start")
+	s.starts++
+	if s.onStart != nil {
+		s.onStart(s.starts)
+	}
 	if len(s.startErrs) > 0 {
 		err := s.startErrs[0]
 		s.startErrs = s.startErrs[1:]

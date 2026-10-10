@@ -78,18 +78,21 @@ type Migration struct {
 // Result is what restore prints.
 type Result struct {
 	Plan           Plan              `json:"plan"`
-	Outcome        string            `json:"outcome"` // restored, unchanged or rolled-back
+	Outcome        string            `json:"outcome"` // restored, unchanged, rolled-back or rollback-blocked
 	RecoveryBackup string            `json:"recovery_backup,omitempty"`
+	Original       string            `json:"original,omitempty"` // where the replaced catalog is kept when it was not put back
 	Kept           []string          `json:"kept,omitempty"`
 	Service        *lifecycle.Status `json:"service,omitempty"`
 	Detail         string            `json:"detail,omitempty"`
+	ManualRecovery []string          `json:"manual_recovery,omitempty"`
 }
 
 // Restore outcomes.
 const (
-	Restored   = "restored"
-	Unchanged  = "unchanged"
-	RolledBack = "rolled-back"
+	Restored        = "restored"
+	Unchanged       = "unchanged"
+	RolledBack      = "rolled-back"
+	RollbackBlocked = "rollback-blocked"
 )
 
 // File operations, replaceable by tests to inject failures; afterPlan lets
@@ -290,9 +293,18 @@ func Restore(ctx context.Context, req RestoreRequest) (Result, error) {
 
 // rollBack puts the original catalog back after the restored one did not
 // start, keeps the restored copy as evidence, and starts the service again.
+// A failed start does not prove the daemon stopped, so no file is touched
+// until confirmOffline has established it (ADR-0030).
 func rollBack(ctx context.Context, req RestoreRequest, res Result, dest, keep, stamp string, cause error) (Result, error) {
 	if keep == "" {
 		return res, fmt.Errorf("the service did not start on the restored catalog: %w; there was no previous catalog to put back", cause)
+	}
+	st, err := confirmOffline(ctx, req.Service, dest)
+	if st != nil {
+		res.Service = st
+	}
+	if err != nil {
+		return blockRollback(res, dest, keep, cause, err)
 	}
 	failed := dest + ".failed-restore-" + stamp
 	if err := linkFile(dest, failed); err != nil {
@@ -311,6 +323,48 @@ func rollBack(ctx context.Context, req RestoreRequest, res Result, dest, keep, s
 		return res, fmt.Errorf("the service did not start on the restored catalog: %w; the original catalog was put back, but the service did not start on it either: %w", cause, err)
 	}
 	return res, fmt.Errorf("the service did not start on the restored catalog: %w; the original catalog was put back and the service runs on it", cause)
+}
+
+// confirmOffline establishes, with the lifecycle stop and its ownership
+// checks, that no process can still have dest open: the managed service is
+// stopped, no other process holds its endpoint, and no SQLite sidecar remains.
+// An expired context confirms nothing.
+func confirmOffline(ctx context.Context, svc Service, dest string) (*lifecycle.Status, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("its shutdown could not be confirmed: %w", err)
+	}
+	st, err := svc.Stop(ctx)
+	if err != nil {
+		return &st, fmt.Errorf("stopping it did not confirm its shutdown: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return &st, fmt.Errorf("its shutdown could not be confirmed: %w", err)
+	}
+	switch {
+	case st.Conflict != nil:
+		return &st, fmt.Errorf("after stopping, its endpoint is held by another process (%s)", st.Detail)
+	case st.State != lifecycle.Stopped:
+		return &st, fmt.Errorf("after stopping, the service is %s (%s)", st.State, st.Detail)
+	}
+	if sc := sqlite.Sidecars(dest); len(sc) > 0 {
+		return &st, fmt.Errorf("found %s beside the catalog after stopping it: a process may still have it open", strings.Join(sc, " and "))
+	}
+	return &st, nil
+}
+
+// blockRollback reports a rollback that confirmOffline refused: the restored
+// catalog stays at dest, the original at keep, and the recovery backup where
+// it is, and the result says how to recover by hand.
+func blockRollback(res Result, dest, keep string, cause, why error) (Result, error) {
+	res.Outcome = RollbackBlocked
+	res.Original = keep
+	res.Kept = []string{keep, res.RecoveryBackup}
+	res.ManualRecovery = []string{
+		"Stop every process that uses " + dest + ": run polaroid stop until polaroid status reports stopped with no other process holding the endpoint; stop a process the service manager no longer tracks yourself (lsof " + dest + " names it). Never delete " + dest + "-wal or -shm: they may hold that process's last writes; once no process has the catalog open, polaroid backup -db " + dest + " closes it cleanly.",
+		"Then keep the restored catalog, fix why it did not start (see the diagnostics polaroid status names) and run polaroid start; or return to the catalog as it was before this restore: polaroid restore -plan " + res.RecoveryBackup + ", then polaroid restore -replace " + res.RecoveryBackup + ".",
+		"Keep " + keep + " (the replaced catalog, unchanged) and the recovery backup " + res.RecoveryBackup + " until the catalog is as you want it; then remove " + keep + ".",
+	}
+	return res, fmt.Errorf("the service did not start on the restored catalog: %w; automatic rollback was blocked because %w, so nothing was renamed or removed: the restored catalog is at %s, the replaced catalog is kept at %s, and the recovery backup is %s (see manual_recovery)", cause, why, dest, keep, res.RecoveryBackup)
 }
 
 // stageCopy copies the backup's database to staged (mode 0600), checks the
