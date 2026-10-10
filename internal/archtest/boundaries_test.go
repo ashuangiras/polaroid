@@ -12,6 +12,7 @@ import (
 	// whenever they change, instead of reusing a cached pass.
 	_ "github.com/ashuangiras/polaroid/internal/lifecycle"
 	_ "github.com/ashuangiras/polaroid/internal/memory"
+	_ "github.com/ashuangiras/polaroid/internal/recovery"
 	_ "github.com/ashuangiras/polaroid/internal/storage/sqlite"
 	_ "github.com/ashuangiras/polaroid/internal/transport/http"
 	_ "github.com/ashuangiras/polaroid/internal/transport/mcp"
@@ -36,8 +37,12 @@ func TestPackageBoundaries(t *testing.T) {
 		{"internal/transport/mcp", slices.Concat(storage, []string{module + "/internal/transport/http"})},
 		// Lifecycle code manages files, a service manager and processes,
 		// never procedures or their storage (ADR-0026).
-		{"internal/lifecycle", slices.Concat(storage, []string{"net/http/httptest", module + "/internal/memory", module + "/internal/transport"})},
-		{"cmd/polaroid", []string{"database/sql", "modernc.org/sqlite", module + "/internal/storage", module + "/internal/memory", module + "/internal/transport"}},
+		{"internal/lifecycle", slices.Concat(storage, []string{"net/http/httptest", module + "/internal/memory", module + "/internal/transport", module + "/internal/recovery"})},
+		// Backup and restore use storage and lifecycle, never the API (ADR-0030).
+		{"internal/recovery", []string{"net/http/httptest", module + "/internal/transport", module + "/cmd"}},
+		// The CLI reaches storage only through internal/recovery; see
+		// TestCLIReachesStorageOnlyThroughRecovery.
+		{"cmd/polaroid", []string{module + "/internal/transport"}},
 	}
 	for _, rule := range rules {
 		deps := goList(t, root, "-deps", "-f", "{{.ImportPath}}", module+"/"+rule.pkg)
@@ -50,6 +55,24 @@ func TestPackageBoundaries(t *testing.T) {
 				if dep == f || strings.HasPrefix(dep, f+"/") {
 					t.Errorf("%s must not depend on %s (found %s)", rule.pkg, f, dep)
 				}
+			}
+		}
+	}
+}
+
+// TestCLIReachesStorageOnlyThroughRecovery: the CLI's API commands never touch
+// storage; its local backup and restore commands open the catalog only
+// through internal/recovery (ADR-0030).
+func TestCLIReachesStorageOnlyThroughRecovery(t *testing.T) {
+	_, module := moduleRootAndPath(t)
+	imports := goList(t, ".", "-f", `{{join .Imports " "}}`, module+"/cmd/polaroid")
+	if !slices.Contains(imports, module+"/internal/recovery") {
+		t.Fatalf("implausible import list %v", imports)
+	}
+	for _, imp := range imports {
+		for _, f := range []string{"database/sql", "modernc.org/sqlite", module + "/internal/storage", module + "/internal/memory"} {
+			if imp == f || strings.HasPrefix(imp, f+"/") {
+				t.Errorf("cmd/polaroid imports %s directly; reach storage through internal/recovery", imp)
 			}
 		}
 	}

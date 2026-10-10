@@ -25,6 +25,9 @@ var localCommands = []struct{ name, args, summary string }{
 	{"restart", "[-wait DURATION]", "stop and start the service"},
 	{"status", "", "report the installation and the service as JSON"},
 	{"uninstall", "[-wait DURATION]", "stop and unregister the service and remove the installed files; ~/.polaroid is kept"},
+	{"backup", "[-db FILE] [-dir DIR]", "back up the catalog into a new directory under DIR (default ~/.polaroid/backups); polaroidd may keep running"},
+	{"inspect-backup", "BACKUP", "check a backup without restoring it or changing it"},
+	{"restore", "[-db FILE] [-dir DIR] [-plan] [-replace] [-wait DURATION] BACKUP", "replace the catalog with BACKUP's snapshot, after backing up the current one into DIR; -plan only prints the plan; -replace confirms replacing an existing catalog"},
 	{"version", "", "print this polaroid's build as JSON"},
 }
 
@@ -50,7 +53,10 @@ func isLocal(name string) bool {
 // states' codes; the others use 4 when nothing is installed.
 const exitNotInstalled = 4
 
-func runLocal(name string, args []string, stdout, stderr io.Writer) int {
+func runLocal(name string, args []string, stdout, stderr io.Writer, getenv func(string) string) int {
+	if isRecovery(name) {
+		return runRecovery(name, args, stdout, stderr, getenv)
+	}
 	if name == "version" {
 		if len(args) > 0 {
 			fmt.Fprintln(stderr, "polaroid: usage: polaroid version")
