@@ -1,0 +1,25 @@
+{
+  "canonical_key": "repo.checks.integration",
+  "version": {
+    "philosophy": "The integration suite is the slow, end-to-end evidence that the running system still behaves; it is worth its cost exactly when a change can alter that behaviour.",
+    "method": "Run the repository's integration commands, which start the system and exercise it end to end, and keep each exit status and report.",
+    "goal": "Run a repository's integration (end-to-end) suite.",
+    "applicability": { "shared": {} },
+    "contract": {
+      "inputs": { "commands": "The integration commands, in order, for example [\"make e2e\"]." },
+      "expected_outcome": "Every command exits 0.",
+      "verification": ["Each command's exit status, and the suite's pass/fail counts, are recorded in the evidence."]
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "run",
+          "action": "Run each command in order from the repository root.",
+          "done_when": "Every command has exited; record each exit status and the suite's counts.",
+          "escalate_when": "The suite cannot start (missing service, port, credentials) rather than failing a check."
+        }
+      ]
+    },
+    "revision_reason": "Initial version: the conditional part of change.verify.scoped (#50)."
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "canonical_key": "repo.checks.fast",
+  "version": {
+    "philosophy": "Every change, however small, gets the fast checks: they are cheap, and a typo in a build file or a broken link can hide anywhere.",
+    "method": "Run the repository's fast check commands from the repository root on a clean working tree and keep each exit status.",
+    "goal": "Run a repository's fast checks (formatting, lint, unit tests).",
+    "applicability": { "shared": {} },
+    "contract": {
+      "inputs": { "commands": "The fast check commands, in order, for example [\"make check\"]." },
+      "expected_outcome": "Every command exits 0.",
+      "verification": ["Each command's exit status is recorded in the evidence."]
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "run",
+          "action": "Run each command in order from the repository root.",
+          "required_by": "Repository policy: the fast checks gate every change.",
+          "done_when": "Every command has exited; record each exit status.",
+          "escalate_when": "A command fails for a reason unrelated to the change, such as a missing tool or network access."
+        }
+      ]
+    },
+    "revision_reason": "Initial version: the mandatory part of change.verify.scoped (#50)."
+  }
+}

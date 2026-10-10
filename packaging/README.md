@@ -48,6 +48,7 @@ Each prints one JSON object: `name`, `version` (the release tag), `revision` (th
   - that a revision from a stale base is rejected with `version_conflict`;
   - that the procedure reads back unchanged after a restart;
   - one MCP `tools/call` over HTTP (protocol 2026-07-28, with the `Mcp-*` headers and `_meta` the protocol requires);
+  - a conditional reference: a run that skips it with a recorded rationale is verified, a run without a decision is not, skipping a required reference is refused, and a target that decides the work applies is not verified by the skip;
   - that all data stayed in the temporary directory.
 - **Result:** it prints `PASS`/`FAIL` per check, `smoke test: passed=N failed=M`, and exits 0 only when everything passed. It removes its temporary directory afterwards; set `KEEP=1` to keep it.
 - **What it leaves alone:** it never registers a service and never reads or writes `~/.polaroid`.

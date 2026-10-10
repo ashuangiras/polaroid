@@ -2,8 +2,9 @@
 # smoke-test.sh: checks the polaroid and polaroidd beside this script without
 # installing anything. It runs polaroidd directly with an explicitly named
 # temporary database on a free loopback port, and exercises health, procedure
-# create, get, revise, stale-base rejection, persistence across a restart and
-# one MCP tool call.
+# create, get, revise, stale-base rejection, a conditional reference skipped
+# with a recorded decision, persistence across a restart and one MCP tool
+# call.
 #
 # Needs: a POSIX shell at /bin/sh, curl, and mktemp, mkdir, rm, ls, cat, sed,
 # grep, head, sleep (fractional seconds) and dirname. CI runs it with a PATH
@@ -146,7 +147,33 @@ else
 	bad "MCP get_procedure" "$MCP"
 fi
 
-echo "[5] Persistence across a restart"
+echo "[5] A conditional reference: run when it applies, skipped with a reason when it does not (ADR-0029)"
+SMOKE_COMMIT=5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+first_id() { grep -o '"id":"[0-9a-f-]*"' | head -n 1 | sed 's/"id":"\(.*\)"/\1/'; }
+LEAF=$(printf '%s' '{"canonical_key":"smoke.leaf","version":{"philosophy":"p","method":"m","contract":{},"instructions":{},"revision_reason":"r"}}' | cli create 2>&1 | first_id)
+PARENT=$(printf '%s' '{"canonical_key":"smoke.verify","version":{"philosophy":"p","method":"m","contract":{},"instructions":{},"references":[
+	{"name":"checks","procedure_id":"'"$LEAF"'","version_policy":{"pin":1},"inputs":{}},
+	{"name":"integration","procedure_id":"'"$LEAF"'","version_policy":{"pin":1},"inputs":{},"condition":"Only when the change touches code."}],"revision_reason":"r"}}' | cli create 2>&1 | first_id)
+check "a procedure with a required and a conditional reference is created" test -n "$PARENT"
+# record PROCEDURE [EXTRA_MEMBERS]: records a run at SMOKE_COMMIT and prints its ID.
+record() {
+	printf '%s' '{"procedure_id":"'"$1"'","version":1,"repository":"smoke.test","commit":"'"$SMOKE_COMMIT"'","environment":{"name":"smoke","attributes":{}},"inputs":{},"outcome":"succeeded","evidence":{"smoke":true}'"${2:-}"'}' |
+		cli record 2>&1 | first_id
+}
+CHECKS=$(record "$LEAF")
+SKIPPED=$(record "$PARENT" ',"children":[{"reference":"checks","execution_id":"'"$CHECKS"'"}],"decisions":[{"reference":"integration","applicable":false,"rationale":"Only README.md changed."}]')
+V=$(cli verification "$SKIPPED" 2>&1)
+check "a run that skips integration with a rationale is verified" contains "$V" '"verified":true'
+check "its combination records the skip" contains "$V" '{"reference":"integration","skipped":true}'
+UNDECIDED=$(record "$PARENT" ',"children":[{"reference":"checks","execution_id":"'"$(record "$LEAF")"'"}]')
+check "a run without a decision is recorded but not verified (missing_decision)" contains "$(cli verification "$UNDECIDED" 2>&1)" '"code":"missing_decision"'
+REFUSED=$(record "$PARENT" ',"decisions":[{"reference":"checks","applicable":false,"rationale":"fast"}]')
+check "skipping the required reference is refused" test -z "$REFUSED"
+target_verified() { cli graph "$PARENT" 1 smoke.test smoke "$SMOKE_COMMIT" '{}' "$1" 2>&1 | grep -o '"verified":[a-z]*' | head -n 1; }
+check "a target deciding integration does not apply is verified by the skipping run" test "$(target_verified '{"integration":false}')" = '"verified":true'
+check "a target deciding integration applies is not verified by that skip" test "$(target_verified '{"integration":true}')" = '"verified":false'
+
+echo "[6] Persistence across a restart"
 if stop_daemon; then ok "SIGTERM stops polaroidd with exit status 0"; else bad "SIGTERM stops polaroidd with exit status 0"; fi
 if start_daemon; then
 	ok "polaroidd restarts on the same database ($URL)"
@@ -157,7 +184,7 @@ else
 	bad "polaroidd restarts"
 fi
 
-echo "[6] All data stayed in the temporary directory"
+echo "[7] All data stayed in the temporary directory"
 check "the database is in the temporary directory" test -s "$DB"
 check "the isolated HOME is still empty (no ~/.polaroid was created)" test -z "$(ls -A "$ISOLATED_HOME")"
 

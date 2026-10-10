@@ -710,13 +710,39 @@ check "every version names its own scope" equal "$LAST" 'unspecified
 local'
 
 ########################################################################
+section "Conditional references and applicability decisions" \
+	"A reference with a \`condition\` applies only when the condition holds, which the agent decides. Each execution records a decision per conditional reference: applicable, with its child, or not applicable, with a rationale and no child. Combinations tell executed from skipped work, and a target names its own decisions, so a skip never verifies a target that needs the work (ADR-0029)." \
+	"\`bin/polaroid create\`, \`record\`, \`verification ID\`, \`graph ID N REPO ENV COMMIT INPUTS DECISIONS\`; MCP \`record_execution\` and \`get_graph\`."
+C50=5050505050505050505050505050505050505050
+show 'bin/polaroid create <<<"{\"canonical_key\": \"e2e.verify.scoped\", \"version\": {\"philosophy\": \"p\", \"method\": \"m\", \"contract\": {}, \"instructions\": {}, \"references\": [{\"name\": \"checks\", \"procedure_id\": \"$ID\", \"version_policy\": {\"pin\": 1}, \"inputs\": {}}, {\"name\": \"integration\", \"procedure_id\": \"$ID\", \"version_policy\": {\"pin\": 1}, \"inputs\": {}, \"condition\": \"Only when the change touches code.\"}], \"revision_reason\": \"e2e\"}}" | jq -c "{id, refs: [.versions[0].references[] | {name, condition}]}"'
+check "a required and a conditional reference; the condition is returned only for the conditional one" json_has '.refs == [{name: "checks", condition: null}, {name: "integration", condition: "Only when the change touches code."}]'
+SCOPED="$(head -n1 <<<"$LAST" | jq -r .id)"
+run50() { jq -cn --arg p "$1" --arg c "$C50" --argjson extra "${2:-{\}}" '{procedure_id: $p, version: 1, repository: "github.com/example/service-a", commit: $c, environment: {name: "e2e", attributes: {}}, inputs: {}, outcome: "succeeded", evidence: {e2e: true}} + $extra'; }
+show 'CH="$(bin/polaroid record <<<"$(run50 "$ID")" | jq -r .id)"; bin/polaroid record <<<"$(run50 "$SCOPED" "{\"children\": [{\"reference\": \"checks\", \"execution_id\": \"$CH\"}], \"decisions\": [{\"reference\": \"integration\", \"applicable\": false, \"rationale\": \"Only README.md changed.\"}]}")" | jq -c "{id, decisions}"'
+check "the decision is stored and returned" json_has '.decisions == [{reference: "integration", applicable: false, rationale: "Only README.md changed."}]'
+SKIPPED="$(head -n1 <<<"$LAST" | jq -r .id)"
+show 'bin/polaroid verification "$SKIPPED" | jq -c "{verified, children: .combination.children}"'
+check "the skipping run is verified, and its combination records the skip" json_has '.verified and .children[1] == {reference: "integration", skipped: true}'
+show 'bin/polaroid record <<<"$(run50 "$SCOPED" "{\"decisions\": [{\"reference\": \"checks\", \"applicable\": false, \"rationale\": \"fast\"}]}")" 2>/dev/null | jq -c "[.error.code, .error.fields[0].field]"'
+check "a required reference cannot be skipped" equal "$LAST" '["invalid_request","decisions[0].reference"]'
+show 'U="$(bin/polaroid record <<<"$(run50 "$SCOPED")" | jq -r .id)"; bin/polaroid verification "$U" | jq -c "{verified, problems}"'
+check "a run without decisions is recorded but not verified" json_has '.verified == false and any(.problems[]; . == {code: "missing_decision", reference: "integration"})'
+show 'for d in "{\"integration\": false}" "{\"integration\": true}" "{}"; do bin/polaroid graph "$SCOPED" 1 github.com/example/service-a e2e "$C50" "{}" "$d" | jq -c "{v: .target_verification.verified, u: .target_verification.undecided, d: .references[1].decision}"; done'
+check "target decisions: not applicable is verified by the skip; applicable is not; undecided names the reference" equal "$LAST" '{"v":true,"u":null,"d":"not_applicable"}
+{"v":false,"u":null,"d":"applicable"}
+{"v":false,"u":["integration"],"d":"undecided"}'
+show 'tool get_graph "{\"procedure_id\": \"$SCOPED\", \"version\": 1, \"repository\": \"github.com/example/service-a\", \"environment\": \"e2e\", \"commit\": \"$C50\", \"inputs\": {}, \"decisions\": {\"integration\": false}}" | jq -r ".result.content[0].text" | jq -c "{v: .target_verification.verified, d: .references[1].decision}"'
+check "MCP get_graph takes the same decisions" json_has '.v and .d == "not_applicable"'
+
+########################################################################
 section "The database enforces immutability itself" \
-	"Even a client that bypasses polaroidd cannot rewrite history: schema triggers reject UPDATE/DELETE of procedures, versions, bindings, binding revisions, references, executions and execution links, feedback reports, repositories, repository identifiers and procedure origins, gaps in numbering, and pins to missing versions. \`PRAGMA user_version\` records the schema version (7 migrations)." \
+	"Even a client that bypasses polaroidd cannot rewrite history: schema triggers reject UPDATE/DELETE of procedures, versions, bindings, binding revisions, references, executions and execution links and decisions, feedback reports, repositories, repository identifiers and procedure origins, gaps in numbering, and pins to missing versions. \`PRAGMA user_version\` records the schema version (8 migrations)." \
 	"Open the database with \`sqlite3 polaroid.db\` and try the statements below."
 SNAP_BEFORE="$(digest "/v1/procedures/$ID")$(digest "/v1/bindings/$BA")$(digest "/v1/bindings/$BB")"
 show 'sqlite3 "$DB" "PRAGMA user_version; SELECT name FROM sqlite_master WHERE type = '"'"'table'"'"' ORDER BY name;"'
-check "schema version is 7 with procedure, binding, reference, execution, execution-link, feedback and repository tables" equal "$(head -n1 <<<"$LAST")" 7
+check "schema version is 8 with procedure, binding, reference, execution, execution-link, decision, feedback and repository tables" equal "$(head -n1 <<<"$LAST")" 8
 check "the execution_children table exists" out_has "execution_children"
+check "the execution_decisions table exists" out_has "execution_decisions"
 check "the feedback table exists" out_has "feedback"
 for stmt in \
 	"UPDATE procedure_versions SET method = 'tampered' WHERE version = 1" \
@@ -727,7 +753,10 @@ for stmt in \
 	"INSERT INTO binding_revisions VALUES ('$BA', 9, '{}', 'contextual', NULL, 'r', 'now')" \
 	"INSERT INTO binding_revisions VALUES ('$BA', 4, '{}', 'pin', 77, 'r', 'now')" \
 	"UPDATE feedback SET summary = 'tampered' WHERE id = '$FB1'" \
-	"DELETE FROM feedback WHERE id = '$FB2'"; do
+	"DELETE FROM feedback WHERE id = '$FB2'" \
+	"UPDATE execution_decisions SET applicable = 1" \
+	"DELETE FROM execution_decisions" \
+	"UPDATE procedure_version_references SET condition = NULL"; do
 	show "sqlite3 \"\$DB\" \"$stmt\""
 	check "rejected: ${stmt:0:60}…" test "$RC" -ne 0
 done
@@ -782,7 +811,7 @@ show 'bin/polaroid bind <<<"$(bind_req scratch "{\"pin\": 1}" legacy old-1)" | j
 check "bindings work on the upgraded database" json_has '.procedure_id == "old-1"'
 stop_daemon
 show 'sqlite3 "$WORK/v1.db" "PRAGMA user_version"'
-check "schema version is now 7" equal "$LAST" 7
+check "schema version is now 8" equal "$LAST" 8
 show 'cp "$DB" "$WORK/newer.db" && sqlite3 "$WORK/newer.db" "PRAGMA user_version = 99" && HOME="$WORK/home" bin/polaroidd -addr 127.0.0.1:0 -db "$WORK/newer.db"'
 check "newer schema refused with exit 1" rc_is 1
 check "error says the schema is newer than this build supports" out_has "newer than this build supports"

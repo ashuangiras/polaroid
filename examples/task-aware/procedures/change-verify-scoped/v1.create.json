@@ -1,0 +1,69 @@
+{
+  "canonical_key": "change.verify.scoped",
+  "version": {
+    "philosophy": "Verification should cost what the change can break. The fast checks always run; the slow integration suite runs when the change can alter behaviour it observes, and is skipped, with a stated reason, when the change cannot.",
+    "method": "List the files the change touches, run the fast checks, decide whether the integration suite applies from the changed files against its condition, run it if it does, and record the decision with its basis either way.",
+    "goal": "Verify one change at an exact commit, running the integration suite only when the change can affect what it observes.",
+    "applicability": { "shared": {} },
+    "contract": {
+      "inputs": {
+        "fast_commands": "Passed to the checks reference.",
+        "integration_commands": "Passed to the integration reference."
+      },
+      "preconditions": ["A clean working tree at the commit being verified, and the list of files the change touches relative to its base (git diff --name-only BASE...HEAD)."],
+      "expected_outcome": "The checks child succeeded, the integration child succeeded when it applied, and the integration decision states the changed files it was based on.",
+      "verification": [
+        "The checks child is verified at the commit.",
+        "The integration reference has a recorded decision; when applicable, its child is verified at the commit."
+      ],
+      "boundaries": [
+        "Never skips the fast checks.",
+        "When unsure whether the integration suite applies, it applies.",
+        "Does not reuse an earlier commit's integration run."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "changed-files",
+          "action": "List the files the change touches: git diff --name-only BASE...HEAD.",
+          "done_when": "The list is in hand; it goes into the integration decision's evidence."
+        },
+        {
+          "id": "checks",
+          "action": "Follow the checks reference.",
+          "required_by": "Repository policy: the fast checks gate every change.",
+          "done_when": "The checks child is recorded."
+        },
+        {
+          "id": "integration",
+          "action": "Decide whether the integration reference's condition holds for the changed files. If it does, follow the reference; if not, do not run it.",
+          "when": "The integration reference's condition holds.",
+          "satisfied_when": "Never by another commit's run: an applicable integration suite runs at this commit.",
+          "done_when": "Either the integration child is recorded, or the decision says why it does not apply.",
+          "escalate_when": "A changed file is generated or vendored and you cannot tell whether the suite reads it."
+        },
+        {
+          "id": "record",
+          "action": "Record this execution with the checks child, the integration child when applicable, and a decision for integration: applicable or not, with the changed files as its basis."
+        }
+      ]
+    },
+    "references": [
+      {
+        "name": "checks",
+        "procedure_id": "repo.checks.fast",
+        "version_policy": { "contextual": {} },
+        "inputs": { "commands": { "input": "fast_commands" } }
+      },
+      {
+        "name": "integration",
+        "procedure_id": "repo.checks.integration",
+        "version_policy": { "contextual": {} },
+        "inputs": { "commands": { "input": "integration_commands" } },
+        "condition": "The change can affect behaviour the integration suite observes: it touches source code, build or dependency files, schema or migrations, configuration the system reads at run time, or the suite itself. Changes confined to prose the system never reads (documentation, comments, ADRs, the changelog) do not."
+      }
+    ],
+    "revision_reason": "Initial version: a task-aware change verification with one conditional reference (#50, ADR-0029)."
+  }
+}
