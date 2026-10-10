@@ -41,7 +41,7 @@ Each prints one JSON object: `name`, `version` (the release tag), `revision` (th
 ./smoke-test.sh
 ```
 
-- **Needs:** a POSIX shell at `/bin/sh`, `curl`, and `mktemp`, `mkdir`, `rm`, `ls`, `cat`, `sed`, `grep`, `head`, `sleep` (fractional seconds) and `dirname`. No Go, no source checkout, no root and no service manager. It runs on Linux without systemd, for example in a minimal container.
+- **Needs:** a POSIX shell at `/bin/sh`, `curl`, and `mktemp`, `mkdir`, `rm`, `ls`, `cat`, `sed`, `grep`, `head`, `sleep` (fractional seconds) and `dirname`. No Go, no `sqlite3`, no source checkout, no root and no service manager. It runs on Linux without systemd, for example in a minimal container.
 - **What it does:** it starts `polaroidd` directly with an explicitly named database in a new temporary directory, on `127.0.0.1` with a free port chosen by the kernel, and with `HOME` set to an empty temporary directory. Then it checks:
   - health;
   - procedure creation, retrieval and revision;
@@ -49,6 +49,7 @@ Each prints one JSON object: `name`, `version` (the release tag), `revision` (th
   - that the procedure reads back unchanged after a restart;
   - one MCP `tools/call` over HTTP (protocol 2026-07-28, with the `Mcp-*` headers and `_meta` the protocol requires);
   - a conditional reference: a run that skips it with a recorded rationale is verified, a run without a decision is not, skipping a required reference is refused, and a target that decides the work applies is not verified by the skip;
+  - backup and restore: `polaroid backup` of the running catalog into the temporary directory, `inspect-backup`, a restore refused while `polaroidd` has the catalog open, `restore -plan`, a restore refused without `-replace`, `restore -replace` after stopping the daemon, the snapshot read back through the API (a later record is gone, earlier history and verifications are intact), a valid recovery backup, and a truncated backup rejected by `inspect-backup` and `restore`;
   - that all data stayed in the temporary directory.
 - **Result:** it prints `PASS`/`FAIL` per check, `smoke test: passed=N failed=M`, and exits 0 only when everything passed. It removes its temporary directory afterwards; set `KEEP=1` to keep it.
 - **What it leaves alone:** it never registers a service and never reads or writes `~/.polaroid`.
@@ -83,14 +84,15 @@ rm -rf "$H"
 
 `install` copies both binaries into `$HOME/.local/bin`, registers the service, starts it and waits until the managed process owns the endpoint and is healthy. `status` reports `running` only in that case. Another process on the port is reported as a conflict and never claimed.
 
-For a real installation, run `./polaroid install -from .` with your normal `HOME`. It serves `~/.polaroid/data/polaroid.db`. Read the [service documentation](https://github.com/ashuangiras/polaroid#run-polaroid-as-a-service) first, and back up any existing catalog before upgrading:
+For a real installation, run `./polaroid install -from .` with your normal `HOME`. It serves `~/.polaroid/data/polaroid.db`. Read the [service documentation](https://github.com/ashuangiras/polaroid#run-polaroid-as-a-service) first, and back up any existing catalog before upgrading, with the `polaroid` of this archive or the installed one:
 
 ```sh
-sqlite3 ~/.polaroid/data/polaroid.db ".backup ~/.polaroid/backups/pre-upgrade.db"
+./polaroid backup                    # the managed catalog, consistent while the service runs, into ~/.polaroid/backups/
+./polaroid inspect-backup ~/.polaroid/backups/polaroid-<UTC time>
 ```
 
 - **Going back to a previous build:** `polaroid install -from ~/.local/state/polaroid/previous`. This is binary recovery: it keeps the current catalog, and an older `polaroidd` refuses a catalog whose schema a newer build upgraded.
-- **Restoring a backup** is a separate operation that loses the records written after it. Polaroid never does it automatically.
+- **Restoring a backup** is a separate operation that loses the records written after it. Polaroid never does it automatically. Plan it with `polaroid restore -plan BACKUP`, then run `polaroid restore -replace BACKUP`: it keeps a recovery backup of the current catalog, stops and restarts the managed service, and puts the original back if the restored catalog does not start ([details](https://github.com/ashuangiras/polaroid#back-up-and-restore-the-catalog)). Rehearse it first on a copy with `-db /tmp/copy.db`.
 
 ## Limitations
 
