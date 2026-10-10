@@ -1,0 +1,121 @@
+{
+  "base_version": 1,
+  "version": {
+    "philosophy": "A bounded code change can be proven by the tests of the code it can affect, if that boundary is real. The boundary is the changed packages and every package that imports them, not the size of the diff: one line in storage, a migration, recovery, ownership or lifecycle code, a public contract, a dependency or shared behavior reaches far beyond its package, and needs the full gate. Text that only explains an existing rule is different from text that is part of the contract: an explanation changes what a reader understands, never what a client may send or will receive, so its own regression test is enough evidence. A regression test that fails without the change is what makes a focused run evidence.",
+    "method": "Classify the change; escalate anything that touches the excluded areas or changes observable behavior. Write or identify a regression test that fails without the change, compute the affected packages, and verify the commit through the shared verification at scope `focused`, whose gate runs every offline check with the tests of those packages only, with and without the race detector.",
+    "goal": "Verify a bounded Go code change to Polaroid with focused regression coverage: the tests of the changed packages and their importers, and every repository-wide offline check.",
+    "applicability": {
+      "repository": "github.com/ashuangiras/polaroid"
+    },
+    "contract": {
+      "inputs": {
+        "scope": "`focused`; passed to the verify reference.",
+        "build_command": "Passed to the verify reference.",
+        "artifacts": "Passed to the verify reference.",
+        "gate_commands": "Passed to the verify reference, with a {packages} placeholder, for example [\"make focused PKGS='{packages}'\"].",
+        "packages": "Set by the agent at run time: the changed packages and every package that imports them, as space-separated import paths in `go list` order.",
+        "working_tree": "Set by the agent at run time; passed to the verify reference."
+      },
+      "applies_to": [
+        "A fix or small change inside cmd/polaroid's remote commands, internal/transport (handlers, argument decoding, error mapping) or internal/memory helpers, that keeps every documented request, response, record and CLI behavior unchanged, with a regression test.",
+        "Explanatory wording in a description that a client reads but no code path interprets (an MCP tool's description string, a CLI usage line), when it states a rule the code already enforces and the contract documents, and changes nothing else: not the capability advertised (tool names, annotations), the input schema (types, required members, patterns, enums, schema tags), the accepted or rejected values, validation, responses, errors or execution behavior. It can be verified at focused scope because the only change is text: the package's tests and its importers' tests are the evidence, with a regression test that asserts the new wording and calls the tool or command with the valid example the wording gives, so a wrong example fails.",
+        "Test-only changes: a new or corrected test that changes no production code."
+      ],
+      "excluded": [
+        "internal/storage (schema, migrations, transactions, triggers): polaroid.record-model.change.",
+        "internal/recovery, internal/lifecycle, cmd/polaroid's local commands (install, service control, backup, restore), cmd/polaroidd's flags, logging, start-up or shutdown, and anything about ownership of the catalog or the service: polaroid.operations.change.",
+        "Any change to a public contract: HTTP, MCP and CLI requests, responses, status codes, error codes or messages, CLI output and exit statuses, record fields, validation, verification, selection or resolution rules.",
+        "Any change to what a tool or command advertises, even when it is only metadata: names, annotations (for example read-only hints), input schemas or schema tags (types, required members, patterns, enums), and descriptions or server instructions that add, remove or change a rule, an accepted value or a behavior, or that contradict the documented contract. Metadata is not exempt as a category; only explanatory wording as described under applies_to is.",
+        "Text that a demo or end-to-end script, or a test outside the affected packages, asserts.",
+        "go.mod, go.sum and docs/development/dependencies.md; the Makefile, scripts and workflows; packaging.",
+        "A change to code that most packages import (for example internal/memory's records and Store contract, internal/transport/wire): the affected set is the whole module."
+      ],
+      "preconditions": [
+        "The change is committed on a branch, or its working-tree state is recorded.",
+        "A regression test exists that fails without the change, or the change is test-only."
+      ],
+      "expected_outcome": "The change is in an applicable area; its regression test failed without the change and passes with it; the verify child is verified at the commit with scope `focused` and the computed packages.",
+      "verification": [
+        "Evidence lists the changed files and packages, the classification, and the command that computed the importers.",
+        "Evidence shows the regression test failing without the change (by reverting the fix in a copy, not with git) and passing with it.",
+        "The verify child is verified at the commit; its checks ran `make focused` once with the packages, with the cached and fresh results reported."
+      ],
+      "escalation": [
+        "Escalate when any of these holds: a changed file is in an excluded area; the change alters anything a client can observe other than explanatory description text (request or response bodies, status codes, error codes or messages, CLI output or exit status, tool names, annotations or input schemas, stored records); `git grep` finds the changed strings or functions asserted in scripts/ or in tests outside the affected packages; or the affected set is most of the module. Then stop, record nothing for this procedure, and use the procedure for that area, or the full `verify-change` binding.",
+        "Escalate as well when you cannot establish with evidence that none of them holds. When unsure, use `verify-change`."
+      ],
+      "boundaries": [
+        "Scope `focused` covers the repository-wide offline checks except the tests of unaffected packages, the records and docs checks, the vulnerability scan, the demo and the end-to-end scripts. It never stands for full verification of the commit.",
+        "Never weakens or removes an assertion to make the focused run pass."
+      ],
+      "examples": [
+        {
+          "change": "#73: the report_feedback description gains 'reporter names you in canonical-key form: ... for example copilot.vscode.'",
+          "classification": "focused",
+          "basis": "Only a string literal in internal/transport/mcp/tools.go changes; the input schema comes from wire.FeedbackRecord, which is unchanged; validation (internal/memory) and records.md already state the rule; no script or outside test asserts the description. Regression test: the description names the format and its example is accepted."
+        },
+        {
+          "change": "The same rule added as a schema pattern on wire.FeedbackRecord.Reporter",
+          "classification": "full (verify-change)",
+          "basis": "Changes the published MCP input schema, so clients may now reject values before calling, and it lives in internal/transport/wire, which both transports import."
+        }
+      ]
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "classify",
+          "action": "List the changed files against the merge base with main, map them to packages, and classify the change against applies_to and excluded. For a description change, show that only the explanatory text changed: the diff touches only the string, and the tool's input schema, annotations and name are byte-for-byte the same before and after (for example the tools/list entry without its description). Run `git grep` for the changed text and functions in scripts/ and in tests outside the affected packages.",
+          "escalate_when": "Any escalation criterion holds, or one cannot be ruled out with evidence."
+        },
+        {
+          "id": "packages",
+          "action": "Compute the affected packages: each changed package and every package whose dependencies include one (`go list -f '{{.ImportPath}} {{join .Deps \" \"}}' ./...` and select the lines naming a changed package, plus test-only importers from `go list -test`). Set packages to that list.",
+          "escalate_when": "The list is most of the module."
+        },
+        {
+          "id": "regression",
+          "action": "Show the regression test failing without the change and passing with it; restore the change from a copy, never with git checkout or stash. For a description change, the test asserts the new wording and calls the tool or command with the valid example the wording gives."
+        },
+        {
+          "id": "verify",
+          "action": "Commit, then follow the `verify` reference at that exact commit with scope `focused` and the packages input."
+        },
+        {
+          "id": "record",
+          "action": "Record this execution with the classification and the escalation criteria checked (with their evidence), the packages and how they were computed, the regression evidence, and `children` linking the verify execution."
+        }
+      ]
+    },
+    "references": [
+      {
+        "name": "verify",
+        "procedure_id": "dev.change.verify",
+        "version_policy": {
+          "pin": 4
+        },
+        "inputs": {
+          "scope": {
+            "input": "scope"
+          },
+          "build_command": {
+            "input": "build_command"
+          },
+          "artifacts": {
+            "input": "artifacts"
+          },
+          "gate_commands": {
+            "input": "gate_commands"
+          },
+          "packages": {
+            "input": "packages"
+          },
+          "working_tree": {
+            "input": "working_tree"
+          }
+        }
+      }
+    ],
+    "revision_reason": "#75 (findings from #73): version 1 escalated on any 'change to observable behavior', so an explanatory tool-description fix was a judgment call. Version 2 separates explanatory wording (focused, with a regression test of the wording and a valid example) from changes to what a tool advertises or accepts, which stay excluded, and replaces the blanket criterion with precise ones, keeping escalation when impact is uncertain. Two worked examples: #73 (focused) and a schema pattern on the shared Reporter field (full)."
+  }
+}

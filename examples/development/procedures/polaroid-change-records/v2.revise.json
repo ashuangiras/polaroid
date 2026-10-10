@@ -1,0 +1,112 @@
+{
+  "base_version": 1,
+  "version": {
+    "philosophy": "Procedure records and bindings are task knowledge that agents will follow, and once loaded they are history that is never rewritten. A record change is proven where it will live: the service must accept every version, reference and binding, a second load must write nothing, every binding must resolve, and the stored history it extends must be the one in the fixtures. A record never needs Go code to change; when it seems to, the change is not a records change.",
+    "method": "Classify the changed files; check the new versions' content against the behavior they describe; run `make records-check` once, starting from a copy of the live catalog when there is one, so the fixtures are shown to extend the stored history, load twice without a second write and resolve every binding; then verify the commit through the shared verification at scope `records`, whose gate replays the scripted procedural-memory loop (`make demo`), which also creates every fixture version from an empty catalog. Load into the live catalog only after merge, and confirm that a second load writes nothing.",
+    "goal": "Verify a change to Polaroid's procedure, repository or binding fixtures (examples/development, examples/task-aware) in isolated catalogs before it reaches the live one.",
+    "applicability": {
+      "repository": "github.com/ashuangiras/polaroid"
+    },
+    "contract": {
+      "inputs": {
+        "scope": "`records`; passed to the verify reference.",
+        "build_command": "Passed to the verify reference.",
+        "artifacts": "Passed to the verify reference.",
+        "gate_commands": "Passed to the verify reference, for example [\"make demo\"]. The isolated load is this procedure's own step, not a gate command, so it runs once.",
+        "working_tree": "Set by the agent at run time; passed to the verify reference."
+      },
+      "applies_to": [
+        "New procedures, appended versions (vN.revise.json with base_version N-1), origins, repositories and bindings under examples/development or examples/task-aware, with the documentation that describes them."
+      ],
+      "excluded": [
+        "Editing or deleting a fixture version that is already stored anywhere: versions are never overwritten; append one instead.",
+        "Any change to Go code, scripts (including scripts/load-fixtures.sh and scripts/demo.sh), the Makefile or workflows: verify those through polaroid.change.focused or the full `verify-change` binding.",
+        "A binding revision after the first: scripts/load-fixtures.sh checks only revision 1, so a later revision is appended with the CLI (revise-binding) and stated in the evidence."
+      ],
+      "preconditions": [
+        "The change is committed on a branch, or its working-tree state is recorded.",
+        "The live catalog can be backed up with `polaroid backup`."
+      ],
+      "expected_outcome": "Every changed file is applicable; the fixtures load into a copy of the live catalog (or an empty one, when there is no live catalog), a second load writes nothing, and every binding resolves; the verify child is verified at the commit with scope `records`; after merge the live catalog holds the records and a second load writes nothing.",
+      "verification": [
+        "Evidence lists the changed files with their classification.",
+        "`RECORDS_FROM=BACKUP make records-check` (or `make records-check` with the reason there was no backup) passed once at the commit, with its `records-check:` lines.",
+        "The verify child is verified at the commit; its checks ran the gate commands once.",
+        "After merge: the loader's report against the live catalog, and a second load reporting every procedure as matching, with nothing created or appended."
+      ],
+      "escalation": [
+        "Any excluded file, or a record whose new behavior needs code to support it: stop, record nothing for this procedure, and use the procedure for the code (or `verify-change`). When unsure, use `verify-change`.",
+        "A conflict with the live catalog's history (a stored version differs from its fixture): never overwrite; append a new version that corrects it."
+      ],
+      "boundaries": [
+        "Scope `records` covers the fixtures' acceptance, loading, references and bindings, and the scripted replay of the procedural-memory loop. It does not run the Go tests and never stands for full verification of the commit.",
+        "New versions are not selected over evidenced ones until they have evidence: a first run of a new version is chosen explicitly (get_graph for that version) and stated so.",
+        "Never loads into the live catalog before the change is merged, except when the commit itself is to be verified with the new versions (their first run): then load from that commit after the isolated checks pass, and say so. Never edits the live catalog except through the loader or the API."
+      ],
+      "guarantees": {
+        "record_acceptance": "make demo creates every examples/development version, origin and binding through the API from an empty catalog (steps 9, 12, 18 and 20) and examples/task-aware (step 23); the records-check step creates whatever the copied catalog does not hold yet.",
+        "first_and_second_load": "records-check loads each fixture directory twice and compares the loader's output, the procedures, repositories, each repository's bindings and every binding's revisions. make demo repeats a second load of examples/development, comparing the loader output and the procedure list.",
+        "existing_catalog": "Only records-check with RECORDS_FROM, a backup of the live catalog: every stored version must equal its fixture and new versions must extend it. make demo shows appending to an older staged history and refusing a differing stored version.",
+        "binding_resolution": "records-check resolves every loaded binding. make demo resolves the verify-change binding and its own fixture bindings.",
+        "execution_and_verification": "Only make demo: scripted executions, child links, decisions, derived verification and target verification on the development procedures."
+      }
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "files",
+          "action": "List the changed files against the merge base with main and classify each.",
+          "escalate_when": "A file is excluded."
+        },
+        {
+          "id": "content",
+          "action": "Read each new version against the commands, paths and behavior it describes, and check each against the repository (for example that a Make target or script it names exists and does what it says). References to shared procedures must reuse them by reference, not copy their instructions."
+        },
+        {
+          "id": "isolated-load",
+          "action": "Back up the live catalog (`~/.local/bin/polaroid backup -dir DIR`), then run `RECORDS_FROM=DIR/<backup> make records-check` once: the fixtures must extend the live history, a second load must write nothing, and every binding must resolve. Without a live catalog, run `make records-check` from an empty catalog and say so. Do not run records-check again in the gate: the gate's make demo already creates every fixture version from an empty catalog."
+        },
+        {
+          "id": "verify",
+          "action": "Commit, then follow the `verify` reference at that exact commit with scope `records`."
+        },
+        {
+          "id": "record",
+          "action": "Record this execution with the classification, the content checks, the live-copy check's output, and `children` linking the verify execution."
+        },
+        {
+          "id": "load",
+          "action": "After merge, from a clean checkout of main, run `scripts/load-fixtures.sh examples/development` against the live service, then run it again and confirm it creates and appends nothing. For a new version's first use, select it explicitly with get_graph and say so.",
+          "when": "The change is merged."
+        }
+      ]
+    },
+    "references": [
+      {
+        "name": "verify",
+        "procedure_id": "dev.change.verify",
+        "version_policy": {
+          "pin": 4
+        },
+        "inputs": {
+          "scope": {
+            "input": "scope"
+          },
+          "build_command": {
+            "input": "build_command"
+          },
+          "artifacts": {
+            "input": "artifacts"
+          },
+          "gate_commands": {
+            "input": "gate_commands"
+          },
+          "working_tree": {
+            "input": "working_tree"
+          }
+        }
+      }
+    ],
+    "revision_reason": "#75 (findings from #71): version 1 ran records-check from a copy of the live catalog as a step, and again from an empty catalog as a gate command, at the same commit, and make demo then loaded the same fixtures again. The empty-catalog run's guarantees are established at the same commit by the copy run and make demo (see contract.guarantees); the one thing it alone did, resolving each binding in a catalog without evidence, selects the latest versions, whose reference graphs the service already validates when they are written. It is no longer in the gate (binding verify-records revision 2: gate make demo), and the isolated load runs once, from the live copy when there is one."
+  }
+}
