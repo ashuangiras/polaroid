@@ -555,13 +555,13 @@ store="$(bin/polaroid list)"
 [[ "$(scripts/load-fixtures.sh "$dev" 2>/dev/null)" == "$full" && "$(bin/polaroid list)" == "$store" ]] || fail "loading $dev again changed the store"
 [[ "$(bin/polaroid list scope=shared | jq -r '[.procedures[].canonical_key] | join(" ")')" == "dev.change.verify go.module.build go.module.checks go.test.run" ]] ||
 	fail "unexpected shared procedures: $(bin/polaroid list scope=shared)"
-[[ "$(bin/polaroid list "repository=$dev_repo" scope=local | jq -r '[.procedures[].canonical_key] | join(" ")')" == polaroid.record-model.change ]] ||
-	fail "polaroid.record-model.change is not local to $dev_repo"
-bin/polaroid list repository=example.com/fixtures/go-service | jq -e 'all(.procedures[]; .canonical_key != "polaroid.record-model.change")' >/dev/null ||
-	fail "Polaroid's local procedure is offered to another repository"
+[[ "$(bin/polaroid list "repository=$dev_repo" scope=local | jq -r '[.procedures[].canonical_key] | join(" ")')" == "polaroid.catalog.migrate polaroid.record-model.change" ]] ||
+	fail "Polaroid's local procedures are not the two expected: $(bin/polaroid list "repository=$dev_repo" scope=local)"
+bin/polaroid list repository=example.com/fixtures/go-service | jq -e 'all(.procedures[]; .scope != "local")' >/dev/null ||
+	fail "Polaroid's local procedures are offered to another repository"
 jq -e --arg r "$(jq -r --arg r "$dev_repo" '.repositories[$r]' <<<"$full")" '.origin.repository_id == $r' <<<"$(bin/polaroid get "$record_model_id")" >/dev/null ||
 	fail "polaroid.record-model.change has no origin in $dev_repo"
-echo "dev.change.verify version 3 is version 2 declared shared; a second load changed nothing; polaroid.record-model.change is local to $dev_repo"
+echo "dev.change.verify version 3 is version 2 declared shared; a second load changed nothing; polaroid.record-model.change and polaroid.catalog.migrate are local to $dev_repo"
 echo "a new version without evidence does not move selection: the evidenced versions stay selected"
 expect_dev_target "$dev_commit" "root@2 true $parent_c
 build@1 true $build_c
