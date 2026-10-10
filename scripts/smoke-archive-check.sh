@@ -16,6 +16,9 @@
 #   no-start     a polaroidd that cannot start: must fail and still clean up
 #   failed-check a polaroid whose health check fails mid-run: must report
 #                that failure and still clean up and stop polaroidd
+# Before them it proves its own leftover-daemon check: a real polaroidd
+# using a directory is found, and a process that only names polaroidd and
+# that directory in its arguments (as this checker's own commands do) is not.
 # Exits 0 only when every scenario behaves as expected.
 set -euo pipefail
 die() {
@@ -44,6 +47,33 @@ fail() {
 	echo "FAIL: $1"
 }
 
+# daemons_using DIR: the PIDs of polaroidd processes whose arguments name DIR.
+# A process counts only if its executable is polaroidd (ps comm: the name on
+# Linux, the path on macOS), never because its arguments mention it, which
+# pgrep -f did, matching the checker's own command line.
+daemons_using() {
+	local pid comm
+	while read -r pid comm; do
+		[[ $comm == polaroidd || $comm == */polaroidd ]] || continue
+		if ps -o args= -p "$pid" 2>/dev/null | grep -qF -- "$1"; then echo "$pid"; fi
+	done < <(ps -A -o pid= -o comm=)
+}
+
+probe="$SCRATCH/process probe"
+mkdir -p "$probe/home" "$probe/data"
+# A shell that is not exec-optimised away, whose arguments name polaroidd and the directory.
+sh -c 'sleep 60; :' "polaroidd -addr 127.0.0.1:0 -db $probe/data/smoke.db" &
+decoy=$!
+HOME="$probe/home" "$ARCHIVE/polaroidd" -addr 127.0.0.1:0 -db "$probe/data/smoke.db" 2>"$probe/daemon.log" &
+real=$!
+for _ in $(seq 100); do grep -q 'polaroidd listening' "$probe/daemon.log" && break; sleep 0.1; done
+if ps -o args= -p "$decoy" | grep -qF -- "$probe"; then pass "process check: the decoy $decoy names polaroidd and the directory in its arguments"; else fail "process check: the decoy is not visible"; fi
+found=$(daemons_using "$probe" | tr '\n' ' ')
+if [[ $found == "$real " ]]; then pass "process check: finds exactly the real polaroidd $real, not the decoy"; else fail "process check: found [$found], want [$real ]"; fi
+kill "$real" "$decoy" 2>/dev/null || true
+wait "$real" "$decoy" 2>/dev/null || true
+if [[ -z $(daemons_using "$probe") ]]; then pass "process check: nothing found once it has exited"; else fail "process check: still finds a daemon after it exited"; fi
+
 # smoke NAME DIR TMPDIR|-: runs DIR/smoke-test.sh with TMPDIR set (or unset
 # for -), then checks HOME stayed empty, the temporary directory it reported
 # is gone, and no polaroidd still uses it. Sets RC and OUT.
@@ -61,7 +91,7 @@ smoke() {
 	work=$(printf '%s\n' "$OUT" | sed -n 's/^temporary directory: //p')
 	if [[ -n $work && ! -e $work ]]; then pass "$name: its temporary directory $work was removed"; else fail "$name: temporary directory [$work] left behind or not reported"; fi
 	if [[ -z $(ls -A "$home") ]]; then pass "$name: HOME stayed empty"; else fail "$name: wrote to HOME"; fi
-	if [[ -n $work ]] && pgrep -f "polaroidd .*${work}" >/dev/null; then fail "$name: a polaroidd still uses $work"; else pass "$name: no polaroidd is left running"; fi
+	if [[ -n $work && -n $(daemons_using "$work") ]]; then fail "$name: a polaroidd still uses $work"; else pass "$name: no polaroidd is left running"; fi
 }
 has() { grep -qxF -- "$1" <<<"$OUT"; }
 summary_ok() { ! grep -q '^FAIL: ' <<<"$OUT" && grep -qE '^smoke test: passed=[0-9]+ failed=0$' <<<"$OUT"; }
