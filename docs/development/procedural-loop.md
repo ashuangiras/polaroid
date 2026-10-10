@@ -300,6 +300,27 @@ Contextual resolution moved to the new versions only after each of them had its 
 
 The merge rebases these commits onto `main`, which gives them new SHAs. `0829a4c` is the verified commit; the merged commit with the same tree is unverified until a run there is recorded.
 
+## A persistent per-user catalog (#41)
+
+[#41](https://github.com/ashuangiras/polaroid/issues/41) made `~/.polaroid/data/polaroid.db` the default database ([ADR-0025](../architecture/decisions/0025-per-user-default-database.md)) and moved the shared catalog there from `bin/dogfood/`, where `make clean` would have deleted it. The Genesis adoption trial had reported that risk as feedback `01a122ec…` and deliberately left the live catalog alone. Copilot did the work in the authoring session on 2026-10-10.
+
+**Retrieved first.** No stored procedure covered a storage-location change or moving a live catalog. `polaroid.record-model.change` is for records, schema and requests, and this change touches none of them; verification follows `dev.change.verify`. So a new local procedure, `polaroid.catalog.migrate` v1 (`01a12338-d827…`), was created in the live catalog before the cutover, so that it migrated with everything else, and exported to [examples/development](../../examples/development/procedures/polaroid-catalog-migrate/v1.create.json). No existing procedure proved wrong.
+
+**Cutover, following `polaroid.catalog.migrate` v1** (execution `01a1233c-8caf-7591-9fd5-dd47a7149852`, script and build at `acb3f2e`):
+
+| Step | Result |
+| --- | --- |
+| identify | The report named `bin/dogfood/polaroid.db`, but the running process differed from the one last recorded: pid 2842, restarted at 01:07 from an interactive shell with the same binary and `-db bin/dogfood/polaroid.db`, holding the database and its `-wal` and `-shm`. No service manager or other repository launched it. `~/.polaroid` did not exist. |
+| active-work | No established connections; the last write by another client was at 23:08Z (the paused Genesis trial). A `genesis serve` process listens on another port and never connected. Announced on #41. |
+| inventory | 94 files over HTTP: every procedure history, both repositories, 3 bindings, 35 executions with their verifications, 6 reports, and target resolutions for Polaroid at `0829a4c` and Genesis at `62df63b`, both verified. |
+| stop, migrate | SIGTERM; the process exited and `lsof` showed no holder. The script backed up into `~/.polaroid/backups/` (integrity ok), restored with mode `0600`, and reported the same dump digest for source, backup and destination. |
+| restart, compare | `polaroidd` without `-db` logged `db_source=default`; the 94 files were identical afterwards, and 5 MCP reads equalled them. |
+| update | Nothing else named the old path; the README, AGENTS.md and the #28 prompt above now name the default. |
+
+**Verification at `acb3f2e`**, recorded in the migrated catalog: build `01a1233d-0b43…`, checks `01a1233f-9e39…` (226 and 98 end-to-end checks, every daemon under a temporary `HOME`), parent `01a1233f-9e64-774b-a359-1f34c1e4b308`, verified at `acb3f2e`.
+
+**Rollback**, if ever needed: stop `polaroidd` and start it with `-db` naming `bin/dogfood/polaroid.db`, which is kept unchanged; it lacks anything written after the cutover.
+
 ## Reproduce
 
 - **Regression replay:** `make demo` (needs `jq` and `sqlite3`).

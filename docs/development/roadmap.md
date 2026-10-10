@@ -54,6 +54,12 @@ No new product capability: the loop that increments 1 to 4 built is used on real
 
 1. [#39 A parent is verified even when a linked child ran with inputs its reference mapping does not produce](https://github.com/ashuangiras/polaroid/issues/39) (fixes #9 and #11) — **done** ([ADR-0024](../architecture/decisions/0024-child-inputs-follow-the-reference-mapping.md), [procedural-loop.md](procedural-loop.md#child-inputs-follow-the-reference-mapping-39))
 
+## Production readiness
+
+Second-repository adoption trials are paused while the existing features are prepared for production use.
+
+1. [#41 Persistent per-user home (~/.polaroid) and safe migration of the shared catalog out of bin/](https://github.com/ashuangiras/polaroid/issues/41) — **done** ([ADR-0025](../architecture/decisions/0025-per-user-default-database.md), [procedural-loop.md](procedural-loop.md#a-persistent-per-user-catalog-41))
+
 ## Later (unordered, not yet scoped)
 
 - Onboard a second real repository: register it, bind the shared development procedures with its own commands, and verify one of its commits through them. It can rely on the identity, pagination and discovery contracts of #37.
