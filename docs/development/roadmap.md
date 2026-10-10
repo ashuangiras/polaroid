@@ -59,6 +59,7 @@ No new product capability: the loop that increments 1 to 4 built is used on real
 Second-repository adoption trials are paused while the existing features are prepared for production use.
 
 1. [#41 Persistent per-user home (~/.polaroid) and safe migration of the shared catalog out of bin/](https://github.com/ashuangiras/polaroid/issues/41) — **done** ([ADR-0025](../architecture/decisions/0025-per-user-default-database.md), [procedural-loop.md](procedural-loop.md#a-persistent-per-user-catalog-41))
+2. [#43 Per-user installation and managed service (launchd LaunchAgent, systemd user service)](https://github.com/ashuangiras/polaroid/issues/43) — **done** ([ADR-0026](../architecture/decisions/0026-per-user-installation-and-managed-service.md), [status](status.md))
 
 ## Later (unordered, not yet scoped)
 
