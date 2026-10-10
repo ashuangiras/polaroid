@@ -143,4 +143,4 @@ The duplicate plain test run cost about 101 s, measured directly from the `unit`
 
 ## Comparing a later run
 
-To compare, use the same kind of task (docs only, all gates, warm caches, `GOFLAGS=-count=1` as the procedure requires), and measure the same way: the event wrapper plus the transcript tool-call timestamps. Compare end-to-end time, the background gate window, the per-command times, and the unattributed share.
+To compare, use the same kind of task (docs only, warm caches) and measure the same way: the event wrapper plus the transcript tool-call timestamps. Compare end-to-end time, the background gate window, the per-command times, and the unattributed share. This baseline ran every gate with `GOFLAGS=-count=1`, as `go.module.checks` v3 then required. Since [#65](https://github.com/ashuangiras/polaroid/issues/65), a docs-only change is verified through the `verify-docs` binding, and `go.module.checks` v4 lets Go's test cache serve what the gate allows, so a later run differs in check selection and cache policy as well as in its task.
