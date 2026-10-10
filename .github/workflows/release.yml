@@ -223,7 +223,7 @@ jobs:
             echo "| darwin/amd64 | \`polaroid_${TAG}_darwin_amd64.tar.gz\` | Natively on macos-15-intel |"
             echo "| darwin/arm64 | \`polaroid_${TAG}_darwin_arm64.tar.gz\` | Natively on macos-latest (arm64) |"
             echo
-            echo "Each test verified \`SHA256SUMS\`, extracted the archive, checked both binaries' reported version and commit, and ran the archive's \`smoke-test.sh\` with no checkout, no Go and an empty \`HOME\`: with the runner's temporary directory, with the platform's normal \`TMPDIR\` (on macOS the per-user directory, which ends in \`/\`), and with a \`TMPDIR\` containing spaces. It also checked that the script reports a failing daemon or check and still cleans up. After publishing, the same run downloads the published assets, compares them with the tested ones and repeats the linux/amd64 test (job \"test the published assets\")."
+            echo "Each test verified \`SHA256SUMS\`, extracted the archive, checked both binaries' reported version and commit, and ran the archive's \`smoke-test.sh\` with no checkout, no Go and an empty \`HOME\`: with the runner's temporary directory, with the platform's normal \`TMPDIR\` (on macOS the per-user directory, which ends in \`/\`), and with a \`TMPDIR\` containing spaces. The smoke test includes a backup of the running catalog, its inspection, and a restore with \`polaroid restore\` read back through the API, all inside its temporary directory. It also checked that the script reports a failing daemon or check and still cleans up. After publishing, the same run downloads the published assets, compares them with the tested ones and repeats the linux/amd64 test (job \"test the published assets\")."
             echo
             echo "\`SHA256SUMS\` covers every archive. \`build-manifest.json\` gives the full commit, version, Go toolchain, targets and per-asset hashes."
             echo
@@ -240,7 +240,7 @@ jobs:
             echo "## Known limitations"
             echo
             echo "- Prerelease for verification: no compatibility promises, unsigned, not notarized. On macOS, a browser download may need \`xattr -d com.apple.quarantine polaroid polaroidd\`."
-            echo "- The smoke test runs \`polaroidd\` directly. It does not test the managed service (\`polaroid install\`, launchd, systemd); the archive's README.md describes that separate test, and the repository tests it with \`make lifecycle\`."
+            echo "- The smoke test runs \`polaroidd\` directly. It does not test the managed service (\`polaroid install\`, launchd, systemd) or a restore of the managed catalog; the archive's README.md describes that separate test, and the repository tests both with \`make lifecycle\`."
             echo "- The managed service supports macOS (launchd) and Linux (systemd user services) only; elsewhere, run \`polaroidd\` directly."
             echo "- The API and MCP server have no authentication and are meant for loopback use."
           } >notes.md

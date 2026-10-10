@@ -881,6 +881,34 @@ show 'mkdir -p "$WORK/build" && cp bin/polaroidd bin/polaroid "$WORK/build/" && 
 check "make clean removes the build output it is given, never the catalog" equal "$(test -e "$WORK/build" && echo kept || echo removed) $(shasum -a 256 <"$P2/data/polaroid.db")" "removed $DB_SUM"
 show 'grep -l "${REAL_HOME:-/nonexistent}/.polaroid" "$WORK"/polaroidd.*.log || echo none'
 check "no daemon in this report used the real home directory" equal "$LAST" none
+
+section "Back up, inspect and restore a catalog" \
+	"\`polaroid backup\` takes a consistent snapshot of a catalog while \`polaroidd\` serves it, \`inspect-backup\` validates a backup without changing it, and \`restore\` plans, then replaces a stopped catalog with the snapshot and keeps a recovery backup of what it replaced ([ADR-0030](../../docs/architecture/decisions/0030-catalog-backup-and-restore.md)). Everything written after the snapshot is replaced, never merged." \
+	"Run \`polaroid backup -db FILE -dir DIR\`, \`polaroid inspect-backup BACKUP\`, stop the daemon, then \`polaroid restore -db FILE -dir DIR -plan BACKUP\` and \`-replace BACKUP\`."
+# shellcheck disable=SC2086 # l is a command and its arguments
+inventory() { for l in list feedbacks repositories "executions $ID"; do bin/polaroid $l; done | shasum -a 256; }
+start_daemon "$DB" flags
+BEFORE_INV="$(inventory)"
+show 'HOME="$WORK/home" bin/polaroid backup -db "$DB" -dir "$WORK/backups" 2>/dev/null | jq -c "{path, reason: .metadata.reason, schema: .metadata.schema_version, procedures: .metadata.records.procedures}"'
+BK="$(jq -r .path <<<"$LAST")"
+check "a backup of the catalog polaroidd is serving is published" equal "$RC $(test -s "$BK/polaroid.db" && test -s "$BK/backup.json" && echo published)" "0 published"
+show 'jq -nc "{canonical_key: \"e2e.after.backup\", version: {philosophy: \"p\", method: \"m\", contract: {}, instructions: {}, revision_reason: \"r\"}}" | bin/polaroid create | jq -c "{canonical_key}"'
+show 'HOME="$WORK/home" bin/polaroid inspect-backup "$BK" 2>/dev/null | jq -c "{valid, schema_version, records: .records.procedures}"'
+check "inspect-backup reports it valid" json_has '.valid == true'
+show 'HOME="$WORK/home" bin/polaroid restore -db "$DB" -dir "$WORK/backups" -replace "$BK" 2>&1 >/dev/null'
+check "restore refuses a catalog that polaroidd has open (exit 3)" rc_is 3
+stop_daemon
+show 'HOME="$WORK/home" bin/polaroid restore -db "$DB" -dir "$WORK/backups" -plan "$BK" 2>/dev/null | jq -c "{ready, requires_replace, destination: .destination.exists, actions}"'
+check "the plan is ready and needs -replace" json_has '.ready and .requires_replace'
+show 'HOME="$WORK/home" bin/polaroid restore -db "$DB" -dir "$WORK/backups" -replace "$BK" 2>/dev/null | jq -c "{outcome, recovery_backup}"'
+check "restore -replace restored the snapshot and kept a recovery backup" json_has '.outcome == "restored" and (.recovery_backup | length > 0)'
+start_daemon "$DB" flags
+check "procedures, feedback, repositories and executions read back exactly as at the backup" equal "$(inventory)" "$BEFORE_INV"
+show 'bin/polaroid get-by-key e2e.after.backup'
+check "the procedure created after the backup is gone" rc_is 1
+stop_daemon
+show 'HOME="$WORK/home" bin/polaroid restore -db "$WORK/a new catalog.db" -dir "$WORK/backups" "$BK" 2>/dev/null | jq -c "{outcome, recovery_backup}"'
+check "a new destination (a path with spaces) needs no -replace and is created with mode 600" equal "$(jq -r .outcome <<<"$LAST") $(stat -c %a "$WORK/a new catalog.db" 2>/dev/null || stat -f %Lp "$WORK/a new catalog.db")" "restored 600"
 close_section
 
 ########################################################################

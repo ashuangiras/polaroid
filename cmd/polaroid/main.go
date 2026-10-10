@@ -1,4 +1,6 @@
-// Command polaroid is a generic command-line client for the polaroidd API.
+// Command polaroid is a generic command-line client for the polaroidd API,
+// with local commands for this user's installation, service and catalog
+// backups (ADR-0026, ADR-0030).
 //
 // Every response body (JSON) is written to stdout, on success and on failure,
 // so scripts can always parse the result. A one-line diagnostic goes to
@@ -198,6 +200,8 @@ func usage() string {
 	b.WriteString("Exit status: 0 success, 1 request failed, 2 usage error.\n")
 	b.WriteString("Local commands print the resulting status as JSON. status exits 0 running, 1 failed or unreachable,\n")
 	b.WriteString("3 stopped, 4 not installed, 5 starting; the others exit 0 done, 1 failed, 2 usage, 4 not installed.\n")
+	b.WriteString("backup, inspect-backup and restore print their result as JSON; inspect-backup exits 1 for an invalid\n")
+	b.WriteString("backup, and restore (also with -plan) exits 3 when it refused and changed nothing.\n")
 	return b.String()
 }
 
@@ -279,7 +283,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 		return exitOK
 	}
 	if isLocal(fs.Arg(0)) {
-		return runLocal(fs.Arg(0), fs.Args()[1:], stdout, stderr)
+		return runLocal(fs.Arg(0), fs.Args()[1:], stdout, stderr, getenv)
 	}
 
 	err := dispatch(server, *timeout, fs.Arg(0), fs.Args()[1:], stdin, stdout)

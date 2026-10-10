@@ -3,8 +3,10 @@
 # installing anything. It runs polaroidd directly with an explicitly named
 # temporary database on a free loopback port, and exercises health, procedure
 # create, get, revise, stale-base rejection, a conditional reference skipped
-# with a recorded decision, persistence across a restart and one MCP tool
-# call.
+# with a recorded decision, persistence across a restart, one MCP tool
+# call, and a backup of the running catalog, its inspection and a restore
+# (refused while polaroidd has the catalog open, then confirmed with
+# -replace), all inside its temporary directory.
 #
 # Needs: a POSIX shell at /bin/sh, curl, and mktemp, mkdir, rm, ls, cat, sed,
 # grep, head, sleep (fractional seconds) and dirname. CI runs it with a PATH
@@ -188,7 +190,57 @@ else
 	bad "polaroidd restarts"
 fi
 
-echo "[7] All data stayed in the temporary directory"
+echo "[7] Backup, inspection and restore (ADR-0030), all inside the temporary directory"
+BACKUPS="$WORK/backups"
+# local runs polaroid's local commands with the isolated HOME, so they see no installation.
+local_cli() { HOME="$ISOLATED_HOME" "$P" "$@"; }
+if start_daemon; then
+	OUT=$(local_cli backup -db "$DB" -dir "$BACKUPS" 2>&1)
+	BK=$(printf '%s' "$OUT" | sed -n 's/^{"path":"\([^"]*\)".*/\1/p')
+	if [ -n "$BK" ] && [ -s "$BK/polaroid.db" ] && [ -s "$BK/backup.json" ]; then ok "backup of the running catalog: $BK"; else bad "backup of the running catalog" "$OUT"; fi
+	OUT=$(local_cli inspect-backup "$BK" 2>&1)
+	if contains "$OUT" '"valid":true' && contains "$OUT" '"format":"polaroid-backup"'; then ok "inspect-backup reports it valid"; else bad "inspect-backup" "$OUT"; fi
+	if printf '%s' '{"canonical_key":"smoke.after","version":{"philosophy":"p","method":"m","contract":{},"instructions":{},"revision_reason":"r"}}' | cli create >/dev/null 2>&1; then
+		ok "a procedure created after the backup is stored"
+	else
+		bad "create a procedure after the backup"
+	fi
+	OUT=$(local_cli restore -db "$DB" -dir "$BACKUPS" -replace "$BK" 2>&1)
+	RC=$?
+	if [ $RC -eq 3 ] && contains "$OUT" 'a process may have it open'; then ok "restore refuses a catalog polaroidd has open (exit 3)"; else bad "restore of an open catalog (exit $RC)" "$OUT"; fi
+	stop_daemon
+	OUT=$(local_cli restore -db "$DB" -dir "$BACKUPS" -plan "$BK" 2>&1)
+	if contains "$OUT" '"ready":true' && contains "$OUT" '"requires_replace":true'; then ok "restore -plan: ready, needs -replace"; else bad "restore -plan" "$OUT"; fi
+	OUT=$(local_cli restore -db "$DB" -dir "$BACKUPS" "$BK" 2>&1)
+	RC=$?
+	if [ $RC -eq 3 ] && contains "$OUT" '"outcome":"unchanged"'; then ok "restore without -replace changes nothing (exit 3)"; else bad "restore without -replace (exit $RC)" "$OUT"; fi
+	OUT=$(local_cli restore -db "$DB" -dir "$BACKUPS" -replace "$BK" 2>&1)
+	RECOVERY=$(printf '%s' "$OUT" | sed -n 's/.*"recovery_backup":"\([^"]*\)".*/\1/p')
+	if contains "$OUT" '"outcome":"restored"' && [ -n "$RECOVERY" ]; then ok "restore -replace restored the snapshot"; else bad "restore -replace" "$OUT"; fi
+	if local_cli inspect-backup "$RECOVERY" >/dev/null 2>&1; then ok "the replaced catalog's recovery backup is valid"; else bad "the recovery backup $RECOVERY is not valid"; fi
+	if start_daemon; then
+		if cli get-by-key smoke.after >/dev/null 2>&1; then bad "the procedure created after the backup survived the restore"; else ok "the procedure created after the backup is gone"; fi
+		RESTORED=$(cli get "$ID" 2>&1)
+		if [ "$RESTORED" = "$BEFORE" ]; then ok "smoke.check and its history read back unchanged"; else bad "smoke.check after the restore" "$RESTORED"; fi
+		check "the run that skipped integration is still verified" contains "$(cli verification "$SKIPPED" 2>&1)" '"verified":true'
+		stop_daemon
+	else
+		bad "polaroidd starts on the restored catalog"
+	fi
+	mkdir "$WORK/damaged backup"
+	cat "$BK/backup.json" >"$WORK/damaged backup/backup.json"
+	head -c 4096 "$BK/polaroid.db" >"$WORK/damaged backup/polaroid.db"
+	OUT=$(local_cli inspect-backup "$WORK/damaged backup" 2>&1)
+	RC=$?
+	if [ $RC -eq 1 ] && contains "$OUT" '"valid":false'; then ok "inspect-backup rejects a truncated backup (exit 1)"; else bad "inspect-backup of a truncated backup (exit $RC)" "$OUT"; fi
+	OUT=$(local_cli restore -db "$DB" -dir "$BACKUPS" -replace "$WORK/damaged backup" 2>&1)
+	RC=$?
+	if [ $RC -eq 3 ] && contains "$OUT" '"outcome":"unchanged"'; then ok "restore refuses the truncated backup and changes nothing (exit 3)"; else bad "restore of a truncated backup (exit $RC)" "$OUT"; fi
+else
+	bad "polaroidd starts for the backup scenario"
+fi
+
+echo "[8] All data stayed in the temporary directory"
 check "the database is in the temporary directory" test -s "$DB"
 check "the isolated HOME is still empty (no ~/.polaroid was created)" test -z "$(ls -A "$ISOLATED_HOME")"
 

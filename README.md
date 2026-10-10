@@ -31,6 +31,7 @@ Polaroid does not run an LLM, and it does not execute instructions. Its code man
 - Records persist in SQLite. Stored versions and binding revisions are immutable, which the database itself enforces.
 - Skip work that does not apply, on the record: a reference with a `condition` applies only when the condition holds. Each execution records a decision per conditional reference (applicable, with its child, or not applicable, with a rationale), verification and combinations account for it, and a target passes its own `decisions`, so a skipped check never verifies a task that needs it. Polaroid checks the decision's structure and never evaluates conditions ([ADR-0029](docs/architecture/decisions/0029-conditional-references-and-applicability-decisions.md), [examples](examples/task-aware)).
 - Report on Polaroid: an agent or person records a `problem` or a `suggestion` with a one-line summary, details, a reporter name, an optional subject (the service, a repository, a procedure version, a binding revision or an execution) and the repository and execution it was made in (`bin/polaroid feedback`, the MCP tool `report_feedback`). Reports are immutable and untriaged; `bin/polaroid feedbacks` lists and filters them for triage elsewhere, for example as GitHub issues.
+- Back up, inspect and restore the catalog with the packaged binaries alone: `polaroid backup` takes a consistent snapshot while the service runs, `polaroid inspect-backup` validates one, and `polaroid restore` plans, then replaces a catalog with a recovery backup and rollback ([ADR-0030](docs/architecture/decisions/0030-catalog-backup-and-restore.md), [below](#back-up-and-restore-the-catalog)).
 - `GET /healthz`, a JSON HTTP API ([contract](docs/architecture/http-api.md)) and a generic CLI.
 - An MCP server at `/mcp` ([contract](docs/architecture/mcp.md)): 25 tools with the same operations, records and error codes as the HTTP API, plus read-only resources for procedures, versions and bindings. It speaks stateless streamable HTTP, protocol revisions 2026-07-28 and 2025-11-25.
 
@@ -102,7 +103,7 @@ Polaroid's own development procedures (build, checks, verify a change) are recor
 | `make run ARGS="..."` | Builds and runs `polaroidd`. |
 | `make ci` | Runs `check`, `vuln`, `demo`, `e2e` and `e2e-mcp` with `E2E_INTEROP=0`, which is exactly what GitHub Actions runs. |
 | `make e2e` / `make e2e-mcp` | Runs the end-to-end scripts against a real daemon and writes a report of every command, its output and each check to `bin/e2e/`. `e2e-mcp` also tries the TypeScript SDK and MCP Inspector when npm is available, and inspects a local VS Code install; `E2E_INTEROP=0` skips those checks and reports them as skipped. |
-| `make lifecycle` | Installs, crashes, stops, upgrades and uninstalls an isolated managed service with the real launchd or systemd user manager (exit 77 when none is reachable). CI runs it on Linux. |
+| `make lifecycle` | Installs, crashes, stops, upgrades, backs up, restores and uninstalls an isolated managed service with the real launchd or systemd user manager (exit 77 when none is reachable). CI runs it on Linux. |
 
 ## Configuration
 
@@ -113,7 +114,7 @@ Polaroid's own development procedures (build, checks, verify a change) are recor
 
 Flags override environment variables. On SIGINT or SIGTERM, the daemon stops accepting connections and waits up to 10 seconds for in-flight requests to finish. There is no authentication yet, so keep the daemon on loopback ([ADR-0006](docs/architecture/decisions/0006-local-unauthenticated-api.md)).
 
-The CLI uses `-server URL`, else `$POLAROID_URL`, else `http://127.0.0.1:7417`. It prints each response body (JSON) to stdout, and exits with 0 on success, 1 when the request fails and 2 for a usage error. Run `bin/polaroid help` for the full command list. The service commands (`install`, `start`, `stop`, `restart`, `status`, `uninstall`, `version`) are local and work while the daemon is stopped; see [Run Polaroid as a service](#run-polaroid-as-a-service).
+The CLI uses `-server URL`, else `$POLAROID_URL`, else `http://127.0.0.1:7417`. It prints each response body (JSON) to stdout, and exits with 0 on success, 1 when the request fails and 2 for a usage error. Run `bin/polaroid help` for the full command list. The service commands (`install`, `start`, `stop`, `restart`, `status`, `uninstall`, `version`) and the catalog commands (`backup`, `inspect-backup`, `restore`) are local and work while the daemon is stopped; see [Run Polaroid as a service](#run-polaroid-as-a-service) and [Back up and restore the catalog](#back-up-and-restore-the-catalog).
 
 ### Where the catalog lives
 
@@ -171,22 +172,55 @@ polaroid status                         # JSON; exit 0 when running and healthy
   - **Fix forward** with a corrected build: `polaroid install -from DIR`.
   - **Go back to the previous build:** `polaroid install -from ~/.local/state/polaroid/previous`. This is binary recovery. It installs exactly the build kept there and serves the **current** catalog, with every record written since. If the failed build already upgraded the catalog's schema, the older `polaroidd` refuses to start (`database schema version N is newer than this build supports`) and `status` reports `failed`. Then fix forward.
 
-  **Restoring a catalog backup** is a separate data operation, never part of binary recovery. It loses every record written after the backup. Do it only deliberately:
-  1. `polaroid stop`.
-  2. Move the current `polaroid.db` and its `-wal` and `-shm` files aside, and keep them.
-  3. Copy the backup to the catalog path with mode `0600`.
-  4. `polaroid start`.
+  **Restoring a catalog backup** is a separate data operation, never part of binary recovery. It loses every record written after the backup; do it only deliberately, with `polaroid restore` ([below](#back-up-and-restore-the-catalog)). Never point the service at a different, older catalog, such as a pre-#41 `bin/dogfood/polaroid.db`, as a substitute for going back to a previous build.
 
-  Never point the service at a different, older catalog, such as a pre-#41 `bin/dogfood/polaroid.db`, as a substitute for going back to a previous build.
-
-  Back up before an upgrade with `sqlite3 ~/.polaroid/data/polaroid.db ".backup ~/.polaroid/backups/pre-upgrade.db"`.
+  Back up before an upgrade with `polaroid backup`.
 - **Uninstall.** `polaroid uninstall` does the following:
   1. Stop and unregister the service.
   2. Remove the definition, both binaries (if they are still the installed ones), the macOS log files and `~/.local/state/polaroid`.
   3. Keep `~/.polaroid`: the catalog and its backups.
 
   There is no purge command.
-- **Validation.** `make lifecycle` runs an isolated installation against the real launchd or systemd user manager: a temporary `HOME` whose path contains spaces, its own service name (`-service-name`, meant for such checks only), port and catalog. It builds three revisions of the working tree (an upgrade, and one that fails to start) and checks recovery from `previous/`. It never touches your installation.
+- **Validation.** `make lifecycle` runs an isolated installation against the real launchd or systemd user manager: a temporary `HOME` whose path contains spaces, its own service name (`-service-name`, meant for such checks only), port and catalog. It builds three revisions of the working tree (an upgrade, and one that fails to start) and checks recovery from `previous/`, and a backup and restore of the managed catalog while the service runs and while it is stopped. It never touches your installation.
+
+## Back up and restore the catalog
+
+Three local commands of `polaroid` back up, inspect and restore a catalog. They need no `sqlite3` CLI and no running daemon: `polaroid` opens the database files itself ([ADR-0030](docs/architecture/decisions/0030-catalog-backup-and-restore.md)). Each prints JSON on stdout and a one-line summary on stderr.
+
+**Which catalog.** `-db FILE`, else `POLAROID_DB`, else the installed service's catalog, else `~/.polaroid/data/polaroid.db`. A catalog is *managed* when it is the installed service's catalog; `restore` then stops and starts the service itself.
+
+```sh
+polaroid backup                          # the managed catalog, into ~/.polaroid/backups/polaroid-<UTC time>/
+polaroid backup -db "/srv/my catalog.db" -dir /mnt/backups   # another catalog, another directory
+polaroid inspect-backup ~/.polaroid/backups/polaroid-20261010T120000Z
+polaroid restore -plan ~/.polaroid/backups/polaroid-20261010T120000Z     # read-only: what would happen
+polaroid restore -replace ~/.polaroid/backups/polaroid-20261010T120000Z  # replace the catalog
+```
+
+- **`backup [-db FILE] [-dir DIR]`.** It takes a consistent snapshot with SQLite's `VACUUM INTO`, which includes transactions committed in the `-wal` file, while `polaroidd` keeps serving and writing. It never writes to the catalog and never migrates it. The backup is a directory, `polaroid-<UTC time>[-pre-restore][-N]`, holding:
+  - `polaroid.db`, a single file with mode `0600`;
+  - `backup.json`: format and version, time, reason, the source path, whether it is managed, the host, the schema version, the Polaroid build, the file's size and SHA-256, and row counts per table.
+
+  It is assembled in a private `.staging-*` directory, validated (integrity, foreign keys, schema), published by one rename that never overwrites an existing backup, and read back. A failed backup leaves nothing behind. The default directory, `~/.polaroid/backups`, is created with mode `0700`. There are no schedules, retention or remote copies; copy backups elsewhere yourself.
+- **`inspect-backup BACKUP`.** It checks the metadata, the file's size and SHA-256, integrity, foreign keys and schema compatibility, without changing anything. Exit 0 when valid, 1 when not, with the problems listed.
+- **`restore [-db FILE] [-dir DIR] [-plan] [-replace] [-wait D] BACKUP`.** Exit 0 when restored (or, with `-plan`, ready), 1 on failure, 3 when it refused and changed nothing.
+  - `-plan` prints the backup report, the destination (exists, schema, `-wal`/`-shm` files, managed), the service state, any schema migration, the actions and the blockers. It changes nothing.
+  - It refuses an invalid backup, a backup whose schema is newer than this `polaroid` supports, a destination whose schema is newer (that would be a downgrade), and an existing catalog without `-replace`. An older backup is migrated on the staged copy, and the plan says so.
+  - **Offline.** The managed catalog is taken offline through the service: a `running` service is stopped and started again afterwards; any other state (`failed`, `starting`, an endpoint held by a process the installation does not own) is refused. Any other catalog must already be offline: a `-wal` or `-shm` file beside it is refused. That check is advisory: it cannot stop a process from opening the file during the restore.
+  - **Order.** Stage and validate a copy beside the catalog; stop the managed service; take and validate a `pre-restore` recovery backup of the current catalog into `DIR` (on failure nothing is replaced); keep the current file as `<db>.pre-restore-<time>`; atomically rename the staged `0600` file over the catalog; start the service and wait until it is healthy (`-wait`, 30s by default); remove `<db>.pre-restore-<time>`. The JSON names the `recovery_backup`.
+  - **Rollback.** If the service does not start on the restored catalog, the restored file is kept as `<db>.failed-restore-<time>`, the original is put back and the service is started again; the outcome is `rolled-back` and exit 1.
+  - **History.** Everything written after the snapshot is replaced, never merged; it survives in the recovery backup. To undo a restore, restore the recovery backup: `polaroid restore -replace <recovery_backup>`.
+
+**Crash and durability limits.** An interruption before the rename leaves the catalog unchanged, perhaps with a `.staging-*` or `.polaroid-restore-*` directory that is safe to delete. After it, the restored catalog is in place, the original is kept as `<db>.pre-restore-<time>` and the recovery backup exists; the service may be stopped, so run `polaroid start`. Files and directories are synced; on macOS `fsync` does not flush the drive's cache, so a power loss right after a backup or restore may lose it. Concurrent restores of one catalog are not coordinated.
+
+Rehearse a restore without touching your catalog by restoring into a new file:
+
+```sh
+polaroid backup -dir /tmp/rehearsal                      # prints {"path":"/tmp/rehearsal/polaroid-…",…}
+polaroid restore -db /tmp/rehearsal/copy.db -dir /tmp/rehearsal /tmp/rehearsal/polaroid-…
+polaroidd -addr 127.0.0.1:7501 -db /tmp/rehearsal/copy.db &
+polaroid -server http://127.0.0.1:7501 list
+```
 
 ## Repository map
 
@@ -200,6 +234,7 @@ polaroid status                         # JSON; exit 0 when running and healthy
 | `internal/transport/mcp` | The MCP server at `/mcp` |
 | `internal/transport/wire` | Record and error JSON shapes shared by both transports |
 | `internal/lifecycle`, `internal/version` | Per-user installation, the managed service, and build identity |
+| `internal/recovery` | Catalog backup, inspection and restore |
 | [examples/](examples) | Example procedure records, and Polaroid's own development procedures |
 | [docs/architecture/](docs/architecture) | [Overview](docs/architecture/overview.md), [records](docs/architecture/records.md), [HTTP API](docs/architecture/http-api.md), [MCP](docs/architecture/mcp.md), [decisions](docs/architecture/decisions/README.md) |
 | [docs/development/](docs/development) | [Workflow](docs/development/workflow.md), [status](docs/development/status.md), [roadmap](docs/development/roadmap.md), [dependencies](docs/development/dependencies.md), [procedural loop](docs/development/procedural-loop.md) |

@@ -51,7 +51,7 @@ Polaroid is a versioned procedural memory service for agents, written in Go, wit
 | Path | Responsibility |
 | --- | --- |
 | `cmd/polaroidd` | Daemon: configuration, wiring, lifecycle |
-| `cmd/polaroid` | Generic CLI client |
+| `cmd/polaroid` | Generic CLI client, and the local service and catalog commands |
 | `internal/memory` | Domain records, validation, version rules, the `Store` contract |
 | `internal/storage/sqlite` | `Store` on SQLite: migrations, transactions, immutability triggers |
 | `internal/transport/http` | JSON API: parsing, validation, error mapping |
@@ -59,6 +59,7 @@ Polaroid is a versioned procedural memory service for agents, written in Go, wit
 | `internal/transport/wire` | Record and error JSON shapes shared by both transports |
 | `internal/archtest` | Package-boundary tests |
 | `internal/lifecycle` | Per-user installation and the managed service (launchd, systemd user services); no domain, storage or transport code |
+| `internal/recovery` | Catalog backup, inspection and restore (ADR-0030); the only way `cmd/polaroid` reaches storage |
 | `internal/version` | Build identity from the embedded VCS metadata |
 | `examples/` | Example procedure records (task knowledge), and Polaroid's development procedures in `examples/development/`, loaded with `scripts/load-fixtures.sh` |
 | `docs/` | Architecture, decisions, workflow, status, roadmap |

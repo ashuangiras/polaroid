@@ -1,0 +1,105 @@
+{
+  "canonical_key": "polaroid.operations.change",
+  "version": {
+    "philosophy": "Local operations act on a user's real catalog and service: a backup that is not a snapshot, or a restore that races a writer, destroys the very history Polaroid exists to keep. Decide the contract and every failure path before code, prove each failure path with a test that injects it, and check the operation against the real service manager and the packaged binaries users run.",
+    "method": "Write the contract, failure behaviour and recovery boundaries in an ADR; implement the generic mechanism in code, never task knowledge; test success and every injected failure against real files; verify the commit through the verify reference, decide the lifecycle and archive references from what the change touches, and exercise the operation on an isolated copy of real data, never on the live catalog.",
+    "goal": "Add or change a local operation of the polaroid CLI on a catalog or on the managed service (installation, service control, backup, inspection, restore) without risking a user's catalog.",
+    "applicability": {
+      "repository": "github.com/ashuangiras/polaroid"
+    },
+    "contract": {
+      "inputs": {
+        "work_item": "The issue that holds the operation's acceptance criteria.",
+        "build_command": "Passed to the verify reference.",
+        "artifacts": "Passed to the verify reference.",
+        "gate_commands": "Passed to the verify reference.",
+        "working_tree": "Passed to the verify reference; set by the agent at run time.",
+        "platform": "The host's os/arch, passed to the archive reference."
+      },
+      "preconditions": [
+        "A work item with testable acceptance criteria, including the failures the operation must survive.",
+        "A branch from an up-to-date main."
+      ],
+      "expected_outcome": "The operation's contract, failure behaviour and limits are in an ADR and the docs; each failure path has a test that injects it and checks that the catalog and the service end in the documented state; the commit is verified through verify, with the lifecycle and archive references decided from the change; the operation was exercised on an isolated copy of real data; the user's live catalog and service were never the test subject.",
+      "verification": [
+        "Each documented failure has a test that fails when its handling is removed (a mutation check), using real SQLite files and, for the service, the lifecycle test managers.",
+        "The verify child is verified at the commit; the lifecycle and archive references have recorded decisions based on the changed files, and their children are verified when they apply.",
+        "The isolated exercise's evidence names the copy it used and compares its records with the source through the API."
+      ],
+      "boundaries": [
+        "Never runs a destructive step (restore, uninstall, stop) against the user's live catalog or service to test it; use an isolated HOME, -db path or service name.",
+        "Never deletes a backup, a recovery copy or a -wal/-shm file to make an operation succeed.",
+        "Never skips the verify reference or any of its gate commands (AGENTS.md)."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "contract",
+          "action": "Read AGENTS.md, the ADRs and code the operation touches (storage, lifecycle, the CLI's local commands) and the procedures that describe the operation today. Write an ADR: the commands, what each opens and changes, the order of steps, each failure and the state it leaves, crash and durability limits, and what is out of scope.",
+          "done_when": "The ADR is committed before the implementation."
+        },
+        {
+          "id": "implement",
+          "action": "Implement the mechanism once, in the package that owns it; keep operator instructions in procedures and docs. Test every documented failure by injecting it, and every success through the existing APIs (read records back), not by file existence or counts alone. Run a mutation check for each safety rule."
+        },
+        {
+          "id": "verify",
+          "action": "Commit and follow the verify reference at that exact commit, recording its children before it.",
+          "required_by": "AGENTS.md: make check, and make vuln, demo, e2e and e2e-mcp where available, before calling a change done."
+        },
+        {
+          "id": "lifecycle",
+          "action": "Decide from the changed files whether the lifecycle reference's condition holds; follow it in the verification worktree if it does. Record the decision either way.",
+          "when": "The lifecycle reference's condition holds.",
+          "escalate_when": "The operation stops, starts or inspects the managed service in a new way: then it applies."
+        },
+        {
+          "id": "archive",
+          "action": "If the change alters what the archives contain or how they are smoke-tested, follow the archive reference with a freshly packaged archive of the commit. Record the decision either way.",
+          "when": "The archive reference's condition holds."
+        },
+        {
+          "id": "exercise",
+          "action": "Exercise the operation on an isolated copy of real data (for example a backup of the development catalog restored into a temporary -db), and compare the result with the source through the API.",
+          "done_when": "The comparison is recorded; the live catalog and service were only read."
+        },
+        {
+          "id": "record",
+          "action": "Record this execution with the work item, the ADR, the failure tests and mutation checks with their observed failures, the children and decisions, and the isolated exercise."
+        }
+      ]
+    },
+    "references": [
+      {
+        "name": "verify",
+        "procedure_id": "dev.change.verify",
+        "version_policy": {"contextual": {}},
+        "inputs": {
+          "artifacts": {"input": "artifacts"},
+          "build_command": {"input": "build_command"},
+          "gate_commands": {"input": "gate_commands"},
+          "working_tree": {"input": "working_tree"}
+        }
+      },
+      {
+        "name": "lifecycle",
+        "procedure_id": "polaroid.lifecycle.check",
+        "version_policy": {"contextual": {}},
+        "inputs": {},
+        "condition": "The change can alter how Polaroid is installed, started, stopped, upgraded or recovered as a service, or coordinates with the managed service: it touches internal/lifecycle, the CLI's local commands that call it, polaroidd's flags, logging, start-up or shutdown, scripts/lifecycle-check.sh, or the service definitions."
+      },
+      {
+        "name": "archive",
+        "procedure_id": "polaroid.archive.check",
+        "version_policy": {"contextual": {}},
+        "inputs": {
+          "platform": {"input": "platform"},
+          "assets": {"value": "local"}
+        },
+        "condition": "The change alters what the release archives contain or how they are smoke-tested: packaging/, scripts/package.sh, scripts/smoke-archive-check.sh or the release workflow."
+      }
+    ],
+    "revision_reason": "Initial version, created for #56 (catalog backup and restore): no procedure covered adding a local operation that acts on the user's catalog and service; record-model.change covers stored-record changes and packaging.change covers packaging only."
+  }
+}
