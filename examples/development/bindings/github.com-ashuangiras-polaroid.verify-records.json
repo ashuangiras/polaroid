@@ -19,5 +19,47 @@
       "contextual": {}
     },
     "revision_reason": "Procedure-record and binding changes (#65): load the fixtures into isolated catalogs, resolve every binding and replay the scripted procedural-memory loop. Not full verification."
-  }
+  },
+  "later_revisions": [
+    {
+      "base_revision": 1,
+      "revision": {
+        "inputs": {
+          "scope": "records",
+          "build_command": "make build",
+          "artifacts": [
+            "bin/polaroidd",
+            "bin/polaroid"
+          ],
+          "gate_commands": [
+            "make demo"
+          ]
+        },
+        "version_policy": {
+          "contextual": {}
+        },
+        "revision_reason": "#75: records-check runs once, as polaroid.change.records step isolated-load (from a backup of the live catalog); it is no longer repeated in the gate. Contextual: version 2 is selected by evidence after its first, explicitly chosen run."
+      }
+    },
+    {
+      "base_revision": 2,
+      "revision": {
+        "inputs": {
+          "scope": "records",
+          "build_command": "make build",
+          "artifacts": [
+            "bin/polaroidd",
+            "bin/polaroid"
+          ],
+          "gate_commands": [
+            "make demo"
+          ]
+        },
+        "version_policy": {
+          "pin": 3
+        },
+        "revision_reason": "#77: pins polaroid.change.records version 3, whose load step appends later binding revisions from the fixtures instead of live-only revise-binding calls. Contextual resolution would keep version 2, which has evidence."
+      }
+    }
+  ]
 }

@@ -99,6 +99,7 @@ Polaroid's own development procedures (build, checks, verify a change at full or
 | `make deps-check` | Verifies the [dependency and license inventory](docs/development/dependencies.md). |
 | `make docs-check` | Checks every relative link and anchor in the Markdown files. |
 | `make records-check` | Loads the fixture records into an isolated catalog twice and resolves their bindings. |
+| `make loader-check` | Checks how the fixture loader handles binding revisions, in an isolated catalog. |
 | `make check` | Runs every offline check above. |
 | `make focused PKGS='...'` | Runs the offline checks with the tests of `PKGS` only, for a bounded change. |
 | `make vuln` | Runs govulncheck. |

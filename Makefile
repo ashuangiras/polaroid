@@ -16,7 +16,7 @@ PKGS                  ?= ./...
 export GO BIN
 
 .DEFAULT_GOAL := help
-.PHONY: help fmt fmt-check vet lint build binaries test race deps-check docs-check records-check check focused vuln demo run ci e2e e2e-mcp lifecycle clean
+.PHONY: help fmt fmt-check vet lint build binaries test race deps-check docs-check records-check loader-check check focused vuln demo run ci e2e e2e-mcp lifecycle clean
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z0-9-]+:.*## / {printf "  %-13s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -56,7 +56,10 @@ docs-check: ## Check the relative links and anchors of every tracked Markdown fi
 records-check: binaries ## Load the fixture records into an isolated catalog twice and resolve their bindings (RECORDS_FROM=BACKUP starts from a copy)
 	@./scripts/check-records.sh
 
-check: fmt-check vet lint binaries test race deps-check docs-check records-check ## Run every offline check
+loader-check: binaries ## Check how scripts/load-fixtures.sh loads binding revisions, in an isolated catalog
+	@./scripts/check-loader.sh
+
+check: fmt-check vet lint binaries test race deps-check docs-check records-check loader-check ## Run every offline check
 
 focused: ## Offline checks with the tests of PKGS only, for a bounded change (PKGS is required)
 	@[ "$(origin PKGS)" = "command line" ] || { echo "focused: set PKGS to the changed packages and every package that imports them"; exit 2; }

@@ -45,6 +45,15 @@ The loader reuses existing identities, appends missing versions with the right `
 
 Fixtures may also register repositories (`repositories/*.json`: a register request plus optional `aliases`), record an origin once (`procedures/<name>/origin.json`), and name a repository by identifier wherever an ID is expected (`version.applicability.repository`, `origin.repository_id`); the loader replaces it with the registered ID, as it does canonical keys.
 
+A binding fixture (`bindings/*.json`) is the create-binding request: `repository` (an identifier), `name`, `procedure_id` (a canonical key) and `revision`, which is revision 1. Its later revisions follow, in order, in `later_revisions`, each one the revise-binding request body: entry *i* (from 0) is `{"base_revision": i+1, "revision": {inputs, version_policy, revision_reason}}` and is revision *i*+2. A pin names a version number of the bound procedure, so it is portable between catalogs. Revisions are only appended, in the fixture as in the store; a fixture without `later_revisions` means revision 1 only, as before. The loader:
+
+- checks every binding fixture (shape, numbering, the bound procedure and every pinned version) before it writes any binding;
+- creates a missing binding with revision 1, compares each stored revision the fixture represents, and appends the missing ones in order;
+- refuses a stored revision that differs, and stops on a stale base (another writer appended first), naming the store's latest revision; it never overwrites, recreates or merges;
+- keeps revisions the store has beyond the fixture and reports them, with the store's `latest_revision` in its output.
+
+A load is a series of API calls, not one transaction: if it stops, what it already wrote stays, and running it again after fixing the cause continues where it stopped. `make loader-check` exercises each of these cases in an isolated catalog.
+
 ## Repositories A and B
 
 [multi-repository/](multi-repository) is a fixture-only pair of repositories for [#35](https://github.com/ashuangiras/polaroid/issues/35). Neither repository exists. Repository A (with a mirror alias) and B both bind the shared `go.test.run` with different `packages`; A also has `service-a.release`, local to A, which composes `go.test.run`. `make demo` loads them and shows that B cannot bind A's local procedure, that a run in A verifies nothing in B, and how feedback and paged lists find their records.
