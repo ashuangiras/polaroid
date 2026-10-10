@@ -1,0 +1,77 @@
+{
+  "canonical_key": "polaroid.service.manage",
+  "version": {
+    "philosophy": "A shared Polaroid instance is infrastructure that agents depend on. Moving it from a hand-started process to the managed per-user service is a maintenance step: it is announced, it waits for active work, it changes the process and never the catalog, and it is judged by what clients see before and after and by who owns the endpoint, not by a manager command's exit status.",
+    "method": "Identify the running process, announce and check for activity, back up and inventory the catalog over HTTP, stop the manual process gracefully, install and start the managed service on the same catalog and endpoint with `polaroid install`, then confirm ownership, health, MCP access, the inventory and that no other daemon or launch arrangement remains.",
+    "goal": "Move a running Polaroid instance that was started by hand onto the managed per-user service (launchd agent or systemd user service), on the same catalog and endpoint, without losing or changing any record or derived verification.",
+    "applicability": {
+      "repository": "github.com/ashuangiras/polaroid"
+    },
+    "contract": {
+      "inputs": {
+        "endpoint": "The instance's base URL, for example http://127.0.0.1:7417.",
+        "catalog": "The database the running instance serves, as found by inspecting the process.",
+        "binaries_from": "The directory holding the polaroid and polaroidd to install, built at build_commit.",
+        "build_commit": "The full commit the installed binaries were built from."
+      },
+      "preconditions": [
+        "polaroid install supports this platform's manager (ADR-0026): a GUI login session on macOS, a reachable systemd user manager on Linux.",
+        "sqlite3, curl and jq available; permission to stop the instance briefly."
+      ],
+      "expected_outcome": "The managed service serves the same catalog on the same endpoint and owns it; every record and verification read over HTTP is unchanged; an integrity-checked backup taken at the cutover is kept; no hand-started daemon or launch command for it remains; the operating and recovery instructions are recorded.",
+      "verification": [
+        "polaroid status reports running, with the PID the service manager reports, the installed build, the catalog and the endpoint.",
+        "The inventory (procedures with histories, repositories, bindings, executions with verifications, feedback, representative target resolutions) is identical before and after.",
+        "An MCP read of representative records equals the HTTP read.",
+        "Exactly one polaroidd runs for the catalog, and it is the managed one."
+      ],
+      "boundaries": [
+        "Never runs uninstall, forced crashes or failed upgrades against the live catalog; those are exercised on isolated installations (make lifecycle).",
+        "Never stops a process that holds the endpoint without first identifying it as the instance being moved.",
+        "Changes no record and no schema; keeps the backup.",
+        "Does not stop the instance while another operation is actively using it: defer the cutover."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "identify",
+          "action": "Find the process serving the endpoint (lsof on macOS, /proc or ss on Linux): its PID, binary, arguments, working directory, parent, open database files and log destination, and whether a service manager or a shell started it. Run `polaroid status` with the binaries to install: it must report not-installed with this process as the endpoint's holder, or name the existing installation."
+        },
+        {
+          "id": "announce",
+          "action": "Check for active work: established connections to the endpoint, the newest execution and feedback times, the database's -wal modification time. Announce the maintenance on the work item. If something is actively writing, finish other work first and come back."
+        },
+        {
+          "id": "backup-inventory",
+          "action": "Take a SQLite online backup of the catalog into ~/.polaroid/backups/ with `sqlite3 CATALOG \".backup FILE\"`, check it with PRAGMA integrity_check, and read the inventory over HTTP: every procedure history, repository, binding, execution with its verification, feedback report, and target resolutions for each repository's bindings at commits their executions verify. Record a digest."
+        },
+        {
+          "id": "stop-manual",
+          "action": "Stop the identified process with SIGTERM, wait until it has exited, and confirm with lsof that nothing holds the catalog or the endpoint."
+        },
+        {
+          "id": "install",
+          "action": "Run `polaroid install -from BINARIES_FROM` (with -db or -addr only if the instance used non-default ones). It reports running only when the managed process owns the endpoint and is healthy; any other result stops here: read the diagnostics it names, and fall back with on-failure."
+        },
+        {
+          "id": "confirm",
+          "action": "Run `polaroid status`: running, with the manager's PID. Repeat the inventory and compare it byte for byte. Read representative records over MCP (restart the MCP client if it cached the old server) and compare them with HTTP. Confirm that exactly one polaroidd runs for the catalog and that it is the managed one."
+        },
+        {
+          "id": "launch-arrangements",
+          "action": "Find and update every launch command, script, editor task or document that still starts the daemon by hand for this catalog, so that `polaroid start`/`stop`/`status` are the operating commands. Leave historical records as they are."
+        },
+        {
+          "id": "record",
+          "action": "Record this execution with the inputs, the process found and how it was started, the activity check and announcement, the backup and its integrity, the inventory digests, the status before and after, the comparison, the launch arrangements updated, and the recovery commands. Outcome succeeded only if every step held."
+        },
+        {
+          "id": "on-failure",
+          "action": "Recover: `polaroid stop` (or uninstall the managed service on an isolated basis only if it was never healthy), then start the previous binary by hand on the same catalog and endpoint as it was found. The catalog is unchanged unless the installed build migrated it; if it did, the previous build refuses it: restore the backup taken at the cutover. Keep the backup and report."
+        }
+      ]
+    },
+    "revision_reason": "Initial version, for #43."
+  }
+}

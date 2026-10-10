@@ -1,0 +1,4 @@
+{
+  "repository_id": "github.com/ashuangiras/polaroid",
+  "reason": "Created in Polaroid during #43: no stored procedure covered putting a running instance under the managed per-user service."
+}
