@@ -282,7 +282,7 @@ func TestReadinessTimeoutAndStartupFailure(t *testing.T) {
 	if !errors.Is(err, ErrStartFailed) || st.State != Failed || !strings.Contains(st.Action, "start failed") || !strings.Contains(st.Detail, "exited with status 1") {
 		t.Fatalf("a daemon that cannot start: %+v, %v", st, err)
 	}
-	if !strings.Contains(st.Detail, "refuses a database this build has migrated") {
+	if !strings.Contains(st.Detail, "it keeps the current catalog") || !strings.Contains(st.Detail, "Restoring a catalog backup is a separate step") {
 		t.Fatalf("no recovery advice: %s", st.Detail)
 	}
 }

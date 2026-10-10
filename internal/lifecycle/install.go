@@ -2,6 +2,8 @@ package lifecycle
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
@@ -62,7 +64,14 @@ func (s *Service) Install(ctx context.Context, o InstallOptions) (Status, error)
 	if o.From == "" || err != nil {
 		return fail(errors.New("-from is required: the directory holding the built polaroid and polaroidd, for example the checkout's bin/ after make build"))
 	}
-	build, err := s.sourceBuild(ctx, from)
+	// Everything below uses this private copy: from may be previous/, which
+	// keepPrevious replaces.
+	staged, err := stageSource(from)
+	if err != nil {
+		return fail(err)
+	}
+	defer func() { _ = os.RemoveAll(staged) }()
+	build, err := s.sourceBuild(ctx, from, staged)
 	if err != nil {
 		return fail(err)
 	}
@@ -71,8 +80,8 @@ func (s *Service) Install(ctx context.Context, o InstallOptions) (Status, error)
 		return fail(err)
 	}
 	targets := []*target{
-		{role: "polaroidd", path: l.Polaroidd(), mode: 0o755, content: openFile(filepath.Join(from, "polaroidd"))},
-		{role: "polaroid", path: l.Polaroid(), mode: 0o755, content: openFile(filepath.Join(from, "polaroid"))},
+		{role: "polaroidd", path: l.Polaroidd(), mode: 0o755, content: openFile(filepath.Join(staged, "polaroidd"))},
+		{role: "polaroid", path: l.Polaroid(), mode: 0o755, content: openFile(filepath.Join(staged, "polaroid"))},
 		{role: "definition", path: l.DefinitionPath(), mode: 0o644, content: openBytes(def)},
 	}
 	unchanged := old != nil && old.Addr == addr && old.DB == db
@@ -169,7 +178,7 @@ func (s *Service) Install(ctx context.Context, o InstallOptions) (Status, error)
 	if err != nil {
 		st.Action = action + "; start failed"
 		if st.Previous != "" {
-			st.Detail += fmt.Sprintf("; the previous installation is in %s: `polaroid install -from %s` reinstalls it, but it refuses a database this build has migrated (ADR-0026)", st.Previous, st.Previous)
+			st.Detail += fmt.Sprintf("; to go back to the previous build, run `polaroid install -from %s`: it keeps the current catalog, and an older build refuses to start on a catalog whose schema this one upgraded. Restoring a catalog backup is a separate step that loses the records written after the backup; nothing is restored automatically (ADR-0026)", st.Previous)
 		}
 		return st, err
 	}
@@ -205,20 +214,39 @@ func checkLoopback(addr string) error {
 	return nil
 }
 
-// sourceBuild checks that from holds a polaroid and a polaroidd of one build
-// with an embedded VCS revision, and returns that build.
-func (s *Service) sourceBuild(ctx context.Context, from string) (version.Build, error) {
+// stageSource copies the polaroid and polaroidd in from into a new private
+// directory, whose bytes are then validated, hashed and installed.
+func stageSource(from string) (string, error) {
+	dir, err := os.MkdirTemp("", "polaroid-install-")
+	if err != nil {
+		return "", err
+	}
+	for _, name := range []string{"polaroidd", "polaroid"} {
+		src := filepath.Join(from, name)
+		st, err := os.Stat(src)
+		if err != nil || !st.Mode().IsRegular() || st.Mode().Perm()&0o100 == 0 {
+			_ = os.RemoveAll(dir)
+			return "", fmt.Errorf("-from %s: no executable %s there; run make build first", from, name)
+		}
+		if err := replace(filepath.Join(dir, name), 0o700, openFile(src)); err != nil {
+			_ = os.RemoveAll(dir)
+			return "", fmt.Errorf("-from %s: copy %s: %w", from, name, err)
+		}
+	}
+	return dir, nil
+}
+
+// sourceBuild checks that dir, staged from from, holds a polaroid and a
+// polaroidd of one build with an embedded VCS revision, and returns that
+// build.
+func (s *Service) sourceBuild(ctx context.Context, from, dir string) (version.Build, error) {
 	var builds []version.Build
 	for _, c := range []struct{ name, arg string }{{"polaroidd", "-version"}, {"polaroid", "version"}} {
-		path := filepath.Join(from, c.name)
-		st, err := os.Stat(path)
-		if err != nil || !st.Mode().IsRegular() || st.Mode().Perm()&0o100 == 0 {
-			return version.Build{}, fmt.Errorf("-from %s: no executable %s there; run make build first", from, c.name)
-		}
+		path := filepath.Join(dir, c.name)
 		res, err := s.Runner.Run(ctx, path, c.arg)
 		var b version.Build
 		if err != nil || res.Code != 0 || json.Unmarshal([]byte(strings.TrimSpace(res.Stdout)), &b) != nil || b.Name != c.name {
-			return version.Build{}, fmt.Errorf("-from %s: %s does not report a Polaroid build (%s %s)", from, c.name, path, c.arg)
+			return version.Build{}, fmt.Errorf("-from %s: %s does not report a Polaroid build (%s %s)", from, c.name, filepath.Join(from, c.name), c.arg)
 		}
 		if b.Revision == "" {
 			return version.Build{}, fmt.Errorf("-from %s: %s has no embedded VCS revision; build it with make build in a git checkout", from, c.name)
@@ -247,15 +275,11 @@ func sumOf(content func() (io.ReadCloser, error)) (string, error) {
 		return "", err
 	}
 	defer func() { _ = r.Close() }()
-	tmp, err := os.CreateTemp("", "polaroid-sum-")
-	if err != nil {
+	h := sha256.New()
+	if _, err := io.Copy(h, r); err != nil {
 		return "", err
 	}
-	defer func() { _ = os.Remove(tmp.Name()); _ = tmp.Close() }()
-	if _, err := io.Copy(tmp, r); err != nil {
-		return "", err
-	}
-	return fileSHA256(tmp.Name())
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // replace writes content beside path and renames it into place, so path is
@@ -292,22 +316,34 @@ func replace(path string, mode fs.FileMode, content func() (io.ReadCloser, error
 
 // keepPrevious copies the installed files to previous/, replacing an older
 // copy, so that a failed upgrade can be recovered by installing from there.
+// The new copy is complete before the old one is replaced.
 func (s *Service) keepPrevious(targets []*target) error {
 	prev := s.Layout.previousDir()
-	if err := os.RemoveAll(prev); err != nil {
+	next, err := os.MkdirTemp(s.Layout.StateDir, ".previous-")
+	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(prev, 0o700); err != nil {
-		return err
-	}
+	defer func() { _ = os.RemoveAll(next) }()
 	for _, t := range append(targets, &target{path: s.Layout.manifestPath(), mode: 0o600, existed: true}) {
 		if !t.existed {
 			continue
 		}
-		if err := replace(filepath.Join(prev, filepath.Base(t.path)), t.mode, openFile(t.path)); err != nil {
+		if err := replace(filepath.Join(next, filepath.Base(t.path)), t.mode, openFile(t.path)); err != nil {
 			return err
 		}
 	}
+	old := filepath.Join(s.Layout.StateDir, ".previous.old")
+	if err := os.RemoveAll(old); err != nil {
+		return err
+	}
+	if err := os.Rename(prev, old); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if err := os.Rename(next, prev); err != nil {
+		_ = os.Rename(old, prev)
+		return err
+	}
+	_ = os.RemoveAll(old)
 	return nil
 }
 
