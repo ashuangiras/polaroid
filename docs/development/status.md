@@ -2,6 +2,27 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
+**First stable release in progress ([#110](https://github.com/ashuangiras/polaroid/issues/110)), as of 2026-10-11.** The scope, the criteria and their evidence are in [release-readiness.md](release-readiness.md).
+
+- **Merged for it:**
+  - #103, the CLI `=` fix (#102);
+  - #105, concurrency and storage failures (#104);
+  - #107, contract review (#106);
+  - #109, ADR-0038, stable packaging and the readiness document (#108);
+  - #113, commit guidance for recorded runs (#112).
+- **Code verified** at `6c98ce3`, merged as `57bfb74` with the same tree:
+  - `verify-change` `01a12c58-be35` (verified);
+  - `make lifecycle` launchd 68/0, `01a12c59-bfe5`.
+- **Candidate** `v1.0.0-rc.1` is published as a prerelease.
+  - Its archives were checked anonymously.
+  - The isolated launchd candidate run passed 27/0.
+  - Two 30-minute sustained runs were made.
+  - Three fresh-agent sessions ran on google/uuid.
+- **Criteria 1 to 8, 10 and 11 are met, with the limitations listed there.** Criteria 9, 12 and 13 wait for the release run, the artifact check and the shared-service upgrade.
+- **Filed for after 1.0:** [#111](https://github.com/ashuangiras/polaroid/issues/111), reads that take the write lock.
+
+Next action: tag `v1.0.0` on this document's merge, verify the published artifacts, and upgrade the shared service.
+
 **Catalog statistics and write limits released and adopted ([#100](https://github.com/ashuangiras/polaroid/issues/100)), as of 2026-10-11.** Each state below has its own evidence.
 
 - **Merged:** PR #99 is merged as `7f4ab44`, whose tree equals `27887c8`'s.

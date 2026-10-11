@@ -29,7 +29,7 @@ Measured in [#104](https://github.com/ashuangiras/polaroid/issues/104) with real
 - **Reads during writes.** Statistics, lists and verification read during concurrent execution recording are consistent and never go back. Every accepted write reads back byte for byte.
 - **Lock contention.** A writer queues for up to 5 seconds. A write that cannot take the lock in time, for example because another program holds a write transaction, is `500 internal`, stores nothing, and can be retried. Reads continue.
 - **Shutdown.** A shutdown under load keeps exactly the writes that were answered `201`, and the database passes SQLite's integrity check.
-- **Scale.** Throughput is bounded by one writer at a time. The sustained-use run ([below](#sustained-use)) gives the measured rates.
+- **Scale.** Throughput is bounded by one writer at a time. The sustained-use runs ([below](#sustained-use)) give the measured rates.
 
 ## Storage growth
 
@@ -86,7 +86,23 @@ It is not planned for `v1`.
 
 ## Sustained use
 
-Pending: a bounded run of the supported workload against an isolated copy of the shared catalog. Its duration, workload and results are filled in here before release.
+Two bounded runs on 2026-10-11 against isolated copies of the shared catalog, each restored from a fresh backup and served by its own daemon on another port, with an empty HOME. A script played agents: each loop discovers a task, reads a procedure, resolves a binding, records a leaf and a parent execution with 0.2 to 3 KB of evidence, reads the parent's verification and lists executions. One loop in ten reads the statistics, one in fifty revises a procedure from its latest version, and one in a hundred reports feedback. At the end, every accepted execution was read back and compared byte for byte, and `PRAGMA integrity_check` ran on the stopped catalog.
+
+| | Run 1: saturation | Run 2: agent pace |
+| --- | --- | --- |
+| Build | `24f2446`: the same Go code as `v1.0.0-rc.1` | `v1.0.0-rc.1` release binaries |
+| Load | 30 minutes; 4 workers with no pause between calls | 30 minutes; 8 workers pausing 0 to 2 s (1 s on average) between loops |
+| Executions accepted | 58,780 (about 33 a second) | 27,178 (about 15 a second) |
+| Readback mismatches | 0 | 0 |
+| Errors | 1: a binding resolution got `500 internal` (`database is locked` after the 5 s lock wait) | 0, and no error in the daemon's log |
+| Latency p50 / p99 / max | record 2 / 739 / 5,045 ms; resolve 69 / 1,381 / 5,038 ms; discover 4 / 12 / 63 ms | record 2 / 83 / 444 ms; resolve 26 / 112 / 500 ms; discover 4 / 18 / 108 ms |
+| Catalog | 226 to 59,006 executions; 1.4 MB to 122.5 MB | 236 to 27,414 executions; 1.4 MB to 57.4 MB |
+| Daemon memory (RSS) | about 76 MB at the end | 68 MB at the end, at most 69 MB |
+| `integrity_check` | ok | ok |
+
+**Finding: reads that take the write lock.** In run 1, one binding resolution failed. Graph walks, resolutions and verification read inside a write transaction, for one consistent snapshot over several statements. So under continuous writing they wait for the write lock like a writer, and past 5 seconds they fail with `500`. No write was lost or altered, and the retry succeeds. At the paced load of run 2, with twice the clients, no call took more than 0.5 s and none failed. Moving these reads to read-only transactions is [#111](https://github.com/ashuangiras/polaroid/issues/111), after `v1.0.0`; it changes no contract.
+
+Both runs wrote far faster than the shared catalog's measured rate (about 108 executions a day): run 1 recorded about 540 days of that rate in half an hour.
 
 ## Release criteria
 
@@ -94,23 +110,56 @@ Each criterion must be met for a stable `vX.Y.Z`. Otherwise the release stays a 
 
 | # | Criterion | Measure | Evidence | Status |
 | --- | --- | --- | --- | --- |
-| 1 | Scope and policy are defined | This document and ADR-0038 are merged | [#108](https://github.com/ashuangiras/polaroid/issues/108) | Pending |
+| 1 | Scope and policy are defined | This document and ADR-0038 are merged | [#108](https://github.com/ashuangiras/polaroid/issues/108), PR #109 | Met |
 | 2 | Known defects are fixed | The CLI keeps a quoted task with `=` intact, and filter validation is unchanged | [#102](https://github.com/ashuangiras/polaroid/issues/102), PR #103 | Met |
 | 3 | Agents learn formats from the contract, not from rejections | Every rule validation enforces on an MCP write is stated in the tool's description or schema, and the documentation matches the implementation | [#106](https://github.com/ashuangiras/polaroid/issues/106), PR #107 | Met |
 | 4 | Simultaneous local agents are safe | Conflicts are explicit; accepted writes are never lost; reads stay consistent; shutdown under load keeps exactly the acknowledged writes | [#104](https://github.com/ashuangiras/polaroid/issues/104), PR #105 | Met |
 | 5 | Storage failures are safe | A failure mid-write stores nothing; a full disk refuses writes, keeps reads, and recovers after space is freed | #104 tests, and the out-of-space run on a real volume | Met |
 | 6 | Growth is manageable without pruning | Measured rate and policy ([above](#storage-growth)) | This document | Met |
-| 7 | Sustained use | A bounded run of the supported workload has no errors, no lost or altered writes, and a database that passes `integrity_check` | [Sustained use](#sustained-use) | Pending |
-| 8 | The release target's code is verified | The full gate (`verify-change`) at the release commit's code, and `make lifecycle` against launchd | Release execution | Pending |
-| 9 | The pipeline publishes the release kind correctly | A stable tag becomes a stable release marked latest; every archive is tested natively, without systemd, and as a systemd user service | #108 dry run; release run | Pending |
-| 10 | The candidate works as a user receives it | On native platforms, from the published candidate archives: fresh install, MCP and CLI connection, restart and ownership, upgrade from `v0.7.0-verify.1` with history kept, online backup, inspection and restore, rollback to the previous build, and fresh-client tool discovery | Candidate checks | Pending |
-| 11 | Independent agents adopt it | Fresh agents with public onboarding discover, judge, create or reuse, record and later retrieve procedures in an existing codebase | [Acceptance](#acceptance-by-independent-agents) | Pending |
+| 7 | Sustained use | A bounded run of the supported workload has no errors, no lost or altered writes, and a database that passes `integrity_check` | [Sustained use](#sustained-use): run 2, 30 minutes at agent pace, 27,178 executions | Met. Run 1, at saturation, had one failed read ([#111](https://github.com/ashuangiras/polaroid/issues/111), [limitations](#known-limitations)) |
+| 8 | The release target's code is verified | The full gate (`verify-change`) at the release commit's code, and `make lifecycle` against launchd | `verify-change` at `6c98ce3`, verified (`dev.change.verify` `01a12c58-be35`); `make lifecycle` launchd 68/0 (`polaroid.lifecycle.check` `01a12c59-bfe5`). Later commits change documentation only | Met |
+| 9 | The pipeline publishes the release kind correctly | A stable tag becomes a stable release marked latest; every archive is tested natively, without systemd, and as a systemd user service | #108 dry run 38162980089; `v1.0.0-rc.1` run 38163822689 published a prerelease that was not marked latest, all nine jobs passing | Pending: the stable kind is shown only by the release run |
+| 10 | The candidate works as a user receives it | On native platforms, from the published candidate archives: fresh install, MCP and CLI connection, restart and ownership, upgrade from `v0.7.0-verify.1` with history kept, online backup, inspection and restore, rollback to the previous build, and fresh-client tool discovery | `v1.0.0-rc.1` archives downloaded anonymously and checked; an isolated launchd candidate run on darwin/arm64, 27 checks with none failed; the acceptance chats listed the tools. The other platforms: the release runners' native smoke and harness tests, and the systemd user-service job | Met, natively on darwin/arm64 only |
+| 11 | Independent agents adopt it | Fresh agents with public onboarding discover, judge, create or reuse, record and later retrieve procedures in an existing codebase | [Acceptance](#acceptance-by-independent-agents): three fresh chats on google/uuid | Met for discovery, reuse, binding, recording and retrieval. Creation untested; memory confound |
 | 12 | The published artifacts are intact | All archives, `SHA256SUMS` and `build-manifest.json`, downloaded anonymously, with checksums, binary hashes and the source commit matching; the unmodified smoke tests pass; no private data | Release execution | Pending |
 | 13 | The shared service adopts it | A backup is taken and the inventory is identical; native ownership, version, commit, endpoint, database and schema are confirmed; a fresh Copilot session makes real calls | Upgrade execution | Pending |
 
 ## Acceptance by independent agents
 
-Pending. Reported external evidence and a new trial are recorded here before release, with their provenance.
+Two sources of evidence, kept apart by provenance.
+
+**Reported, not inspected.** The owner reported earlier trials on ItsDangerous in which two agents used Polaroid. Their transcripts and catalogs were not available to this review, so they are cited as reported and are not counted as evidence here.
+
+**Observed trial (2026-10-11).** Three fresh VS Code Copilot chats, one after another, each had a short task in an existing codebase they had not seen: a clone of [google/uuid](https://github.com/google/uuid) at `2d3c2a9`. An isolated managed service on another port served a copy of the shared catalog. The agents had only the public onboarding: the MCP server's instructions and the tool descriptions. Their transcripts and the trial catalog were inspected afterwards. A fourth chat opened in that workspace stopped before any Polaroid call and is not counted.
+
+| Step | Session A (add a test) | Session B (another test, later) | Session C (after #112) |
+| --- | --- | --- | --- |
+| Discover | `discover_procedures` with its task | `discover_procedures`, then `get_procedure`, `list_procedures` and `list_bindings` | `list_bindings` for the repository first, then `discover_procedures`, `get_binding` and `get_procedure` |
+| Judge, reuse or create | Reused the shared `go.module.checks` v4 from its discovery entry. It read the procedure (`get_procedure`) only after recording. It created nothing | Read the same procedure, reused it, and created a binding `check-tests` for the repository | Reused B's binding and its procedure after reading them. It created nothing |
+| Register | Registered `github.com/google/uuid` | Its registration conflicted. `get_repository` found A's registration, which it used | Not needed: the repository was registered |
+| Record | One execution, with inputs `{}`, at the base commit | One execution at the base commit, with evidence claiming a clean working tree | Committed the new test locally (`56ef415`). It then called `resolve_binding` with that commit and its inputs, and recorded one execution through the binding at that commit. The execution is verified |
+| Retrieve | Not applicable | Found A's repository and the same procedure. It did not look up A's execution | Found B's binding and, through it, the procedure. It did not look up earlier executions |
+
+Sessions A and B ran on `v1.0.0-rc.1`. Their prompts said "do not commit", which left them no correct way to record a commit. Session C ran on the build of [#112](https://github.com/ashuangiras/polaroid/issues/112) (`6c98ce3`), and its prompt allowed local commits.
+
+**Findings.**
+
+- **A's and B's recorded executions were wrong evidence.** Each agent ran the checks on uncommitted changes and recorded the base commit as the commit that ran. Both executions were invalidated in the trial catalog. The commit field's contract did not say what to do with uncommitted changes.
+- **#112 states it now**, in the tool description, the server's instructions and the record contract: commit locally first and record that commit.
+  - Session C, on that build, committed and recorded the commit that ran.
+  - It ran the tests just before committing, then committed exactly the tested file with no change in between. So the recorded commit's tree is the tree that ran, but in the reverse order from the guidance.
+- Session A recorded against a procedure whose contract it had not read. Its inputs, `{}`, did not state the gate commands it ran. B and C read the contract first.
+- No agent created a procedure or reported feedback. The tasks required neither, so creation was not exercised.
+- **Confound.** The Copilot user's persistent memory, which mentions Polaroid, was loaded into every chat. The sessions were fresh chats, not agents without any prior knowledge.
+
+**Assessment.** Through the public onboarding, three fresh agents in an unfamiliar codebase did the following:
+
+- discovered procedures and reused one;
+- registered the repository and bound the procedure;
+- recorded executions;
+- built on each other's records: B found A's registration, and C found B's binding.
+
+With the #112 guidance, the last agent recorded a verified execution at the commit that ran. Two things remain unproven: creating a procedure, and a trial without the memory confound.
 
 ## Known limitations
 
@@ -121,4 +170,7 @@ Pending. Reported external evidence and a new trial are recorded here before rel
 - On macOS, `fsync` does not flush the drive's cache, so a power loss right after a write or backup may lose it.
 - Lexical discovery matches shared words, not meaning, so a task described in other words may not find the right procedure.
 - Concurrent restores of one catalog are not coordinated.
-- Managed-service checks ran natively on macOS (arm64) on the maintainer's machine. Linux managed-service checks run in the repository's `make lifecycle` on a systemd host when dispatched; the release runners test the archives without the managed service.
+- **Reads under saturation.** Graph walks, resolutions and verification take the write lock for their snapshot. Under continuous writing from several clients, such a read can wait past the 5-second lock timeout and fail with `500 internal`. It happened once in 29,390 resolutions in sustained run 1, and never at agent pace. Retry. [#111](https://github.com/ashuangiras/polaroid/issues/111) tracks a fix that changes no contract.
+- **Evidence is what agents claim.** Polaroid cannot see a working tree. An execution is accurate only if the agent committed what it ran, as the contract says ([#112](https://github.com/ashuangiras/polaroid/issues/112)). Wrong evidence is withdrawn with `invalidate_execution`.
+- **Acceptance gaps.** No independent agent has yet created a procedure in a trial, and the observed trials ran with the user's persistent Copilot memory. The ItsDangerous trials are reported, not inspected.
+- **Platform coverage.** Install, upgrade, backup, restore and rollback ran natively only on macOS arm64, on the maintainer's machine. On Linux, the release workflow tests each archive natively, and as a systemd user service on amd64 (`test-managed-service`). darwin/amd64 is tested by the release runners' smoke tests and harness only.
