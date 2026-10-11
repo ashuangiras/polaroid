@@ -106,6 +106,13 @@ func TestOversizedWritesStoreNothing(t *testing.T) {
 		limitViolationJSON{"reason", memory.MaxTextBytes + 1, memory.MaxTextBytes})
 	s.tooLarge(t, http.MethodPost, "/v1/executions/"+w.runA+"/invalidation", `{"reason":"`+text+`","actor":"a.b"}`,
 		limitViolationJSON{"reason", memory.MaxTextBytes + 1, memory.MaxTextBytes})
+	s.tooLarge(t, http.MethodPost, "/v1/procedures/"+w.steps+"/origin", `{"repository_id":"`+w.repoA+`","reason":"`+text+`"}`,
+		limitViolationJSON{"origin.reason", memory.MaxTextBytes + 1, memory.MaxTextBytes})
+	line := strings.Repeat("Q", memory.MaxLineBytes+1)
+	s.tooLarge(t, http.MethodPost, "/v1/repositories", `{"identifier":"github.com/o/c","name":"`+line+`"}`,
+		limitViolationJSON{"name", memory.MaxLineBytes + 1, memory.MaxLineBytes})
+	s.tooLarge(t, http.MethodPost, "/v1/repositories/"+w.repoA+"/aliases", `{"identifier":"mirror.example/o/c","reason":"`+text+`"}`,
+		limitViolationJSON{"reason", memory.MaxTextBytes + 1, memory.MaxTextBytes})
 
 	// A nested entry of a collection is named by its indices.
 	notes := w.content("observations", []any{map[string]any{"execution_id": w.runA, "note": "short"},
