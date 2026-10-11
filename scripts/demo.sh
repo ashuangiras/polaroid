@@ -731,7 +731,33 @@ echo "  at ${docs50:0:7}, integration applicable:     $code_at_docs"
 echo "  at ${code50:0:7}, integration applicable:     verified by task A's run; the later run without its integration child is another combination"
 dev_before="$(dev_snapshot)"
 
-step "24. Restart polaroidd and confirm every record persisted"
+step "24. Lexical discovery and duplicate suggestions over the development procedures (#79, ADR-0032; scripted regression evidence)"
+top79() { bin/polaroid discover "$1" ${2:+"repository=$2"} limit=3 | jq -r '[.candidates[] | "\(.canonical_key)@\(.version)=\(.score)"] | join(" ")'; }
+docs79="$(top79 "check that a documentation-only change keeps its links and anchors working" "$dev_repo")"
+[[ "$docs79" == polaroid.change.docs@* ]] || fail "a documentation task does not find polaroid.change.docs first: $docs79"
+echo "1. documentation task in $dev_repo: $docs79"
+build79="$(top79 "build a Go module with the toolchain go.mod declares")"
+[[ "$build79" == go.module.build@* ]] || fail "go.module.build, a subprocedure of dev.change.verify, is not found first: $build79"
+echo "2. build task, catalog-wide: $build79 (go.module.build is referenced by dev.change.verify and found on its own)"
+other79="$(bin/polaroid discover "verify a documentation-only change" repository=example.com/fixtures/go-service | jq -r '[.candidates[].scope] | unique | join(",")')"
+[[ "$other79" != *local* ]] || fail "procedures local to $dev_repo are offered to another repository"
+echo "3. the same task in example.com/fixtures/go-service: candidate scopes $other79, none local to $dev_repo"
+dup79="$(jq -n '{canonical_key: "golang.compile", goal: "Compile a Go module with the toolchain that go.mod selects, through the repository build command.",
+	method: "Check the toolchain against go.mod, run the build command from the module root and confirm the expected artifacts were written.",
+	philosophy: "A build only counts as evidence when it uses the declared toolchain and writes the artifacts later steps need."}' | bin/polaroid duplicates)"
+jq -e '.key_collision == null and .suggestions[0].canonical_key == "go.module.build" and .suggestions[0].similarity >= 0.35' <<<"$dup79" >/dev/null ||
+	fail "a reworded go.module.build is not suggested: $dup79"
+echo "4. a proposed golang.compile overlaps: $(jq -c '[.suggestions[] | {canonical_key, similarity, shared_terms}]' <<<"$dup79")"
+distinct79="$(jq -n '{canonical_key: "polaroid.logs.rotate", goal: "Rotate the diagnostic log of the managed service when it exceeds a size.",
+	method: "Rename the log with a timestamp, signal the daemon to reopen it and delete rotated logs past a retention period.",
+	philosophy: "Logs are for diagnosis, not records; unbounded logs fill disks."}' | bin/polaroid duplicates)"
+jq -e '.matched == 0 and .key_collision == null' <<<"$distinct79" >/dev/null || fail "a distinct proposal was suggested as a duplicate: $distinct79"
+jq -e '.key_collision.canonical_key == "dev.change.verify"' <<<"$(jq -n '{canonical_key: "dev.change.verify", method: "m", philosophy: "p"}' | bin/polaroid duplicates)" >/dev/null ||
+	fail "an existing canonical key is not reported as a collision"
+[[ "$(dev_snapshot)" == "$dev_before" ]] || fail "discovery or a duplicate check changed a record"
+echo "5. a distinct proposal (polaroid.logs.rotate) gets no suggestion; an existing key is a key_collision; nothing was written"
+
+step "25. Restart polaroidd and confirm every record persisted"
 stop_daemon
 start_daemon
 [[ "$(bin/polaroid get-by-key "$key")" == "$history" ]] || fail "history differs after restart"
@@ -742,7 +768,7 @@ start_daemon
 echo "every history, binding, execution and verification is byte-for-byte identical after restart"
 stop_daemon
 
-step "25. Upgrade a database written at schema version 6 (#35): history reads back, and registration associates it without rewriting it"
+step "26. Upgrade a database written at schema version 6 (#35): history reads back, and registration associates it without rewriting it"
 legacy="$work/schema-6.db"
 for f in internal/storage/sqlite/migrations/000[1-6]_*.sql; do sqlite3 "$legacy" <"$f"; done
 sqlite3 "$legacy" <<'SQL'

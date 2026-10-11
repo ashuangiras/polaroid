@@ -40,6 +40,11 @@ type (
 		ID           string `json:"id,omitzero" jsonschema:"the procedure ID; give this or canonical_key"`
 		CanonicalKey string `json:"canonical_key,omitzero" jsonschema:"the procedure's canonical key; give this or id"`
 	}
+	discoverArgs struct {
+		Task       string `json:"task" jsonschema:"the task you need to perform, in your own words (at most 4096 bytes)"`
+		Repository string `json:"repository,omitzero" jsonschema:"search only procedures whose latest version applies in this repository identifier: shared, unspecified, or local to it; omit to search the whole catalog"`
+		Limit      int    `json:"limit,omitzero" jsonschema:"return at most this many candidates (1 to 50, default 10)"`
+	}
 	versionRef struct {
 		ProcedureID string `json:"procedure_id"`
 		Version     int    `json:"version"`
@@ -160,6 +165,22 @@ func (t *tools) register(s *sdk.Server) {
 		func(ctx context.Context, in listProceduresArgs) (any, error) {
 			ps, next, err := t.svc.ListProcedures(ctx, memory.ProcedureFilter{Repository: in.Repository, Scope: in.Scope, Query: in.Q, Page: in.page()})
 			return wire.NewProcedureList(ps, next), err
+		})
+	add(s, t, "discover_procedures", "Find procedures for a task described in your own words, by lexical matching (shared words, not meaning). "+
+		"Searches each procedure's latest version: canonical key, goal, method, philosophy, and the text of contract and instructions. "+
+		"Candidates are ranked by score: each of the task's terms adds the weight of the best field it occurs in (3 canonical key or goal, 2 method, 1 philosophy, contract or instructions); then by matched_terms. matches lists the terms found per field. "+
+		"Subprocedures are found like any procedure. A candidate is not a recommendation and not verified for you: read its version, judge it, and resolve it before reuse.", read,
+		func(ctx context.Context, in discoverArgs) (any, error) {
+			d, err := t.svc.DiscoverProcedures(ctx, memory.DiscoveryRequest{Task: in.Task, Repository: in.Repository, Limit: in.Limit})
+			return wire.NewDiscovery(d), err
+		})
+	add(s, t, "suggest_duplicates", "Before create_procedure or revise_procedure, check a proposal (method, philosophy, optional goal and canonical_key) against existing procedures. "+
+		"key_collision names a procedure that already has the canonical key, which create_procedure would refuse. "+
+		"suggestions are advisory content overlaps: similarity is 2 x shared terms / (proposal terms + candidate terms) over canonical key, goal, method and philosophy, at least 0.35. "+
+		"Pass exclude_procedure_id when revising. Reuse, revise or create is your decision; nothing is stored.", read,
+		func(ctx context.Context, in wire.DuplicateCheck) (any, error) {
+			d, err := t.svc.SuggestDuplicates(ctx, in.Domain())
+			return wire.NewDuplicates(d), err
 		})
 	add(s, t, "get_procedure", "Get a procedure and all of its versions, by id or by canonical_key.", read,
 		func(ctx context.Context, in procedureRef) (any, error) {

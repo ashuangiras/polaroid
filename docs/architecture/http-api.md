@@ -1,6 +1,6 @@
 # HTTP API (v1)
 
-This page is the contract of the API that `polaroidd` serves. It covers only what is implemented: procedure identity and immutable versions with subprocedure references and applicability, the repository registry, repository bindings with immutable revisions, execution records, and feedback reports. Field rules are defined in [records.md](records.md). The same operations are available to MCP clients at `/mcp`; see [mcp.md](mcp.md).
+This page is the contract of the API that `polaroidd` serves. It covers only what is implemented: procedure identity and immutable versions with subprocedure references and applicability, lexical procedure discovery and duplicate suggestions, the repository registry, repository bindings with immutable revisions, execution records, and feedback reports. Field rules are defined in [records.md](records.md). The same operations are available to MCP clients at `/mcp`; see [mcp.md](mcp.md).
 
 - **Base URL:** `http://127.0.0.1:7417` by default (`polaroidd -addr`).
 - **Bodies:** every request and response body is UTF-8 JSON. Requests with a body must send `Content-Type: application/json` and stay under 1 MiB.
@@ -16,6 +16,8 @@ This page is the contract of the API that `polaroidd` serves. It covers only wha
 | `GET /v1/procedures[?repository=…][&scope=…][&q=…][&limit=…&after=…][&snapshot=true]` | `200 {"procedures":[...]}` | List procedures, ordered by canonical key, optionally [filtered and paged](#discovery-filters-and-pages). |
 | `GET /v1/procedures/{id}` | `200` history | A procedure and all of its versions, oldest first. |
 | `GET /v1/procedures/by-key/{canonical_key}` | `200` history | The same history, looked up by canonical key. |
+| `GET /v1/procedures/discovery?task=…[&repository=…][&limit=…]` | `200` discovery | Procedures whose latest version shares words with a task, [ranked and explained](#discover-procedures-for-a-task). Read-only. |
+| `POST /v1/procedures/duplicates` | `200` duplicates | [Check a proposed procedure](#check-a-proposal-for-duplicates) for an existing canonical key and overlapping content. Read-only: stores nothing. |
 | `POST /v1/procedures/{id}/origin` | `201` history | Record where and why the procedure was first created, once. |
 | `GET /v1/procedures/{id}/versions/{n}` | `200` version | One version. |
 | `GET /v1/procedures/{id}/versions/{n}/graph` | `200` graph node | The version's composition graph, with the exact version each reference selects. |
@@ -237,6 +239,53 @@ The procedure, repository, binding, execution and feedback lists take **opt-in p
   - **Nothing else is a snapshot:** reading a record by ID, or any other list, returns current state. `snapshot` must be given on every page; it is `400` without `limit`, with `true` or `false` as its only values, and an unknown parameter on the other lists.
 - A filter given but empty is `400`.
 
+### Discover procedures for a task
+
+`GET /v1/procedures/discovery?task=publish+a+prerelease+build&repository=github.com/ashuangiras/polaroid&limit=3` returns procedures that share words with the task, best first ([ADR-0032](decisions/0032-lexical-discovery-and-duplicate-suggestions.md)). Matching is **lexical**: it compares words, not meaning.
+
+```json
+{"terms":["publish","prerelease","build"],"repository":"github.com/ashuangiras/polaroid","matched":14,
+ "candidates":[{"procedure_id":"…","canonical_key":"polaroid.release.publish","version":2,"scope":"local","applicability":{"repository":"…"},
+   "goal":"…","method":"…","matched_terms":3,"score":8,
+   "matches":[{"field":"canonical_key","terms":["publish"]},{"field":"goal","terms":["publish","prerelease"]},{"field":"method","terms":["publish","build"]}, …]}]}
+```
+
+- **Terms.** The task is lowercased and split at every character that is not a letter or digit. Words shorter than two characters and common English function words (`a`, `an`, `and`, `are`, `as`, `at`, `be`, `but`, `by`, `can`, `do`, `does`, `for`, `from`, `has`, `have`, `if`, `in`, `into`, `is`, `it`, `its`, `may`, `must`, `no`, `not`, `of`, `on`, `or`, `our`, `should`, `so`, `than`, `that`, `the`, `their`, `then`, `there`, `these`, `this`, `those`, `to`, `was`, `we`, `were`, `when`, `where`, `which`, `while`, `who`, `will`, `with`, `without`, `you`, `your`) are dropped. Each word loses at most one suffix, the first of `ies`/`ied` (→ `y`), `ing`, `ed`, `es`, `s` (not after `s`) and `e` that leaves at least three characters, so `adding` meets `add` and `dependencies` meets `dependency`. `terms` lists the task's distinct terms, each as the first word that produced it; explanations use the same words.
+- **What is searched.** The **latest version** of each procedure, as stored when the request is read: the canonical key (split at its separators), `goal`, `method`, `philosophy`, and every string value in `contract` and `instructions`. Member names, numbers, IDs, timestamps, `revision_reason`, references, origins, bindings and executions are never searched. A procedure that others reference is a candidate like any other.
+- **Candidates.** With `repository` (registered or not), only procedures whose latest version applies there: shared, unspecified, or local to that repository, matched by identity; procedures local to other repositories are left out. Without it, every procedure in the catalog is a candidate, local ones included, each labelled with its `scope` and `applicability`.
+- **Score and order.** Fields weigh 3 (`canonical_key`, `goal`), 2 (`method`) or 1 (`philosophy`, `contract`, `instructions`). `score` adds, for each task term found, the weight of the best field containing it; `matched_terms` counts those terms. Procedures with at least one term are ranked by `score`, then `matched_terms`, both descending, then by `canonical_key`. `matches` lists, per field in the order above, the task's terms found there. A score compares candidates of one task only.
+- **Bounds.** `limit` is 1 to 50 (default 10). `matched` counts every procedure that matched, before the limit. There is no cursor: reword the task to see others.
+- **Each candidate** gives `procedure_id`, `canonical_key`, `version` (the latest version, the one searched), `scope`, `applicability` (omitted when unspecified), `goal` (omitted when absent) and `method`. Fetch the version for its contract and instructions. A candidate is not a recommendation and says nothing about verification: resolution may select another version from evidence, and nothing is verified for your target until you run it.
+- **Errors (`400`):** a missing or blank `task`, one longer than 4096 bytes or without searchable words (only short words or function words), an invalid or empty `repository`, a `limit` outside 1 to 50, a repeated or unknown parameter. A task whose words match nothing returns `200` with `"matched":0,"candidates":[]`.
+
+### Check a proposal for duplicates
+
+```http
+POST /v1/procedures/duplicates
+Content-Type: application/json
+
+{"canonical_key": "golang.compile", "goal": "Compile a Go module with its declared toolchain.",
+ "method": "Check the toolchain against go.mod and run the build command from the module root.",
+ "philosophy": "A build is evidence only with the declared toolchain.",
+ "repository": "github.com/ashuangiras/polaroid", "exclude_procedure_id": "…", "limit": 5}
+```
+
+`method` and `philosophy` are required, as in a version; `goal`, `canonical_key`, `repository`, `exclude_procedure_id` (the procedure you are revising) and `limit` (1 to 50, default 10; `0` means the default) are optional. Nothing is stored, merged, refused, revised or bound. The response is `200`:
+
+```json
+{"proposal_terms":31,"repository":"github.com/ashuangiras/polaroid",
+ "key_collision":{"procedure_id":"…","canonical_key":"golang.compile","latest_version":1},
+ "matched":1,
+ "suggestions":[{"procedure_id":"…","canonical_key":"go.module.build","version":3,"scope":"shared","applicability":{"shared":{}},
+   "goal":"…","method":"…","similarity":0.52,"shared_terms":17,
+   "matches":[{"field":"canonical_key","terms":["go","module","build"]},{"field":"goal","terms":[…]}, …]}]}
+```
+
+- **`key_collision`** (omitted when none) is the procedure that already has the proposed `canonical_key`, in any repository. Creating the proposal would be `409 canonical_key_exists`. When it is the excluded procedure, it is not reported: a revision keeps its key.
+- **`suggestions`** are advisory content overlaps. The proposal's terms (as for discovery) from `canonical_key`, `goal`, `method` and `philosophy` are compared with the same fields of each candidate's latest version; contract and instructions are not compared. `similarity` is 2 × `shared_terms` ÷ (`proposal_terms` + the candidate's terms), rounded to two decimals, and a candidate is suggested when it is at least 0.35 (compared exactly). Suggestions are ranked by similarity, then `shared_terms`, then `canonical_key`; `matches` lists, per field of the candidate, the proposal's terms found there. `matched` counts every suggestion before the limit.
+- **Candidates** follow discovery's `repository` rule, so a shared procedure is suggested in any repository as an alternative to a local copy. The excluded procedure is never a candidate.
+- **Errors (`400`):** a blank `method` or `philosophy`, a multi-line or blank `goal`, an invalid `canonical_key` or `repository`, a proposal without searchable words (on `method`), a `limit` outside 1 to 50, an `exclude_procedure_id` that names no procedure, and any unknown member, such as `contract`.
+
 ### Append a binding revision
 
 ```http
@@ -412,6 +461,8 @@ Example `invalid_request` response:
 | `polaroid create [FILE]` | `POST /v1/procedures` |
 | `polaroid get ID` | `GET /v1/procedures/{id}` |
 | `polaroid get-by-key KEY` | `GET /v1/procedures/by-key/{key}` |
+| `polaroid discover TASK [NAME=VALUE...]` | `GET /v1/procedures/discovery?task={task}[&…]` |
+| `polaroid duplicates [FILE]` | `POST /v1/procedures/duplicates` |
 | `polaroid origin ID [FILE]` | `POST /v1/procedures/{id}/origin` |
 | `polaroid get-version ID N` | `GET /v1/procedures/{id}/versions/{n}` |
 | `polaroid graph ID N [REPO ENV [COMMIT INPUTS [DECISIONS]]]` | `GET /v1/procedures/{id}/versions/{n}/graph[?repository=…&environment=…[&commit=…&inputs=…[&decisions=…]]]` |
@@ -477,3 +528,8 @@ Changes for [#50](https://github.com/ashuangiras/polaroid/issues/50) ([ADR-0029]
 
 - New optional request and response fields: `condition` on references, `decisions` on executions. New query parameter `decisions` on the graph and resolution endpoints. New response fields: `skipped` entries in combination `children` (whose `version` is then absent), `condition`, `skipped_by` and `decision` on graph edges, and `undecided` on `target_verification`. New problem code `missing_decision`.
 - Existing references are required and existing executions have no decisions, so every stored record, verification, combination, selection and target verification is unchanged. Requests without the new fields behave as before.
+
+Changes for [#79](https://github.com/ashuangiras/polaroid/issues/79) ([ADR-0032](decisions/0032-lexical-discovery-and-duplicate-suggestions.md)), additive; no migration:
+
+- New read-only endpoints `GET /v1/procedures/discovery` and `POST /v1/procedures/duplicates`. Procedure IDs are UUIDs, so `GET /v1/procedures/{id}` never meant `discovery` or `duplicates`; `GET /v1/procedures/duplicates` is still `404` as an unknown procedure.
+- No record, response field or existing request changes; listing, verification and resolution behave as before.

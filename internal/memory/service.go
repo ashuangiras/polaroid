@@ -40,6 +40,11 @@ type Store interface {
 	// ProcedureSnapshot returns the current boundary of the procedure list.
 	ProcedureSnapshot(ctx context.Context) (Snapshot, error)
 
+	// LatestVersions returns the latest version of every procedure, ordered
+	// by canonical key, read in one statement. A non-empty repository keeps
+	// only versions applicable there, as ProcedureFilter.Repository does.
+	LatestVersions(ctx context.Context, repository string) ([]LatestVersion, error)
+
 	// SetOrigin records a procedure's origin. It returns an error wrapping
 	// ErrNotFound if the procedure does not exist, ErrOriginExists if an
 	// origin is already recorded, and a *ValidationError if the repository

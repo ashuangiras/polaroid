@@ -147,11 +147,11 @@ note "The raw request behind \`post server/discover\`:" '```http' \
 
 ########################################################################
 section "Tool catalogue" \
-	"25 tools mirror the HTTP API one-to-one. 16 only read and are annotated \`readOnlyHint\`; 9 write (create/revise procedure, record procedure origin, register repository, add repository alias, create/revise binding, record execution, report feedback) and are annotated non-destructive (they only append). Every tool advertises a JSON Schema generated from its argument type: flat arguments named after record fields, optional ones not required." \
+	"27 tools mirror the HTTP API one-to-one. 18 only read (including \`discover_procedures\` and \`suggest_duplicates\`, which store nothing) and are annotated \`readOnlyHint\`; 9 write (create/revise procedure, record procedure origin, register repository, add repository alias, create/revise binding, record execution, report feedback) and are annotated non-destructive (they only append). Every tool advertises a JSON Schema generated from its argument type: flat arguments named after record fields, optional ones not required." \
 	"An MCP client lists tools automatically. By hand: \`post tools/list \"\" \"\"\`."
 show 'post tools/list "" "" | jq -c "[.result.tools[] | {name, readOnly: .annotations.readOnlyHint, destructive: .annotations.destructiveHint, required: .inputSchema.required}]" | jq -c ".[]"'
-check "25 tools" equal "$(wc -l <<<"$LAST" | tr -d ' ')" 25
-check "16 read-only tools" equal "$(grep -c '"readOnly":true' <<<"$LAST")" 16
+check "27 tools" equal "$(wc -l <<<"$LAST" | tr -d ' ')" 27
+check "18 read-only tools" equal "$(grep -c '"readOnly":true' <<<"$LAST")" 18
 check "the 9 write tools are marked non-destructive" equal "$(grep -c '"readOnly":false,"destructive":false' <<<"$LAST")" 9
 show 'post tools/list "" "" | jq ".result.tools[] | select(.name == \"get_graph\") | .inputSchema"'
 check "get_graph requires procedure_id and version; repository and environment are optional" out_has '"required": ['
@@ -368,13 +368,20 @@ for pair in "get_procedure|{\"id\":\"$LEAF\"}|/v1/procedures/$LEAF" \
 	"list_feedback|{\"kind\":\"problem\"}|/v1/feedback?kind=problem" \
 	"get_repository|{\"identifier\":\"mirror.example/service\"}|/v1/repositories/by-identifier/mirror.example/service" \
     "list_procedures|{\"repository\":\"github.com/example/service\",\"limit\":2}|/v1/procedures?repository=github.com/example/service&limit=2" \
-    "list_procedures|{\"limit\":1,\"snapshot\":true}|/v1/procedures?limit=1&snapshot=true"; do
+    "list_procedures|{\"limit\":1,\"snapshot\":true}|/v1/procedures?limit=1&snapshot=true" \
+    "discover_procedures|{\"task\":\"do one small thing\",\"repository\":\"github.com/example/service\",\"limit\":2}|/v1/procedures/discovery?task=do+one+small+thing&repository=github.com/example/service&limit=2"; do
 	IFS='|' read -r name args path <<<"$pair"
 	A="$(tool "$name" "$args" | text | shasum -a 256 | cut -c1-16)"
 	B="$(curl -sS "$URL$path" | shasum -a 256 | cut -c1-16)" # both end in exactly one newline
 	md "- \`$name\` vs \`GET $path\`: \`$A\` / \`$B\`"
 	check "$name is byte-identical to GET ${path%%\?*}" equal "$A" "$B"
 done
+DUPARGS='{"canonical_key":"demo.leaf","method":"Build the service from its root.","philosophy":"Build before anything else.","repository":"github.com/example/service"}'
+A="$(tool suggest_duplicates "$DUPARGS" | text | shasum -a 256 | cut -c1-16)"
+B="$(curl -sS -X POST -H 'Content-Type: application/json' --data-binary "$DUPARGS" "$URL/v1/procedures/duplicates" | shasum -a 256 | cut -c1-16)"
+md "- \`suggest_duplicates\` vs \`POST /v1/procedures/duplicates\`: \`$A\` / \`$B\`"
+check "suggest_duplicates is byte-identical to POST /v1/procedures/duplicates" equal "$A" "$B"
+check "the compared results are not empty: a candidate and a key collision" equal "$(tool discover_procedures '{"task":"do one small thing","repository":"github.com/example/service","limit":2}' | text | jq ".candidates | length > 0")$(tool suggest_duplicates "$DUPARGS" | text | jq ".key_collision != null")" truetrue
 
 ########################################################################
 section "Protocol and transport rules" \
@@ -444,10 +451,10 @@ await client.close().catch(() => {});
 EOF
 show '(cd "$TSDIR" && node probe.mjs "$URL/mcp")'
 check "TypeScript SDK 1.32.1 connects at 2025-11-25, without a session" out_has "negotiated: 2025-11-25 session: none"
-check "...lists all 25 tools" out_has "connected; tools: 25"
+check "...lists all 27 tools" out_has "connected; tools: 27"
 check "...and records feedback" out_has "report_feedback: ts.sdk"
 show '(cd "$TSDIR" && npx --no-install mcp-inspector --cli "$URL/mcp" --transport http --method tools/list 2>/dev/null | jq -c "[.tools[].name] | length")'
-check "MCP Inspector 2.10.1 lists the 25 tools" equal "$LAST" 25
+check "MCP Inspector 2.10.1 lists the 27 tools" equal "$LAST" 27
 fi
 VSCODE_GITHUB="/Applications/Visual Studio Code.app/Contents/Resources/app/node_modules.asar.unpacked/@github"
 if [[ "${E2E_INTEROP:-1}" == 0 ]]; then

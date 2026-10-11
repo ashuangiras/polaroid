@@ -24,6 +24,23 @@ bin/polaroid create examples/procedures/sqlite-schema-migrate/v1.create.json
 
 The `contract` and `instructions` members are free-form JSON objects. The shapes used here, such as `inputs`, `outputs` and `steps`, are conventions of these examples, not rules enforced by Polaroid.
 
+## Discovering them before writing a new one
+
+With the examples loaded, an agent describes its task in its own words and checks a proposal before creating it ([ADR-0032](../docs/architecture/decisions/0032-lexical-discovery-and-duplicate-suggestions.md)). Both are lexical, read-only, and leave the decision to the agent:
+
+```sh
+bin/polaroid discover "Adding a new module dependency with a permissive license" limit=3
+# go.dependency.add first, with the words that matched per field (key, philosophy, ...)
+bin/polaroid duplicates <<'EOF'
+{"canonical_key": "go.module.require", "goal": "Require a third-party module only after checking its license.",
+ "method": "Justify why the standard library is not enough, pin an explicit version, verify the license and record it in the dependency inventory.",
+ "philosophy": "Every dependency is a liability: its code, license and maintenance become yours."}
+EOF
+# suggestions: go.dependency.add, with its similarity and shared words; no key_collision
+```
+
+`make e2e` runs these against the loaded example and checks the results; `make demo` step 24 does the same over Polaroid's development procedures.
+
 ## Task-aware verification
 
 [task-aware/](task-aware) holds `change.verify.scoped`, which always runs `repo.checks.fast` and runs `repo.checks.integration` only when its `condition` holds: when the change can affect behaviour the integration suite observes ([ADR-0029](../docs/architecture/decisions/0029-conditional-references-and-applicability-decisions.md)). Its steps follow the [instruction-step convention](../docs/architecture/records.md#instruction-steps-recommended-convention) (`when`, `required_by`, `satisfied_when`, `done_when`, `escalate_when`). Load them with `scripts/load-fixtures.sh examples/task-aware`; `make demo` step 23 records a code change that runs both, a documentation change that skips integration with its reason, and an omitted decision and a missing child that are never verified.

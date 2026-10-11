@@ -591,7 +591,7 @@ check "graph context needs both parameters; resolution needs an environment" equ
 
 ########################################################################
 section "Use Polaroid from an agent over MCP" \
-	"\`polaroidd\` serves MCP at \`/mcp\` (ADR-0014): stateless streamable HTTP, protocols 2026-07-28 and 2025-11-25 (ADR-0016), behind the same loopback and cross-origin checks. 25 tools mirror the HTTP API with flat arguments named after record fields; results are the API's record shapes, errors are tool errors with the API's codes, and three read-only resource templates serve procedures, versions and bindings. Below, raw JSON-RPC over curl shows exactly what an MCP client sends." \
+	"\`polaroidd\` serves MCP at \`/mcp\` (ADR-0014): stateless streamable HTTP, protocols 2026-07-28 and 2025-11-25 (ADR-0016), behind the same loopback and cross-origin checks. 27 tools mirror the HTTP API with flat arguments named after record fields; results are the API's record shapes, errors are tool errors with the API's codes, and three read-only resource templates serve procedures, versions and bindings. Below, raw JSON-RPC over curl shows exactly what an MCP client sends." \
 	"Point an MCP client at \`http://127.0.0.1:7417/mcp\`, e.g. VS Code \`.vscode/mcp.json\`: \`{\"servers\": {\"polaroid\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:7417/mcp\"}}}\`."
 MCP_META='{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/clientInfo":{"name":"manual-test","version":"1"}}'
 rpc() { # rpc METHOD NAME PARAMS [PROTOCOL]: one JSON-RPC request; NAME may be empty
@@ -606,7 +606,7 @@ tool() { rpc tools/call "$1" "$(jq -cn --arg n "$1" --argjson a "$2" '{name: $n,
 show 'rpc server/discover "" "{}" | jq -c "{versions: .result.supportedVersions, capabilities: (.result.capabilities | keys), server: .result._meta[\"io.modelcontextprotocol/serverInfo\"].name}"'
 check "server/discover: protocols 2026-07-28 and 2025-11-25, tools and resources" json_has '.versions == ["2026-07-28","2025-11-25"] and .capabilities == ["resources","tools"] and .server == "polaroid"'
 show 'rpc tools/list "" "{}" | jq -c "{tools: (.result.tools | length), read_only: [.result.tools[] | select(.annotations.readOnlyHint) | .name] | length, names: [.result.tools[].name] | sort}"'
-check "25 tools, 16 of them read-only" json_has '.tools == 25 and .read_only == 16'
+check "27 tools, 18 of them read-only" json_has '.tools == 27 and .read_only == 18'
 show 'tool get_procedure "{\"canonical_key\": \"go.dependency.add\"}" | jq -S .result.structuredContent | shasum -a 256 | cut -c1-16; get /v1/procedures/by-key/go.dependency.add | jq -S . | shasum -a 256 | cut -c1-16'
 check "get_procedure over MCP returns the same document as GET /v1/procedures/by-key" equal "$(sed -n 1p <<<"$LAST")" "$(sed -n 2p <<<"$LAST")"
 show 'tool create_procedure "{\"canonical_key\": \"mcp.created\", \"philosophy\": \"p\", \"method\": \"m\", \"contract\": {\"z\": 1, \"a\": 2}, \"instructions\": {}, \"revision_reason\": \"Created by an agent over MCP.\"}" | jq -r ".result.content[0].text" | jq -c "{id, canonical_key, contract: .versions[0].contract}"'
@@ -733,6 +733,29 @@ check "target decisions: not applicable is verified by the skip; applicable is n
 {"v":false,"u":["integration"],"d":"undecided"}'
 show 'tool get_graph "{\"procedure_id\": \"$SCOPED\", \"version\": 1, \"repository\": \"github.com/example/service-a\", \"environment\": \"e2e\", \"commit\": \"$C50\", \"inputs\": {}, \"decisions\": {\"integration\": false}}" | jq -r ".result.content[0].text" | jq -c "{v: .target_verification.verified, d: .references[1].decision}"'
 check "MCP get_graph takes the same decisions" json_has '.v and .d == "not_applicable"'
+
+########################################################################
+section "Discover procedures for a task; check a proposal for duplicates" \
+	"Lexical discovery (ADR-0032): describe a task in your own words and get ranked candidates from each procedure's latest version, with the terms found per field. With a repository, procedures local to other repositories are left out. A duplicate check compares a proposal's canonical key, goal, method and philosophy with existing procedures: an existing key is a \`key_collision\`; overlapping content is an advisory suggestion. Both are read-only." \
+	"\`bin/polaroid discover TASK [repository=… limit=…]\` (\`GET /v1/procedures/discovery\`), \`bin/polaroid duplicates FILE\` (\`POST /v1/procedures/duplicates\`); MCP \`discover_procedures\`, \`suggest_duplicates\`."
+DISC_BEFORE="$(digest /v1/procedures)"
+show 'bin/polaroid discover "Adding a new module dependency with a permissive license" limit=3 | jq -c "{terms, matched, top: (.candidates[0] | {canonical_key, version, matched_terms, score, fields: [.matches[].field]})}"'
+check "a task in other words finds go.dependency.add first, at its latest version, explained by field" json_has --argjson v "$(get "/v1/procedures/$ID" | jq .latest_version)" \
+	'.top.canonical_key == "go.dependency.add" and .top.version == $v and (.top.fields | index("canonical_key") and index("philosophy"))'
+check "the procedure that e2e.verify.scoped references as a subprocedure is found on its own" json_has '.top.canonical_key == "go.dependency.add"'
+show 'bin/polaroid discover "deploy the service" repository=github.com/example/service-b | jq -c "[.candidates[].canonical_key]"; bin/polaroid discover "deploy the service" repository=mirror.example/service-a | jq -c "[.candidates[].canonical_key]"'
+check "a procedure local to service A is discovered through A's alias and not in B" equal "$(sed -n 2p <<<"$LAST" | jq 'index("service-a.deploy") != null')$(head -n1 <<<"$LAST" | jq 'index("service-a.deploy") != null')" "truefalse"
+show 'api GET "/v1/procedures/discovery?task=the+and+of"; bin/polaroid discover "quantum chromodynamics" | jq -c "{matched, candidates}"'
+check "a task without searchable words is refused; one that matches nothing is empty" equal "$(head -n1 <<<"$LAST")$(tail -n1 <<<"$LAST")" 'HTTP/1.1 400 Bad Request{"matched":0,"candidates":[]}'
+DUP='{"canonical_key": "go.module.require", "goal": "Require a third-party module only after checking its license.", "method": "Justify why the standard library is not enough, pin an explicit version, verify the license and record it in the dependency inventory.", "philosophy": "Every dependency is a liability: its code, license and maintenance become yours."}'
+show 'bin/polaroid duplicates <<<"$DUP" | jq -c "{key_collision, matched, s: [.suggestions[] | {canonical_key, similarity, shared_terms}]}"'
+check "a proposal under another key that says what go.dependency.add says is suggested, with its similarity" json_has '.key_collision == null and .s[0].canonical_key == "go.dependency.add" and .s[0].similarity >= 0.35'
+show 'bin/polaroid duplicates <<<"$(jq -c ".canonical_key = \"go.dependency.add\"" <<<"$DUP")" | jq -c ".key_collision.canonical_key"; bin/polaroid duplicates <<<"$(jq -c --arg id "$ID" ".canonical_key = \"go.dependency.add\" | .exclude_procedure_id = \$id" <<<"$DUP")" | jq -c "[.key_collision, [.suggestions[].canonical_key]]"'
+check "the same key is a collision; excluding the procedure being revised removes both" equal "$LAST" '"go.dependency.add"
+[null,[]]'
+show 'bin/polaroid duplicates <<<"{\"method\": \"Translate the user guide into French.\", \"philosophy\": \"Readers prefer their own language.\"}" | jq -c "{matched, suggestions}"'
+check "unrelated content gets no suggestion" json_has '.matched == 0 and .suggestions == []'
+check "discovery and duplicate checks wrote nothing" equal "$(digest /v1/procedures)" "$DISC_BEFORE"
 
 ########################################################################
 section "The database enforces immutability itself" \
