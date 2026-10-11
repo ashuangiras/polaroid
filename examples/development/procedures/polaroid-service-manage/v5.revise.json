@@ -1,0 +1,93 @@
+{
+  "base_version": 4,
+  "version": {
+    "philosophy": "A shared Polaroid instance is infrastructure that agents depend on. Changing how it runs (moving it from a hand-started process to the managed per-user service, or upgrading the managed build) is a maintenance step: it is announced, it waits for active work, it changes the process and never the catalog, and it is judged by what clients see before and after and by who owns the endpoint, not by a manager command's exit status. Going back to a previous build and going back to older data are different operations: the first keeps every record, the second loses records and is never implied by the first.",
+    "method": "Identify the running process, announce and check for activity, back up the catalog with `polaroid backup`, validate it with `polaroid inspect-backup` and inventory it over HTTP, build the exact commit in a clean worktree and check its embedded revision, stop a hand-started process gracefully (cutover only), install and start the managed service on the same catalog and endpoint with `polaroid install`, then confirm ownership, build, health, MCP access, the inventory and that no other daemon or launch arrangement remains. When the build changes the MCP tool set, refresh every connected MCP client and check the tools in a fresh agent session: the upgrade is not complete for agents until then. On failure, recover the binaries from previous/ on the current catalog; restore data only as a separate, agreed operation with `polaroid restore`, planned first with -plan.",
+    "goal": "Move a hand-started Polaroid instance onto the managed per-user service (launchd agent or systemd user service), or upgrade a managed installation to another build, on the same catalog and endpoint, without losing or changing any record or derived verification; recover a failed upgrade by binary recovery, never by an implicit data restore.",
+    "applicability": {
+      "repository": "github.com/ashuangiras/polaroid"
+    },
+    "contract": {
+      "inputs": {
+        "operation": "cutover (the instance was started by hand) or upgrade (it is already the managed service).",
+        "endpoint": "The instance's base URL, for example http://127.0.0.1:7417.",
+        "catalog": "The database the running instance serves, as found by inspecting the process.",
+        "binaries_from": "The directory holding the polaroid and polaroidd to install, built at build_commit.",
+        "build_commit": "The full commit the installed binaries were built from."
+      },
+      "preconditions": [
+        "polaroid install supports this platform's manager (ADR-0026): a GUI login session on macOS, a reachable systemd user manager on Linux.",
+        "curl and jq available; permission to stop the instance briefly.",
+        "For an upgrade, the build to install includes ADR-0027 (install stages its source), so that its polaroid can recover from previous/.",
+        "The polaroid used for backup and any restore includes ADR-0030 (`polaroid backup`, `inspect-backup`, `restore`)."
+      ],
+      "expected_outcome": "The managed service runs build_commit, serves the same catalog on the same endpoint and owns it; every record and verification read over HTTP is unchanged; a backup taken before the change with `polaroid backup`, reported valid by `polaroid inspect-backup`, is kept; no hand-started daemon or launch command for it remains; the operating and recovery instructions are recorded. When the build changes the MCP tool set, every connected MCP client has been refreshed and a fresh agent session lists and calls the changed tools.",
+      "verification": [
+        "polaroid status reports running, with the PID the service manager reports, the build at build_commit (revision, modified false), the catalog and the endpoint.",
+        "The daemon's start-up line names build_commit (revision=), or on Linux /proc/PID/exe equals the installed polaroidd.",
+        "The inventory (procedures with histories, repositories, bindings, executions with verifications, feedback, representative target resolutions) is identical before and after.",
+        "An MCP read of representative records equals the HTTP read.",
+        "Exactly one polaroidd runs for the catalog, and it is the managed one.",
+        "`polaroid inspect-backup BACKUP` reports the pre-change backup valid, with the catalog's schema version and record counts.",
+        "When the build adds, removes or renames MCP tools or changes their arguments: every connected MCP client's connection to the server was restarted and the client reports the new tool count; a fresh agent session, started after that refresh, lists the new tools and calls them against this endpoint. A server-side tools/list, a raw JSON-RPC call or an independent SDK client shows that the server offers the tools, not that an agent session can use them."
+      ],
+      "boundaries": [
+        "Never runs uninstall, forced crashes, failed upgrades or downgrades against the live catalog; those are exercised on isolated installations (make lifecycle).",
+        "Never stops a process that holds the endpoint without first identifying it as the instance being changed.",
+        "Changes no record; keeps the backup. A schema migration by the new build is expected and is the reason for the backup.",
+        "Never restores a backup, downgrades data or switches to another catalog (such as an older bin/dogfood/polaroid.db) as part of recovering binaries. Never runs `polaroid restore -replace` against the live catalog without the owner's agreement; rehearse a restore with -db on an isolated copy.",
+        "Does not stop the instance while another operation is actively using it: defer the change."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "identify",
+          "action": "Find the process serving the endpoint (lsof on macOS, /proc or ss on Linux): its PID, binary, arguments, parent, open database files and log destination, and whether a service manager or a shell started it. Run `polaroid status`: for a cutover it reports not-installed with this process as the endpoint's holder; for an upgrade it reports running with the manager's PID and the installed build."
+        },
+        {
+          "id": "announce",
+          "action": "Check for active work: established connections to the endpoint, the newest execution and feedback times, the database's -wal modification time. Announce the maintenance on the work item. If something is actively writing, finish other work first and come back."
+        },
+        {
+          "id": "backup-inventory",
+          "action": "Run `polaroid backup` (it selects the managed catalog and writes a consistent snapshot into ~/.polaroid/backups/ while the service runs, ADR-0030; -db FILE names another catalog, -dir DIR another destination). Run `polaroid inspect-backup PATH` on the printed path: it must report valid, with the schema version and record counts. Read the inventory over HTTP: every procedure history, repository, binding, execution with its verification, feedback report, and target resolutions for each repository's bindings at commits their executions verify. Record a digest."
+        },
+        {
+          "id": "build",
+          "action": "Build build_commit in a clean worktree (`make build`), or take the binaries of a published archive whose checksum and build manifest name build_commit. Check that `polaroidd -version` and `polaroid version` report revision build_commit with modified false."
+        },
+        {
+          "id": "stop-manual",
+          "action": "Cutover only: stop the identified process with SIGTERM, wait until it has exited, and confirm with lsof that nothing holds the catalog or the endpoint. For an upgrade, install stops the managed service itself."
+        },
+        {
+          "id": "install",
+          "action": "Run `polaroid install -from BINARIES_FROM` (with -db or -addr only if the instance used non-default ones). It reports running only when the managed process owns the endpoint and is healthy; any other result stops here: read the diagnostics it names, and recover with on-failure."
+        },
+        {
+          "id": "confirm",
+          "action": "Run `polaroid status`: running, with the manager's PID and build_commit. Check the daemon's start-up line or /proc/PID/exe. Repeat the inventory and compare it byte for byte. Read representative records over MCP (a client connected before the upgrade may answer from its cached tool list: see refresh-clients) and compare them with HTTP. Confirm that exactly one polaroidd runs for the catalog and that it is the managed one."
+        },
+        {
+          "id": "refresh-clients",
+          "when": "The build adds, removes or renames MCP tools or changes their arguments (compare tools/list before and after, or the release notes).",
+          "action": "Connected MCP clients keep the tool list they fetched before the upgrade: the server is sessionless and announces no change. Restart each connected client's connection to the server (in VS Code: MCP: List Servers, the server, Restart Server; or Restart above the entry in mcp.json), and check the client's own report of the new tool count (VS Code's MCP output for the server logs Discovered N tools). Agent sessions started before the refresh, and subagents they start, keep their earlier tool set even then. Open a fresh agent session and have it list the Polaroid tools and call the new ones against this endpoint, read-only. Record the client, the refresh, the tool count and the fresh session's calls with their results. If a client cannot be refreshed, say so and name the remaining action: the upgrade is then incomplete for that client's agents."
+        },
+        {
+          "id": "launch-arrangements",
+          "action": "Find and update every launch command, script, editor task or document that still starts the daemon by hand for this catalog, so that `polaroid start`/`stop`/`status` are the operating commands. Leave historical records as they are."
+        },
+        {
+          "id": "record",
+          "action": "Record this execution with the inputs, the process found and how it was started, the activity check and announcement, the backup and its integrity, the inventory digests, the status before and after, the comparison, the launch arrangements updated, the MCP client refresh and the fresh agent session's calls (or why they did not apply), and the recovery commands. Outcome succeeded only if every step held; record a failed run as failed."
+        },
+        {
+          "id": "on-failure",
+          "action": "Binary recovery keeps the current catalog and every record. Upgrade: run `polaroid install -from ~/.local/state/polaroid/previous` with a polaroid that includes ADR-0027 (an older polaroid reinstalls the failed build from there: copy previous/ to another directory first and install from the copy), then confirm the revision, hashes and start-up line are the previous build's. If the previous polaroidd refuses the catalog's schema, fix forward with a corrected build. Cutover that never became healthy: `polaroid stop`, then start the previous binary by hand on the same catalog and endpoint as it was found. Restoring the backup is a separate data operation that loses every record written after it: do it only with the owner's agreement, with a polaroid that includes ADR-0030. First `polaroid restore -plan BACKUP`: it must report ready, the managed destination, the service state and any migration, and it changes nothing. Then `polaroid restore -replace BACKUP`: it takes and validates a pre-restore recovery backup of the current catalog in ~/.polaroid/backups/, stops the managed service if it ran, replaces the catalog atomically, starts the service again and, if the restored catalog does not start, puts the original back only after it has confirmed that the failed daemon stopped (the lifecycle stop succeeded, status reports stopped, no other process holds the endpoint, no -wal or -shm beside the catalog): outcome rolled-back, the failed copy kept as <db>.failed-restore-<time>. A failed start alone does not mean the daemon stopped. If shutdown is not confirmed, the outcome is rollback-blocked (exit 1) and nothing was renamed or removed: the restored catalog is at the catalog path, the replaced one at the printed original (<db>.pre-restore-<time>), and the recovery backup is valid. Then follow manual_recovery: stop every process using the catalog (polaroid stop until polaroid status reports stopped; a process the manager no longer tracks, found with lsof, by hand), never delete -wal or -shm, and either fix the start and run polaroid start, or restore the printed recovery_backup with restore -plan and restore -replace; remove the original only afterwards. Exit 3 means it refused and changed nothing; read the reason (an unowned process, a running service it does not own, a newer schema, an invalid backup). Undo a restore with `polaroid restore -replace` on the printed recovery_backup. Never switch to another, older catalog as a rollback, and never restore a backup whose schema is newer than the polaroid's. Keep the backups and report."
+        }
+      ]
+    },
+    "revision_reason": "#81: after the upgrade to v0.4.0-verify.1 added discover_procedures and suggest_duplicates, the server offered 27 tools but the VS Code MCP client kept the 25 it had fetched, and so did every agent session started before the refresh and its subagents. v4 mentioned restarting the MCP client only in passing, inside the MCP read check, so an upgrade could be reported complete while agents could not use the new tools. v5 adds the refresh-clients step: refresh connected clients and confirm the tools in a fresh agent session, distinguishing server availability from agent-session availability."
+  }
+}
