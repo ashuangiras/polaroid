@@ -70,8 +70,8 @@ Second-repository adoption trials are paused while the existing features are pre
 
 ## Procedure discovery
 
-1. [#79 Procedure discovery by task and duplicate suggestions (lexical, first increment)](https://github.com/ashuangiras/polaroid/issues/79) — **done** ([ADR-0032](../architecture/decisions/0032-lexical-discovery-and-duplicate-suggestions.md)); released with #81
-2. [#81 Discovery relevance: rarity, purpose priority and capped instruction matches; release and upgrade; agent guidance](https://github.com/ashuangiras/polaroid/issues/81) — **done** ([ADR-0033](../architecture/decisions/0033-discovery-ranking-rarity-purpose-detail.md))
+1. [#79 Procedure discovery by task and duplicate suggestions (lexical, first increment)](https://github.com/ashuangiras/polaroid/issues/79) — **done** ([ADR-0032](../architecture/decisions/0032-lexical-discovery-and-duplicate-suggestions.md)), published as `v0.4.0-verify.1`
+2. [#81 Discovery relevance: rarity, purpose priority and capped instruction matches; release and upgrade; agent guidance](https://github.com/ashuangiras/polaroid/issues/81) — **done** ([ADR-0033](../architecture/decisions/0033-discovery-ranking-rarity-purpose-detail.md)), published as `v0.4.0-verify.1` and installed on the shared instance
 
 ## Later (unordered, not yet scoped)
 
