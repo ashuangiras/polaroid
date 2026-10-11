@@ -888,7 +888,20 @@ stats96_counts() { jq -c 'del(.generated_at, .storage.files)'; }
 jq -r '"\(.records.procedures) procedures (\(.records.procedure_versions) versions), \(.records.executions) executions (\(.executions.by_outcome.failed) failed, \(.records.execution_invalidations) invalidated), \(.records.toil_items) toil item; \(.payloads.execution_evidence.total_bytes) bytes of execution evidence; schema \(.storage.schema_version)"' <<<"$stats96"
 echo "the counts add up, match the execution list and the MCP tool, name no path, and reading them changed nothing"
 
-step "28. Restart polaroidd and confirm every record persisted"
+step "28. Size limits on new writes: an oversized value is refused, nothing is stored (#98, ADR-0037; scripted regression evidence)"
+limits98="$(jq -c '.write_limits' <<<"$stats96")"
+jq -e '.policy_version == 1 and (.fields | length) == 37 and .write_max_bytes == 262144' <<<"$limits98" >/dev/null || fail "unexpected write limits: $limits98"
+evidence98="$(jq -r '.fields[] | select(.record == "execution" and .field == "evidence") | .max_bytes' <<<"$limits98")"
+if refused98="$(jq -n --arg p "$lc_child" --arg r "$lc_repo" --arg c "$lc_commit" --argjson n "$evidence98" '{procedure_id: $p, version: 1, repository: $r, commit: $c,
+	environment: {name: "demo.ci", attributes: {}}, inputs: {}, outcome: "succeeded", evidence: {log: ("x" * ($n - 9))}}' | bin/polaroid record 2>/dev/null)"; then
+	fail "evidence one byte over its limit was recorded"
+fi
+jq -e --argjson n "$evidence98" '.error.code == "value_too_large" and .error.limits == [{field: "evidence", bytes: ($n + 1), max_bytes: $n}]' <<<"$refused98" >/dev/null ||
+	fail "unexpected refusal: ${refused98:0:300}"
+[[ "$(bin/polaroid statistics | stats96_counts)" == "$(stats96_counts <<<"$stats96")" ]] || fail "a refused write changed the catalog"
+echo "evidence of $((evidence98 + 1)) bytes is value_too_large (limit $evidence98, from the statistics); the catalog's counts are unchanged"
+
+step "29. Restart polaroidd and confirm every record persisted"
 stop_daemon
 start_daemon
 [[ "$(bin/polaroid get-by-key "$key")" == "$history" ]] || fail "history differs after restart"
@@ -903,7 +916,7 @@ echo "every history, binding, execution, verification, toil item, invalidation a
 [[ "$(bin/polaroid statistics | stats96_counts)" == "$(stats96_counts <<<"$stats96")" ]] || fail "the statistics differ after restart"
 stop_daemon
 
-step "29. Upgrade a database written at schema version 6 (#35): history reads back, and registration associates it without rewriting it"
+step "30. Upgrade a database written at schema version 6 (#35): history reads back, and registration associates it without rewriting it"
 legacy="$work/schema-6.db"
 for f in internal/storage/sqlite/migrations/000[1-6]_*.sql; do sqlite3 "$legacy" <"$f"; done
 sqlite3 "$legacy" <<'SQL'

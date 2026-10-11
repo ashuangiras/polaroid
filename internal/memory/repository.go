@@ -86,6 +86,11 @@ func (s *Service) RegisterRepository(ctx context.Context, in NewRepository) (Rep
 	if err := p.err(); err != nil {
 		return Repository{}, err
 	}
+	var sz sizes
+	sz.text(recRepository, "name", in.Name)
+	if err := sz.err(); err != nil {
+		return Repository{}, err
+	}
 	r := Repository{ID: uuid.NewV7().String(), Name: in.Name, Identifier: in.Identifier, CreatedAt: timestamp()}
 	if err := s.store.CreateRepository(ctx, &r); err != nil {
 		if errors.Is(err, ErrIdentifierExists) {
@@ -102,6 +107,9 @@ func (s *Service) AddRepositoryAlias(ctx context.Context, repositoryID string, i
 	checkRepository(&p, "identifier", in.Identifier)
 	checkText(&p, "reason", in.Reason)
 	if err := p.err(); err != nil {
+		return Repository{}, err
+	}
+	if err := measureReason(recAlias, in.Reason); err != nil {
 		return Repository{}, err
 	}
 	a := RepositoryAlias{Identifier: in.Identifier, Reason: in.Reason, CreatedAt: timestamp()}

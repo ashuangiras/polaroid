@@ -3,7 +3,7 @@
 This page is the contract of the API that `polaroidd` serves. It covers only what is implemented: procedure identity and immutable versions with subprocedure references and applicability, lexical procedure discovery and duplicate suggestions, the repository registry, repository bindings with immutable revisions, execution records, feedback reports, toil items with append-only revisions, the catalog lifecycle: execution-evidence invalidation and procedure retirement, and read-only catalog statistics. Field rules are defined in [records.md](records.md). The same operations are available to MCP clients at `/mcp`; see [mcp.md](mcp.md).
 
 - **Base URL:** `http://127.0.0.1:7417` by default (`polaroidd -addr`).
-- **Bodies:** every request and response body is UTF-8 JSON. Requests with a body must send `Content-Type: application/json` and stay under 1 MiB.
+- **Bodies:** every request and response body is UTF-8 JSON. Requests with a body must send `Content-Type: application/json` and stay under 1 MiB. Each stored field also has a [size limit](#write-limits).
 - **Strict decoding:** member names are case-sensitive. Unknown members, duplicate members and trailing data are rejected. This includes server-assigned fields and fields of planned capabilities.
 - **Timestamps:** RFC 3339 in UTC.
 
@@ -506,7 +506,7 @@ Location: /v1/procedures/{id}/lifecycle/events
 
 ### Catalog statistics
 
-`GET /v1/statistics` summarizes the whole catalog ([ADR-0036](decisions/0036-read-only-catalog-statistics.md)). It writes nothing, takes no query parameter (any is `400 invalid_request`), and returns no record content, ID or filesystem path. A real response from the synthetic catalog of the HTTP tests (two repositories, five procedures, nine executions), with eight payload categories left out where marked:
+`GET /v1/statistics` summarizes the whole catalog ([ADR-0036](decisions/0036-read-only-catalog-statistics.md)). It writes nothing, takes no query parameter (any is `400 invalid_request`), and returns no record content, ID or filesystem path. A real response from the synthetic catalog of the HTTP tests (two repositories, five procedures, nine executions), with eight payload categories and the 37 field limits left out where marked:
 
 ```json
 {"statistics_version":1,"generated_at":"2026-10-11T14:50:55.299568Z",
@@ -522,7 +522,8 @@ Location: /v1/procedures/{id}/lifecycle/events
    "execution_evidence":{"count":9,"total_bytes":105,"mean_bytes":11,"max_bytes":25},
    "toil_proposals":{"count":1,"total_bytes":273,"mean_bytes":273,"max_bytes":273}, …},
  "storage":{"schema_version":10,"page_size":4096,"page_count":70,"freelist_count":0,"database_bytes":286720,
-   "files":{"database":{"present":true,"bytes":4096},"wal":{"present":true,"bytes":947632},"shm":{"present":true,"bytes":32768}}}}
+   "files":{"database":{"present":true,"bytes":4096},"wal":{"present":true,"bytes":947632},"shm":{"present":true,"bytes":32768}}},
+ "write_limits":{"policy_version":1,"write_max_bytes":262144,"request_max_bytes":1048576,"fields":[…]}}
 ```
 
 Here every page is still in the WAL, so the database file is one page while `database_bytes` is 70 pages.
@@ -535,6 +536,36 @@ Here every page is still in the WAL, so the database file is one page while `dat
 - **`storage`**: `schema_version`, `page_size`, `page_count`, `freelist_count` and `database_bytes` (page size × page count) describe the database as of the same snapshot. `files` are the sizes of the database file and SQLite's `wal` and `shm` files, each `{"present":true,"bytes":N}` or `{"present":false}`.
 - **Consistency:** everything except `storage.files` comes from one SQL statement, so one committed state; `generated_at` is taken just before it. `files` are read just after it and may disagree: a commit grows the WAL, a checkpoint moves it into the database file, and SQLite deletes `wal` and `shm` when its last connection closes. A file that does not exist is `present: false`; another failure to read a file's size is `500 internal`.
 - Members may be added within `statistics_version` 1; removing one or changing its meaning increments it.
+- **`write_limits`** (since [#98](https://github.com/ashuangiras/polaroid/issues/98)) is the policy that validation enforces, read from the same table: `policy_version`, `write_max_bytes`, `request_max_bytes` and `fields`, each `{"record","field","kind","max_bytes"}` ([write limits](#write-limits)).
+
+### Write limits
+
+Every persisted, user-controlled text and JSON field has a byte limit, and so has each write as a whole ([ADR-0037](decisions/0037-size-limits-on-new-writes.md)). The limits are fixed, the same on every transport, and reported by `GET /v1/statistics` in `write_limits`.
+
+| Tier | Bytes | Fields |
+| --- | --- | --- |
+| document | 65,536 | `version.contract`, `version.instructions`; execution `evidence`; toil `revision.assessment`, `revision.proposal` |
+| object | 16,384 | `version.references[].inputs`; binding `revision.inputs`; execution `inputs`, `environment.attributes`, `decisions[].evidence`; feedback `context` |
+| text | 8,192 | `version.philosophy`, `version.method`, `version.revision_reason`, `version.references[].condition`, `origin.reason`; binding `revision.revision_reason`; `decisions[].rationale`; invalidation, lifecycle and alias `reason`; feedback `details`; toil `revision.status_rationale`, `revision.revision_reason`, `revision.replacement.summary`, `revision.validation.rationale`, and every `note` |
+| line | 2,048 | `version.goal`; feedback `summary`; repository `name`; toil `revision.activity`, `revision.sources[].steps[]`, each `uri` |
+| whole write | 262,144 | the sum of all bounded fields of one request |
+
+- **Measurement:** JSON is measured after the compaction used for storage (whitespace removed, member order and string escapes as sent, so `"\u00e9"` counts 6 bytes and `"é"` 2); text is measured in UTF-8 bytes as stored. Exactly the limit is accepted; one byte more is refused. Absent optional values are not counted; feedback without `context` stores and counts `{}`.
+- **Order:** the 1 MiB body limit applies first, to the raw bytes (`request_too_large`); then the validation that needs no stored record (`invalid_request`); then the limits. Checks against stored records come after them: conflicts, existence, retirement, and the `invalid_request` checks that compare a write with stored records (an execution's version, binding, scope, decisions and child inputs; a toil revision's status transition and links). A write that fails one of those and is also over a limit gets `value_too_large`.
+- **Error:** `413 value_too_large` lists every value over its limit; field `*` is the whole write. The message names fields and sizes, never content. Nothing is stored.
+
+```json
+{"error":{"code":"value_too_large","message":"value too large: evidence is 70010 bytes, at most 65536",
+  "limits":[{"field":"evidence","bytes":70010,"max_bytes":65536}]}}
+```
+
+```json
+{"error":{"code":"value_too_large","message":"value too large: the whole write is 266502 bytes, at most 262144",
+  "limits":[{"field":"*","bytes":266502,"max_bytes":262144}]}}
+```
+
+- **Stored records are never checked.** Records written before the limits, of any size, read, list, verify, back up and restore as before. A new write is always checked, also when it repeats a stored value: revise an oversized procedure by shortening the value. A retry of a write accepted before the limits that is over them now gets `value_too_large` instead of its conflict; nothing is stored either way.
+- **For agents:** record what a run showed (results, short excerpts) and point to the rest (commits, URLs, log locations). Never paste whole logs. The limits bound one write, not the catalog's growth.
 
 ## Errors
 
@@ -544,7 +575,7 @@ Every error is a JSON object of this form:
 {"error": {"code": "…", "message": "…", "fields": [{"field": "…", "message": "…"}], "latest_version": 2, "latest_revision": 2}}
 ```
 
-`fields` appears only with `invalid_request` errors that come from field validation, and with `procedure_retired`. `latest_version` appears only with `version_conflict`, `latest_revision` only with `revision_conflict`, `latest_event` only with `lifecycle_conflict`, and `cycle` only with `reference_cycle`. Messages are for humans and may change; branch on `code`.
+`fields` appears only with `invalid_request` errors that come from field validation, and with `procedure_retired`. `limits` appears only with `value_too_large`. `latest_version` appears only with `version_conflict`, `latest_revision` only with `revision_conflict`, `latest_event` only with `lifecycle_conflict`, and `cycle` only with `reference_cycle`. Messages are for humans and may change; branch on `code`.
 
 | Status | `code` | When |
 | --- | --- | --- |
@@ -564,6 +595,7 @@ Every error is a JSON object of this form:
 | 409 | `lifecycle_unchanged` | Retiring a retired procedure, or reactivating an active one. |
 | 409 | `procedure_retired` | A new version of a retired procedure, a new version referencing one (`fields` names each reference), or a new binding or binding revision of one. Reactivate it first. |
 | 413 | `request_too_large` | The body exceeds 1 MiB. |
+| 413 | `value_too_large` | A stored field, or the whole write, exceeds its [write limit](#write-limits). `limits` lists each one: `{"field","bytes","max_bytes"}`. |
 | 415 | `unsupported_media_type` | A request with a body that is not `application/json`. |
 | 422 | `graph_too_large` | A composition graph, written or read, is deeper than 32 references or has more than 2048 nodes. |
 | 500 | `internal` | An unexpected failure. The details are logged by `polaroidd` and never returned. |
@@ -690,3 +722,8 @@ Changes for [#91](https://github.com/ashuangiras/polaroid/issues/91) ([ADR-0035]
 Changes for [#96](https://github.com/ashuangiras/polaroid/issues/96) ([ADR-0036](decisions/0036-read-only-catalog-statistics.md)), additive; no migration:
 
 - New read-only endpoint `GET /v1/statistics`, MCP tool `get_catalog_statistics` and CLI command `statistics`. No existing endpoint, request, response, record or schema changes, and a schema-10 catalog stays readable by `v0.6.0-verify.1`.
+
+Changes for [#98](https://github.com/ashuangiras/polaroid/issues/98) ([ADR-0037](decisions/0037-size-limits-on-new-writes.md)), a tightening of writes within `/v1`; no migration:
+
+- Every write endpoint refuses a value over its [write limit](#write-limits), or a write over 256 KiB in total, with the new error `413 value_too_large` (member `limits`). Such writes used to be accepted. No stored record, read, list, verification, selection, backup or restore changes; the largest live values are at most a quarter of their limits.
+- `GET /v1/statistics` adds `write_limits`; `statistics_version` stays 1.

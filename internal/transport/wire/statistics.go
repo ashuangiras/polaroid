@@ -16,6 +16,32 @@ type Statistics struct {
 	ToilItems         ToilStatistics      `json:"toil_items"`
 	Payloads          PayloadStatistics   `json:"payloads"`
 	Storage           StorageStatistics   `json:"storage"`
+	WriteLimits       WriteLimits         `json:"write_limits"`
+}
+
+// WriteLimits is the write-limit policy validation enforces (ADR-0037).
+type WriteLimits struct {
+	PolicyVersion   int          `json:"policy_version"`
+	WriteMaxBytes   int          `json:"write_max_bytes"`
+	RequestMaxBytes int          `json:"request_max_bytes"`
+	Fields          []FieldLimit `json:"fields"`
+}
+
+// FieldLimit bounds one field of a record family.
+type FieldLimit struct {
+	Record   string `json:"record"`
+	Field    string `json:"field"`
+	Kind     string `json:"kind"`
+	MaxBytes int    `json:"max_bytes"`
+}
+
+func newWriteLimits(fields []memory.FieldLimit) WriteLimits {
+	out := WriteLimits{PolicyVersion: memory.WriteLimitsVersion, WriteMaxBytes: memory.MaxWriteBytes, RequestMaxBytes: MaxRequestBytes,
+		Fields: make([]FieldLimit, len(fields))}
+	for i, f := range fields {
+		out.Fields[i] = FieldLimit{Record: f.Record, Field: f.Field, Kind: string(f.Kind), MaxBytes: f.MaxBytes}
+	}
+	return out
 }
 
 // RecordCounts counts every stored record kind.
@@ -187,5 +213,6 @@ func NewStatistics(s memory.Statistics) Statistics {
 	out.Storage.Files.Database = newFileSize(st.Files.Database)
 	out.Storage.Files.WAL = newFileSize(st.Files.WAL)
 	out.Storage.Files.SHM = newFileSize(st.Files.SharedMemory)
+	out.WriteLimits = newWriteLimits(s.WriteLimits)
 	return out
 }

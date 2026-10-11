@@ -138,7 +138,12 @@ func (r ExecutionRecord) validate() (ExecutionRecord, error) {
 	}
 	r.Children = checkChildren(&p, r.Children)
 	r.Decisions = checkDecisions(&p, r.Decisions)
-	return r, p.err()
+	if err := p.err(); err != nil {
+		return r, err
+	}
+	var s sizes
+	r.measure(&s)
+	return r, s.err()
 }
 
 // checkDecisions returns a copy of decisions in stored form, or nil if there

@@ -19,6 +19,8 @@ type Statistics struct {
 	ToilItems   ToilStatusCounts
 	Payloads    PayloadSizes
 	Storage     StorageStatistics
+	// WriteLimits is the policy that validation enforces (ADR-0037).
+	WriteLimits []FieldLimit
 }
 
 // RecordCounts counts every stored record kind: identities, their history
@@ -132,5 +134,6 @@ func (s *Service) Statistics(ctx context.Context) (Statistics, error) {
 		return Statistics{}, fmt.Errorf("read statistics: %w", err)
 	}
 	st.GeneratedAt = at
+	st.WriteLimits = WriteLimits()
 	return st, nil
 }

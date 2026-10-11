@@ -412,6 +412,12 @@ B="$(curl -sS "$URL/v1/statistics" | jq -c 'del(.generated_at)')"
 check "the same document as GET /v1/statistics, apart from generated_at" equal "$A" "$B"
 step get_catalog_statistics '{"repository":"github.com/example/service"}' '.error.code'
 check "arguments are refused: invalid_request" json_has '. == "invalid_request"'
+step get_catalog_statistics '{}' '.write_limits | {policy_version, fields: (.fields | length)}'
+check "the statistics report the write-limit policy (ADR-0037)" json_has '. == {"policy_version":1,"fields":37}'
+BIG98="{\"canonical_key\":\"demo.too-large\",\"philosophy\":\"p\",\"method\":\"m\",\"contract\":{\"log\":\"$(printf 'x%.0s' $(seq 65530))\"},\"instructions\":{},\"revision_reason\":\"r\"}"
+LAST="$(tool create_procedure "$BIG98" | text | jq -c '.error | {code, limits}')"
+md '```text' 'tools/call create_procedure' 'arguments: {"canonical_key":"demo.too-large", …, "contract":{"log":"<65,530 x>"}, …}' "result | .error | {code, limits}:" "$LAST" '```'
+check "an oversized contract is a value_too_large tool error naming the flat field and both sizes" json_has '. == {"code":"value_too_large","limits":[{"field":"contract","bytes":65540,"max_bytes":65536}]}'
 
 ########################################################################
 section "Same documents as the HTTP API" \

@@ -345,7 +345,8 @@ func (t *tools) register(s *sdk.Server) {
 			return wire.NewBindingRevision(r), flatten(err, "revision.")
 		})
 	add(s, t, "record_execution", "Record one finished run of an exact version. Record children first, each with exactly the inputs its reference maps from the parent's inputs, then the parent listing them in children. "+
-		"For every reference with a condition, add a decision {reference, applicable, rationale}: applicable true needs its child; false needs a concrete rationale and no child. Required references cannot be skipped.", write,
+		"For every reference with a condition, add a decision {reference, applicable, rationale}: applicable true needs its child; false needs a concrete rationale and no child. Required references cannot be skipped. "+
+		"Keep evidence concise (results, short excerpts, references to logs and commits); evidence over 64 KiB, inputs over 16 KiB and other values over their limits are value_too_large.", write,
 		func(ctx context.Context, in wire.ExecutionRecord) (any, error) {
 			e, err := t.svc.RecordExecution(ctx, in.Domain())
 			return wire.NewExecution(e), err
@@ -398,7 +399,7 @@ func (t *tools) register(s *sdk.Server) {
 	t.registerLifecycle(s)
 	add(s, t, "get_catalog_statistics", "Read-only statistics of the whole catalog (statistics_version 1): record counts (identities, their revisions and relationship records), "+
 		"procedures by lifecycle and scope, executions by recorded outcome and by evidence status (an outcome is not verification), toil items by latest status, "+
-		"logical byte sizes of the stored JSON payloads (count, total, mean, max), and database pages and file sizes. "+
+		"logical byte sizes of the stored JSON payloads (count, total, mean, max), database pages and file sizes, and write_limits: the byte limit of every bounded field of a write and of the whole write. "+
 		"Counts and payloads are one snapshot; file sizes are read just after it and may differ. Takes no arguments and writes nothing.", read,
 		func(ctx context.Context, _ struct{}) (any, error) {
 			st, err := t.svc.Statistics(ctx)
@@ -497,6 +498,14 @@ func (t *tools) registerToil(s *sdk.Server) {
 // flatten renames the domain's field paths to the flat argument names,
 // for example version.method to method.
 func flatten(err error, prefix string) error {
+	var tooLarge *memory.LimitError
+	if errors.As(err, &tooLarge) {
+		out := &memory.LimitError{Violations: slices.Clone(tooLarge.Violations)}
+		for i := range out.Violations {
+			out.Violations[i].Field = strings.TrimPrefix(out.Violations[i].Field, prefix)
+		}
+		return out
+	}
 	var retired *memory.RetiredProcedureError
 	if errors.As(err, &retired) {
 		out := *retired

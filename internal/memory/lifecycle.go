@@ -171,6 +171,9 @@ func (s *Service) InvalidateExecution(ctx context.Context, executionID string, i
 	if err := p.err(); err != nil {
 		return InvalidationState{}, err
 	}
+	if err := measureReason(recInvalidation, in.Reason); err != nil {
+		return InvalidationState{}, err
+	}
 	inv := Invalidation{ExecutionID: executionID, Reason: in.Reason, Actor: in.Actor, CreatedAt: timestamp()}
 	if err := s.store.InvalidateExecution(ctx, inv); err != nil {
 		switch {
@@ -220,6 +223,9 @@ func (s *Service) changeLifecycle(ctx context.Context, procedureID string, statu
 	checkText(&p, "reason", in.Reason)
 	checkKey(&p, "actor", in.Actor)
 	if err := p.err(); err != nil {
+		return Lifecycle{}, err
+	}
+	if err := measureReason(recLifecycle, in.Reason); err != nil {
 		return Lifecycle{}, err
 	}
 	e := LifecycleEvent{ProcedureID: procedureID, Event: in.BaseEvent + 1, Status: status, Reason: in.Reason, Actor: in.Actor, CreatedAt: timestamp()}

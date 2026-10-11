@@ -135,7 +135,12 @@ func (r FeedbackRecord) validate() (FeedbackRecord, error) {
 	if r.Repository != "" {
 		checkRepository(&p, "repository", r.Repository)
 	}
-	return r, p.err()
+	if err := p.err(); err != nil {
+		return r, err
+	}
+	var s sizes
+	r.measure(&s)
+	return r, s.err()
 }
 
 func checkSubject(p *problems, s Subject) {
