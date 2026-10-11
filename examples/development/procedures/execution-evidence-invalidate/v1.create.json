@@ -1,0 +1,74 @@
+{
+  "canonical_key": "execution.evidence.invalidate",
+  "version": {
+    "philosophy": "Stored history is never rewritten. When an execution does not show what its procedure version claims, the correction is a statement about that record: it is withdrawn as evidence, with the mismatch as its reason, and everything else stays as it was. The work the execution records still happened, so the correction neither denies it nor manufactures a replacement for it.",
+    "method": "Re-read the execution, its verification, the records that link or cite it and the feedback about it; state the mismatch between what ran and what its procedure version claims, from those records; capture what it supports now (its combinations, its own target, contextual selection, parents); invalidate exactly that execution once, with the mismatch as reason; then confirm that the record is unchanged apart from its invalidation, that it and its ancestors no longer verify, that selection falls back to valid evidence, and that every linked record reads back unchanged.",
+    "goal": "Withdraw one recorded execution as verification evidence when it does not show what its procedure version claims, without changing, deleting or replacing any record.",
+    "applicability": {
+      "shared": {}
+    },
+    "contract": {
+      "inputs": {
+        "execution_id": "The one execution to withdraw.",
+        "endpoint": "The catalog's base URL; the catalog supports execution-evidence invalidation (ADR-0035, schema 10 or later).",
+        "mismatch": "What the execution claims (procedure, version, inputs) and what actually ran, with the records that show it, for example a feedback report or the execution's own inputs.",
+        "actor": "Who invalidates, as recorded in the invalidation.",
+        "authorization": "Where the catalog's owner authorized withdrawing this execution, for example a work item."
+      },
+      "preconditions": [
+        "The owner authorized withdrawing exactly this execution.",
+        "The mismatch is shown by stored records, not inferred from the outcome alone: a run that did what its version claims but failed or found a defect is evidence, and is not withdrawn."
+      ],
+      "expected_outcome": "The execution reads back with evidence_status invalidated and the recorded reason and actor; its outcome, inputs, evidence, children and decisions are unchanged; it no longer verifies anything, and neither does any execution that links it; contextual selection and target verification use the remaining valid evidence; every record that links or cites it reads back unchanged.",
+      "verification": [
+        "The execution read after the invalidation equals the one read before it, apart from evidence_status and invalidation.",
+        "Its verification reports `invalidated`; each parent that links it reports `child_invalidated`.",
+        "The combinations of its version list it in invalidated_execution_ids and choose latest_execution_id among valid executions only; its own target (commit and inputs) is no longer verified by it.",
+        "A contextual selection it supported before now selects by other valid evidence, or by the latest version when none remains, as the catalog's contract specifies.",
+        "The feedback, toil items and other executions that cite it read back byte for byte as before."
+      ],
+      "boundaries": [
+        "Withdraws exactly one execution per run; never invalidates another execution to make a result come out.",
+        "Irreversible: when the execution is already invalidated, reports the existing invalidation and stops, without a second request.",
+        "Never records a replacement execution and never reruns the procedure only to replace the evidence; new evidence comes from a real run of that procedure version, recorded on its own.",
+        "Never claims the recorded work did not happen; the reason states what the execution is not evidence of.",
+        "Never retires, revises or rebinds a procedure as part of the correction; a procedure-content problem behind the mismatch is reported as feedback.",
+        "This run is recorded as an execution of this procedure, never as an execution of the procedure whose evidence it withdraws."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "read",
+          "action": "Read the execution, its verification and its invalidation state; the executions that link it as a child; the feedback whose execution or subject names it; and the toil items and other records that cite it.",
+          "done_when": "Every read is kept for the comparison in confirm.",
+          "escalate_when": "It is already invalidated: report the existing invalidation (reason, actor, time) and stop."
+        },
+        {
+          "id": "mismatch",
+          "action": "State, from the records read, what the execution claims and what actually ran, and why that is not evidence for its procedure version.",
+          "escalate_when": "The records do not show a mismatch, only a failed or unwelcome result, or they show a mismatch for other executions too: ask the owner before going on."
+        },
+        {
+          "id": "capture",
+          "action": "Capture what the execution supports now: its version's combination statuses, the target verification of its commit and inputs, the contextual selection of its procedure in its repository and environment (through an existing binding or reference that uses it, or a graph read), and the verification of each parent and of any other executions of that procedure that must stay valid."
+        },
+        {
+          "id": "invalidate",
+          "action": "Invalidate exactly this execution once, with the actor and a reason that names the claimed procedure version, what actually ran and the records that show it.",
+          "done_when": "The response shows evidence_status invalidated with that reason and actor."
+        },
+        {
+          "id": "confirm",
+          "action": "Repeat the reads and the capture. Compare the execution, ignoring evidence_status and invalidation, and every linked or citing record with what was read before; check the verification problems, the combinations, the target verification and the selection.",
+          "done_when": "Every check in verification holds, or the difference is reported."
+        },
+        {
+          "id": "record",
+          "action": "Record this execution, with the invalidated execution's ID, the invalidation as returned, the mismatch and its records, the authorization, and the before and after captures as evidence."
+        }
+      ]
+    },
+    "revision_reason": "Created in Polaroid during #93 for the first live correction: execution 01a12ac5-7fc7 was recorded against procedure.capability.extract v2 but only promoted a toil assessment that v1 had recorded (feedback 01a12ac5-d046). No existing procedure covered withdrawing evidence, and recording the correction as a run of the extraction procedure would have repeated the mistake."
+  }
+}

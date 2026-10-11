@@ -85,8 +85,14 @@ Second-repository adoption trials are paused while the existing features are pre
 
 ## Catalog lifecycle
 
-1. [#91 Execution-evidence invalidation and procedure retirement](https://github.com/ashuangiras/polaroid/issues/91): **done** ([ADR-0035](../architecture/decisions/0035-evidence-invalidation-and-procedure-retirement.md)), not released. Append-only lifecycle metadata: an execution is withdrawn as evidence, irreversibly, and stops supporting verification and selection; a procedure is retired and reactivated, leaving lists and discovery and refusing new references while everything that exists keeps resolving. Schema 10. The live correction of the promotion record `01a12ac5-7fc7` waits for a release ([status](status.md)).
-2. **Planned, not scoped:** physical purge, retention, usage statistics, payload limits, namespaces, promotion between catalogs, separate databases, and a procedure for promoting earlier assessments that `procedure.capability.extract` would reference.
+1. [#91 Execution-evidence invalidation and procedure retirement](https://github.com/ashuangiras/polaroid/issues/91): **done** ([ADR-0035](../architecture/decisions/0035-evidence-invalidation-and-procedure-retirement.md)). Append-only lifecycle metadata: an execution is withdrawn as evidence, irreversibly, and stops supporting verification and selection; a procedure is retired and reactivated, leaving lists and discovery and refusing new references while everything that exists keeps resolving. Schema 10.
+2. [#93 Release and adopt catalog lifecycle](https://github.com/ashuangiras/polaroid/issues/93): **done**.
+   - Published as `v0.6.0-verify.1` (tag on `6a6c835`).
+   - The shared managed instance is upgraded to it, at schema 10.
+   - The misclassified promotion execution `01a12ac5-7fc7` is invalidated on the live catalog, through the new shared procedure `execution.evidence.invalidate`.
+   - A fresh Copilot session used the new tools on the live service.
+3. **Next, proposed, not filed:** catalog statistics, read-only with no schema change, then per-field payload limits for new writes, decided from the measured sizes ([status](status.md#next-work-item)).
+4. **Planned, not scoped:** physical purge, retention, namespaces, promotion between catalogs, separate databases, and a procedure for promoting earlier assessments that `procedure.capability.extract` would reference.
 
 ## Later (unordered, not yet scoped)
 

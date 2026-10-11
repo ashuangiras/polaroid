@@ -68,7 +68,7 @@ Or run the scripted version, which also binds the procedure in two repositories,
 [Releases](https://github.com/ashuangiras/polaroid/releases) publish **prerelease verification builds**, not stable releases: `polaroid` and `polaroidd` for linux/amd64, linux/arm64, darwin/amd64 and darwin/arm64, built by GitHub Actions from one tagged commit on `main` ([ADR-0028](docs/architecture/decisions/0028-prerelease-verification-builds.md)). Each archive, `polaroid_<tag>_<os>_<arch>.tar.gz`, holds both binaries, an installation and testing guide and `smoke-test.sh`. That script needs only a POSIX shell and `curl`, and it installs nothing and never touches `~/.polaroid`. Each release also has `SHA256SUMS` and `build-manifest.json` (commit, version, Go toolchain, assets).
 
 ```sh
-tag=v0.5.0-verify.1    # see the release page for the current one
+tag=v0.6.0-verify.1    # see the release page for the current one
 base=https://github.com/ashuangiras/polaroid/releases/download/$tag
 curl -fsSLO "$base/polaroid_${tag}_linux_amd64.tar.gz" -O "$base/SHA256SUMS"
 sha256sum -c --ignore-missing SHA256SUMS
