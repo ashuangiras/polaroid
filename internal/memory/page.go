@@ -97,7 +97,7 @@ func (g *pager) start(prob *problems) *Position {
 		prob.add("snapshot", "requires limit")
 		return nil
 	case p.Snapshot && g.timed:
-		prob.add("snapshot", "is offered only by the procedure and binding lists")
+		prob.add("snapshot", "is offered only by the procedure, binding and toil item lists")
 		return nil
 	case p.After == "":
 		return nil

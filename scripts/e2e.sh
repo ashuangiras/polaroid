@@ -591,7 +591,7 @@ check "graph context needs both parameters; resolution needs an environment" equ
 
 ########################################################################
 section "Use Polaroid from an agent over MCP" \
-	"\`polaroidd\` serves MCP at \`/mcp\` (ADR-0014): stateless streamable HTTP, protocols 2026-07-28 and 2025-11-25 (ADR-0016), behind the same loopback and cross-origin checks. 27 tools mirror the HTTP API with flat arguments named after record fields; results are the API's record shapes, errors are tool errors with the API's codes, and three read-only resource templates serve procedures, versions and bindings. Below, raw JSON-RPC over curl shows exactly what an MCP client sends." \
+	"\`polaroidd\` serves MCP at \`/mcp\` (ADR-0014): stateless streamable HTTP, protocols 2026-07-28 and 2025-11-25 (ADR-0016), behind the same loopback and cross-origin checks. 32 tools mirror the HTTP API with flat arguments named after record fields; results are the API's record shapes, errors are tool errors with the API's codes, and three read-only resource templates serve procedures, versions and bindings. Below, raw JSON-RPC over curl shows exactly what an MCP client sends." \
 	"Point an MCP client at \`http://127.0.0.1:7417/mcp\`, e.g. VS Code \`.vscode/mcp.json\`: \`{\"servers\": {\"polaroid\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:7417/mcp\"}}}\`."
 MCP_META='{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/clientInfo":{"name":"manual-test","version":"1"}}'
 rpc() { # rpc METHOD NAME PARAMS [PROTOCOL]: one JSON-RPC request; NAME may be empty
@@ -606,7 +606,7 @@ tool() { rpc tools/call "$1" "$(jq -cn --arg n "$1" --argjson a "$2" '{name: $n,
 show 'rpc server/discover "" "{}" | jq -c "{versions: .result.supportedVersions, capabilities: (.result.capabilities | keys), server: .result._meta[\"io.modelcontextprotocol/serverInfo\"].name}"'
 check "server/discover: protocols 2026-07-28 and 2025-11-25, tools and resources" json_has '.versions == ["2026-07-28","2025-11-25"] and .capabilities == ["resources","tools"] and .server == "polaroid"'
 show 'rpc tools/list "" "{}" | jq -c "{tools: (.result.tools | length), read_only: [.result.tools[] | select(.annotations.readOnlyHint) | .name] | length, names: [.result.tools[].name] | sort}"'
-check "27 tools, 18 of them read-only" json_has '.tools == 27 and .read_only == 18'
+check "32 tools, 21 of them read-only" json_has '.tools == 32 and .read_only == 21'
 show 'tool get_procedure "{\"canonical_key\": \"go.dependency.add\"}" | jq -S .result.structuredContent | shasum -a 256 | cut -c1-16; get /v1/procedures/by-key/go.dependency.add | jq -S . | shasum -a 256 | cut -c1-16'
 check "get_procedure over MCP returns the same document as GET /v1/procedures/by-key" equal "$(sed -n 1p <<<"$LAST")" "$(sed -n 2p <<<"$LAST")"
 show 'tool create_procedure "{\"canonical_key\": \"mcp.created\", \"philosophy\": \"p\", \"method\": \"m\", \"contract\": {\"z\": 1, \"a\": 2}, \"instructions\": {}, \"revision_reason\": \"Created by an agent over MCP.\"}" | jq -r ".result.content[0].text" | jq -c "{id, canonical_key, contract: .versions[0].contract}"'
@@ -758,12 +758,39 @@ check "unrelated content gets no suggestion" json_has '.matched == 0 and .sugges
 check "discovery and duplicate checks wrote nothing" equal "$(digest /v1/procedures)" "$DISC_BEFORE"
 
 ########################################################################
+section "Toil items: assessments of repetitive work, with a lifecycle" \
+	"A toil item records an agent's evidence-backed assessment of repetitive work that a tool might replace (ADR-0034): exact procedure versions as sources (with declared step identifiers Polaroid never checks), supporting executions (a failed run is valid support), an assessment whose repetition and burden are each observed, hypothesis or unknown, an optional proposal, and a status that is the agent's judgment, not verification. Revisions are complete, append-only and need the latest \`base_revision\`." \
+	"\`bin/polaroid create-toil-item FILE\`, \`revise-toil-item ID FILE\`, \`toil-items [status=… repository=… procedure_id=…]\`, \`get-toil-item ID\`, \`get-toil-item-by-key KEY\`, \`get-toil-revision ID N\`; MCP \`create_toil_item\`, \`revise_toil_item\`, \`list_toil_items\`, \`get_toil_item\`, \`get_toil_revision\`."
+RUN="$(bin/polaroid executions "$ID" | jq -r '.executions[0].id')"
+TOIL_REV() { # TOIL_REV STATUS [EXTRA_JQ]: a revision body citing go.dependency.add v1 and one of its runs
+	jq -nc --arg p "$ID" --arg e "$RUN" --arg s "$1" '{activity: "Check a module license by hand", applicability: {shared: {}},
+		sources: [{procedure_id: $p, version: 1, steps: ["license"]}], observations: [{execution_id: $e, note: "checked by hand"}],
+		assessment: {repetition: {status: "observed"}, burden: {status: "unknown"}}, status: $s, status_rationale: "Seen in recorded runs.",
+		revision_reason: "e2e", author: "e2e.agent"}'"${2:+ | $2}"
+}
+PROPOSAL='.proposal = {inputs: "module", outputs: "license", remaining_judgment: "exceptions", failure_and_recovery: "check by hand", acceptance_criteria: ["matches the inventory"]}'
+show 'bin/polaroid create-toil-item <<<"$(jq -nc --argjson r "$(TOIL_REV observed)" "{canonical_key: \"e2e.license.check\", revision: \$r}")" | jq -c "{id, latest_revision, status, scope}"'
+check "created at revision 1, observed and shared" json_has '.latest_revision == 1 and .status == "observed" and .scope == "shared"'
+TOIL="$(jq -r .id <<<"$LAST")"
+show 'bin/polaroid create-toil-item 2>/dev/null <<<"$(jq -nc --argjson r "$(TOIL_REV observed)" "{canonical_key: \"e2e.license.check\", revision: \$r}")" | jq -c .error.code'
+check "the same key again is canonical_key_exists" equal "$LAST" '"canonical_key_exists"'
+show 'bin/polaroid revise-toil-item "$TOIL" <<<"$(jq -nc --argjson r "$(TOIL_REV candidate "$PROPOSAL")" "{base_revision: 1, revision: \$r}")" | jq -c "{revision, status}"; bin/polaroid revise-toil-item "$TOIL" 2>/dev/null <<<"$(jq -nc --argjson r "$(TOIL_REV candidate "$PROPOSAL")" "{base_revision: 1, revision: \$r}")" | jq -c "{code: .error.code, latest: .error.latest_revision}"'
+check "revision 2 is candidate; a stale base is revision_conflict naming revision 2" equal "$LAST" $'{"revision":2,"status":"candidate"}\n{"code":"revision_conflict","latest":2}'
+show 'bin/polaroid revise-toil-item "$TOIL" 2>/dev/null <<<"$(jq -nc --argjson r "$(TOIL_REV implemented "$PROPOSAL")" "{base_revision: 2, revision: \$r}")" | jq -c "[.error.fields[].field]"'
+check "implemented without a replacement is refused, naming it" equal "$LAST" '["revision.replacement"]'
+show 'bin/polaroid toil-items status=candidate procedure_id="$ID" | jq -c "[.toil_items[] | {canonical_key, latest_revision}]"; bin/polaroid toil-items status=observed | jq -c ".toil_items"'
+check "the list filters by the latest revision's status and sources" equal "$LAST" $'[{"canonical_key":"e2e.license.check","latest_revision":2}]\n[]'
+show 'bin/polaroid get-toil-revision "$TOIL" 1 | jq -c "{revision, status, steps: .sources[0].steps}"; bin/polaroid get-toil-item-by-key e2e.license.check | jq -c "[.revisions[].status]"'
+check "revision 1 is unchanged and the history has both" equal "$LAST" $'{"revision":1,"status":"observed","steps":["license"]}\n["observed","candidate"]'
+
+########################################################################
 section "The database enforces immutability itself" \
-	"Even a client that bypasses polaroidd cannot rewrite history: schema triggers reject UPDATE/DELETE of procedures, versions, bindings, binding revisions, references, executions and execution links and decisions, feedback reports, repositories, repository identifiers and procedure origins, gaps in numbering, and pins to missing versions. \`PRAGMA user_version\` records the schema version (8 migrations)." \
+	"Even a client that bypasses polaroidd cannot rewrite history: schema triggers reject UPDATE/DELETE of procedures, versions, bindings, binding revisions, references, executions and execution links and decisions, feedback reports, repositories, repository identifiers and procedure origins, gaps in numbering, and pins to missing versions. toil items, revisions and their links, \`PRAGMA user_version\` records the schema version (9 migrations)." \
 	"Open the database with \`sqlite3 polaroid.db\` and try the statements below."
-SNAP_BEFORE="$(digest "/v1/procedures/$ID")$(digest "/v1/bindings/$BA")$(digest "/v1/bindings/$BB")"
+SNAP_BEFORE="$(digest "/v1/procedures/$ID")$(digest "/v1/bindings/$BA")$(digest "/v1/bindings/$BB")$(digest "/v1/toil-items/$TOIL")"
 show 'sqlite3 "$DB" "PRAGMA user_version; SELECT name FROM sqlite_master WHERE type = '"'"'table'"'"' ORDER BY name;"'
-check "schema version is 8 with procedure, binding, reference, execution, execution-link, decision, feedback and repository tables" equal "$(head -n1 <<<"$LAST")" 8
+check "schema version is 9 with procedure, binding, reference, execution, execution-link, decision, feedback, repository and toil tables" equal "$(head -n1 <<<"$LAST")" 9
+check "the toil_revisions table exists" out_has "toil_revisions"
 check "the execution_children table exists" out_has "execution_children"
 check "the execution_decisions table exists" out_has "execution_decisions"
 check "the feedback table exists" out_has "feedback"
@@ -779,11 +806,15 @@ for stmt in \
 	"DELETE FROM feedback WHERE id = '$FB2'" \
 	"UPDATE execution_decisions SET applicable = 1" \
 	"DELETE FROM execution_decisions" \
-	"UPDATE procedure_version_references SET condition = NULL"; do
+	"UPDATE procedure_version_references SET condition = NULL" \
+	"UPDATE toil_revisions SET status = 'validated'" \
+	"DELETE FROM toil_items" \
+	"DELETE FROM toil_revision_sources" \
+	"INSERT INTO toil_revision_executions VALUES ('$TOIL', 1, 'observation', 5, '$RUN', 'added later')"; do
 	show "sqlite3 \"\$DB\" \"$stmt\""
 	check "rejected: ${stmt:0:60}…" test "$RC" -ne 0
 done
-check "all histories are unchanged after the tampering attempts" equal "$(digest "/v1/procedures/$ID")$(digest "/v1/bindings/$BA")$(digest "/v1/bindings/$BB")" "$SNAP_BEFORE"
+check "all histories are unchanged after the tampering attempts" equal "$(digest "/v1/procedures/$ID")$(digest "/v1/bindings/$BA")$(digest "/v1/bindings/$BB")$(digest "/v1/toil-items/$TOIL")" "$SNAP_BEFORE"
 check "the feedback reports are unchanged too" equal "$(bin/polaroid get-feedback "$FB1")" "$FB1_BODY"
 
 ########################################################################
@@ -834,7 +865,7 @@ show 'bin/polaroid bind <<<"$(bind_req scratch "{\"pin\": 1}" legacy old-1)" | j
 check "bindings work on the upgraded database" json_has '.procedure_id == "old-1"'
 stop_daemon
 show 'sqlite3 "$WORK/v1.db" "PRAGMA user_version"'
-check "schema version is now 8" equal "$LAST" 8
+check "schema version is now 9" equal "$LAST" 9
 show 'cp "$DB" "$WORK/newer.db" && sqlite3 "$WORK/newer.db" "PRAGMA user_version = 99" && HOME="$WORK/home" bin/polaroidd -addr 127.0.0.1:0 -db "$WORK/newer.db"'
 check "newer schema refused with exit 1" rc_is 1
 check "error says the schema is newer than this build supports" out_has "newer than this build supports"
@@ -909,12 +940,13 @@ section "Back up, inspect and restore a catalog" \
 	"\`polaroid backup\` takes a consistent snapshot of a catalog while \`polaroidd\` serves it, \`inspect-backup\` validates a backup without changing it, and \`restore\` plans, then replaces a stopped catalog with the snapshot and keeps a recovery backup of what it replaced ([ADR-0030](../../docs/architecture/decisions/0030-catalog-backup-and-restore.md)). Everything written after the snapshot is replaced, never merged." \
 	"Run \`polaroid backup -db FILE -dir DIR\`, \`polaroid inspect-backup BACKUP\`, stop the daemon, then \`polaroid restore -db FILE -dir DIR -plan BACKUP\` and \`-replace BACKUP\`."
 # shellcheck disable=SC2086 # l is a command and its arguments
-inventory() { for l in list feedbacks repositories "executions $ID"; do bin/polaroid $l; done | shasum -a 256; }
+inventory() { for l in list feedbacks repositories toil-items "executions $ID"; do bin/polaroid $l; done | shasum -a 256; }
 start_daemon "$DB" flags
 BEFORE_INV="$(inventory)"
-show 'HOME="$WORK/home" bin/polaroid backup -db "$DB" -dir "$WORK/backups" 2>/dev/null | jq -c "{path, reason: .metadata.reason, schema: .metadata.schema_version, procedures: .metadata.records.procedures}"'
+show 'HOME="$WORK/home" bin/polaroid backup -db "$DB" -dir "$WORK/backups" 2>/dev/null | jq -c "{path, reason: .metadata.reason, schema: .metadata.schema_version, procedures: .metadata.records.procedures, toil_revisions: .metadata.records.toil_revisions}"'
 BK="$(jq -r .path <<<"$LAST")"
 check "a backup of the catalog polaroidd is serving is published" equal "$RC $(test -s "$BK/polaroid.db" && test -s "$BK/backup.json" && echo published)" "0 published"
+check "the backup metadata counts the toil tables, like every other table" json_has '.toil_revisions == 2'
 show 'jq -nc "{canonical_key: \"e2e.after.backup\", version: {philosophy: \"p\", method: \"m\", contract: {}, instructions: {}, revision_reason: \"r\"}}" | bin/polaroid create | jq -c "{canonical_key}"'
 show 'HOME="$WORK/home" bin/polaroid inspect-backup "$BK" 2>/dev/null | jq -c "{valid, schema_version, records: .records.procedures}"'
 check "inspect-backup reports it valid" json_has '.valid == true'
@@ -926,7 +958,7 @@ check "the plan is ready and needs -replace" json_has '.ready and .requires_repl
 show 'HOME="$WORK/home" bin/polaroid restore -db "$DB" -dir "$WORK/backups" -replace "$BK" 2>/dev/null | jq -c "{outcome, recovery_backup}"'
 check "restore -replace restored the snapshot and kept a recovery backup" json_has '.outcome == "restored" and (.recovery_backup | length > 0)'
 start_daemon "$DB" flags
-check "procedures, feedback, repositories and executions read back exactly as at the backup" equal "$(inventory)" "$BEFORE_INV"
+check "procedures, feedback, repositories, toil items and executions read back exactly as at the backup" equal "$(inventory)" "$BEFORE_INV"
 show 'bin/polaroid get-by-key e2e.after.backup'
 check "the procedure created after the backup is gone" rc_is 1
 stop_daemon

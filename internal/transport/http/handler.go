@@ -67,6 +67,12 @@ func NewHandler(svc *memory.Service, logger *slog.Logger) http.Handler {
 	a.mux.HandleFunc("GET /v1/repositories/by-identifier/{identifier...}", a.getRepositoryByIdentifier)
 	a.mux.HandleFunc("GET /v1/repositories/{id}", a.getRepository)
 	a.mux.HandleFunc("POST /v1/repositories/{id}/aliases", a.addRepositoryAlias)
+	a.mux.HandleFunc("POST /v1/toil-items", a.createToilItem)
+	a.mux.HandleFunc("GET /v1/toil-items", a.listToilItems)
+	a.mux.HandleFunc("GET /v1/toil-items/by-key/{key}", a.getToilItemByKey)
+	a.mux.HandleFunc("GET /v1/toil-items/{id}", a.getToilItem)
+	a.mux.HandleFunc("POST /v1/toil-items/{id}/revisions", a.reviseToilItem)
+	a.mux.HandleFunc("GET /v1/toil-items/{id}/revisions/{revision}", a.getToilRevision)
 
 	csrf := http.NewCrossOriginProtection()
 	csrf.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

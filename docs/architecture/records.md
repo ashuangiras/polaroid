@@ -2,7 +2,7 @@
 
 This page defines Polaroid's records, how they are identified and how they are versioned. Each section is marked as **implemented** or **planned**. The [HTTP API](http-api.md) serves the implemented records with exactly these field names.
 
-Summary: a **procedure** is a shared identity with immutable **versions**. A version may **reference** other procedures it composes, and declares where it **applies**. A **repository** is a registered identity with a canonical identifier and aliases. A **binding** lets one repository use a procedure under a local name, with immutable **binding revisions** that hold the repository's inputs and version policy. An **execution** records one finished run of an exact version, and may link the **child executions** that fulfilled its references. **Verification** is derived from executions per combination of context and child versions. A **feedback report** may name its subject. All of them live in one shared catalog; repository scope organizes records and is not access control.
+Summary: a **procedure** is a shared identity with immutable **versions**. A version may **reference** other procedures it composes, and declares where it **applies**. A **repository** is a registered identity with a canonical identifier and aliases. A **binding** lets one repository use a procedure under a local name, with immutable **binding revisions** that hold the repository's inputs and version policy. An **execution** records one finished run of an exact version, and may link the **child executions** that fulfilled its references. **Verification** is derived from executions per combination of context and child versions. A **feedback report** may name its subject. A **toil item** is a versioned assessment of repetitive work, with append-only **toil revisions** and an assessment lifecycle. All of them live in one shared catalog; repository scope organizes records and is not access control.
 
 ## Implemented records
 
@@ -268,6 +268,56 @@ A report without `subject`, including every report stored before subjects existe
 
 Reporting feedback changes no other record. The database enforces the field rules with `CHECK` constraints, checks that a subject exists with a trigger, and rejects `UPDATE` and `DELETE`.
 
+### Toil item (implemented)
+
+A toil item records an agent's assessment of repetitive, mechanical work that a tool might replace: where it happens, what shows it repeats, what is only a hypothesis, a proposal, and what became of it ([ADR-0034](decisions/0034-toil-items.md)). It is task knowledge, like a procedure, but it is neither a procedure (it has no method to follow) nor an execution (it is not one run). Its status is an assessment state written by agents, never execution verification: Polaroid checks structure and links, and derives nothing from an item, nor does an item change any other record.
+
+| Field | Type | Set by | Rules |
+| --- | --- | --- | --- |
+| `id` | string | server | A UUIDv7. Never changes. |
+| `canonical_key` | string | client, at creation | The procedure key format, unique among toil items (a separate namespace from procedures). A duplicate is `409 canonical_key_exists`. Never changes. |
+| `created_at` | RFC 3339 timestamp, UTC | server | |
+| `latest_revision` | integer ≥ 1 | derived | The highest revision number. |
+| `activity`, `status`, `scope`, `applicability`, `updated_at` | | derived | The latest revision's, and its `created_at`. |
+
+There is no semantic deduplication: different keys may describe overlapping work, so agents list existing items (by repository and procedure) before creating one.
+
+### Toil revision (implemented)
+
+A toil revision is one immutable, complete statement of the assessment, numbered from 1 without gaps. A revision is stored only if `base_revision` is the latest; any other base is `409 revision_conflict` with `latest_revision`. An item and its revision 1 are created in one atomic write.
+
+| Field | Type | Set by | Rules |
+| --- | --- | --- | --- |
+| `toil_item_id`, `revision`, `created_at` | | server | |
+| `activity` | string | client | Required, one line. |
+| `applicability` | JSON object | client | Required: `{"shared": {}}` or `{"repository": "<registered repository id>"}`. Responses add `scope` (`shared` or `local`). |
+| `sources` | array | client | At least one exact procedure version `{procedure_id, version, steps?}`, unique per revision. `steps` are declared, non-blank one-line identifiers, unique per source, never checked against the version's `instructions`; an empty list is the same as none. |
+| `observations` | array | client | Optional executions supporting the assessment, `{execution_id, note}`, each cited once. Always returned, `[]` when none. |
+| `assessment` | JSON object | client | Free-form, except that `repetition` and `burden` are required objects whose `status` is `observed`, `hypothesis` or `unknown`. Other members (for example `error_rate` or `worth`) are not interpreted. |
+| `proposal` | JSON object | client | Optional. Free-form, but `inputs`, `outputs`, `remaining_judgment` and `failure_and_recovery` must be present and not `null`, and `acceptance_criteria` must be a non-empty array of non-blank strings. |
+| `status` | string | client | `observed`, `candidate`, `implemented`, `validated` or `retired`; see the lifecycle below. |
+| `status_rationale` | string | client | Required, not blank: why the status holds, or for `retired`, why the item is no longer tracked. |
+| `replacement` | JSON object | client | Optional. `summary` (not blank) and `references`, at least one `{uri, note?}`. |
+| `validation` | JSON object | client | Optional. `rationale` (not blank), `executions` (`{execution_id, note}`) and `references` (`{uri, note?}`), at least one entry between them. A stored validation always returns both arrays. |
+| `revision_reason` | string | client | Required, not blank. |
+| `author` | string | client | The agent or person writing the revision, in the canonical-key format (as a feedback `reporter`). Not authenticated. |
+
+**Links.** Source versions and executions must exist (`400` naming the link). A failed execution is valid support: an observation records what an execution shows, not that it succeeded. `uri` is any non-blank single line (a URL, a path, a commit); references are stored and returned, never fetched, opened or executed. A local item's executions must have run in its repository, by identity with aliases included, and its source versions must be applicable there. A shared item may cite procedures and executions from several repositories.
+
+**Lifecycle.**
+
+| Status | Means | Requires | Also allows |
+| --- | --- | --- | --- |
+| `observed` | the activity was seen | | `proposal` |
+| `candidate` | a proposal awaits a decision; no claim that it is worthwhile | `proposal` | |
+| `implemented` | a replacement exists, not yet validated | `proposal`, `replacement` | |
+| `validated` | an agent judged, citing evidence, that the replacement meets the acceptance criteria | `proposal`, `replacement`, `validation` | |
+| `retired` | no longer tracked | | `proposal`, `replacement`, `validation` |
+
+Revision 1 is `observed` or `candidate`. Each later revision's status must follow its base revision's: `observed` → `candidate`, `retired`; `candidate` → `observed`, `implemented`, `retired`; `implemented` → `candidate`, `validated`, `retired`; `validated` → `candidate`, `retired`; `retired` → `observed`; and every status to itself. A replacement that fails is reassessed by appending a `candidate` revision that explains the failure; the earlier revisions stay. `validated` is a recorded judgment with its evidence, not `verified`.
+
+**Storage.** The database rejects `UPDATE` and `DELETE` of items, revisions and their links, revision gaps, links written after their revision, a revision 1 outside `observed` and `candidate`, transitions outside the table, a revision without a source, and validation evidence without a validation or a validation without evidence. `CHECK` constraints repeat the field and status rules.
+
 ## Instruction steps (recommended convention)
 
 `instructions` is a free-form JSON object, and Polaroid never reads its members. This convention helps agents skip what does not apply and stop at the right point; procedures may adopt it, and nothing enforces it. A version lists `steps`, each an object:
@@ -295,3 +345,4 @@ No records are planned in the current increments. Later work (semantic discovery
 - [#37](https://github.com/ashuangiras/polaroid/issues/37) has no migration. Responses add `scope` on every version and graph node, and `repository_id` on executions, selection evidence and combinations of registered identifiers. Derived verification and resolution now match evidence by repository identity: nothing changes for unregistered identifiers or repositories without aliases, while executions recorded under an alias join their repository's combinations, which may change those combinations' status, and whose `combination.repository` becomes the canonical identifier. No stored record changes.
 - [#39](https://github.com/ashuangiras/polaroid/issues/39) ([ADR-0024](decisions/0024-child-inputs-follow-the-reference-mapping.md)) has no migration, and it tightens one rule as a correctness fix, without a new API version: a child link the old rule accepted although its child ran with other inputs than the reference maps made a parent verified for work it never composed. Recording such a link is now `400` naming `children[i].execution_id`. Stored links, including any written that way earlier, read back unchanged, but their parents are no longer verified; they report `child_inputs_mismatch`, and their combinations, contextual selection and target verification change with them. Verification responses can carry the new problem code. The database does not enforce the rule.
 - Migration 8 ([#50](https://github.com/ashuangiras/polaroid/issues/50), [ADR-0029](decisions/0029-conditional-references-and-applicability-decisions.md)) adds `condition` to references (NULL: required, which every existing reference is) and the `execution_decisions` table. Every stored version, execution, verification, combination and selection reads back unchanged; the new fields are additive and omitted when absent.
+- Migration 9 ([#87](https://github.com/ashuangiras/polaroid/issues/87), [ADR-0034](decisions/0034-toil-items.md)) adds `toil_items`, `toil_revisions`, `toil_revision_sources` and `toil_revision_executions`. No existing row or response changes, and toil items affect no other record's verification, selection or discovery. Builds before schema 9 cannot open a migrated catalog or restore a schema-9 backup.

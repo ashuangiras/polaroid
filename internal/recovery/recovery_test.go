@@ -101,7 +101,8 @@ func TestRestoreReplacesTheCatalogWithTheSnapshot(t *testing.T) {
 	}
 	m := b.Metadata
 	if m.Format != Format || m.FormatVersion != 1 || m.Reason != ReasonBackup || m.Source.Path != path || m.Source.Managed ||
-		m.SchemaVersion < 8 || len(m.Database.SHA256) != 64 || m.Records["procedures"] != 2 || m.Records["execution_decisions"] != 1 || m.CreatedAt == "" {
+		m.SchemaVersion < 8 || len(m.Database.SHA256) != 64 || m.Records["procedures"] != 2 || m.Records["execution_decisions"] != 1 ||
+		m.Records["toil_items"] != 1 || m.Records["toil_revisions"] != 2 || m.Records["toil_revision_sources"] != 2 || m.Records["toil_revision_executions"] != 2 || m.CreatedAt == "" {
 		t.Errorf("metadata %+v", m)
 	}
 

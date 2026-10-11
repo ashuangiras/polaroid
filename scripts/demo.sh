@@ -27,6 +27,8 @@
 # canonical identifier's combination, a later failure deciding it, a
 # snapshot traversal ignoring concurrent creations, a cursor bound to its
 # parameters, and resolution reporting the selected version's own scope.
+# A scripted toil item (#87) is created, refused an incomplete or illegal
+# revision and a stale base, revised to candidate, and listed by filter.
 # Finally it restarts the daemon and confirms every record is unchanged, and
 # upgrades a database written at schema version 6.
 #
@@ -757,7 +759,58 @@ jq -e '.key_collision.canonical_key == "dev.change.verify"' <<<"$(jq -n '{canoni
 [[ "$(dev_snapshot)" == "$dev_before" ]] || fail "discovery or a duplicate check changed a record"
 echo "5. a distinct proposal (polaroid.logs.rotate) gets no suggestion; an existing key is a key_collision; nothing was written"
 
-step "25. Restart polaroidd and confirm every record persisted"
+step "25. Toil items: an assessment with append-only revisions and a checked lifecycle (#87, ADR-0034; scripted regression evidence)"
+dev_repo_id="$(jq -r --arg r "$dev_repo" '.repositories[$r]' <<<"$full")"
+records_id="$(jq -r '.procedures["polaroid.change.records"]' <<<"$full")"
+records_version="$(bin/polaroid get "$records_id" | jq .latest_version)"
+classify_id="$(jq -r '.procedures["dev.change.classify"]' <<<"$full")"
+saved_commit="$dev_commit" dev_commit=3333333333333333333333333333333333333333
+classify87="$(record_dev "$classify_id" 1 succeeded '{"files":["docs/README.md"]}')"
+dev_commit="$saved_commit"
+dev_before="$(dev_snapshot)"
+toil_key=demo.change-classification.manual
+# toil_revision STATUS [MEMBERS]: a revision of the demo's toil item, with MEMBERS (a JSON object) merged in.
+toil_revision() {
+	jq -cn --arg repo "$dev_repo_id" --arg src "$records_id" --argjson v "$records_version" --arg run "$classify87" \
+		--arg st "$1" --argjson more "${2:-null}" --arg s "$scripted" \
+		'{activity: "Classify the files a change touches by hand", applicability: {repository: $repo},
+		  sources: [{procedure_id: $src, version: $v, steps: ["classify"]}],
+		  observations: [{execution_id: $run, note: "A scripted classification run."}],
+		  assessment: {repetition: {status: "observed"}, burden: {status: "hypothesis"}},
+		  status: $st, status_rationale: "Scripted.", revision_reason: $s, author: "scripts.demo"} + ($more // {})'
+}
+proposal87='{"proposal": {"inputs": "a commit range", "outputs": "one class per file", "remaining_judgment": "files no rule matches",
+	"failure_and_recovery": "classify by hand", "acceptance_criteria": ["agrees with the recorded hand classifications"]}}'
+toil87="$(jq -n --arg k "$toil_key" --argjson r "$(toil_revision observed)" '{canonical_key: $k, revision: $r}' | bin/polaroid create-toil-item | jq -r .id)"
+toil_rev1="$(bin/polaroid get-toil-revision "$toil87" 1)"
+jq -e '.revision == 1 and .status == "observed" and .proposal == null' <<<"$toil_rev1" >/dev/null || fail "revision 1 is not the observed assessment: $toil_rev1"
+if refused87="$(jq -n --arg k "$toil_key" --argjson r "$(toil_revision observed)" '{canonical_key: $k, revision: $r}' | bin/polaroid create-toil-item 2>/dev/null)"; then fail "a second item with the same key was created"; fi
+jq -e '.error.code == "canonical_key_exists"' <<<"$refused87" >/dev/null || fail "unexpected refusal of a duplicate key: $refused87"
+echo "1. $toil_key created as observed, local to $dev_repo, citing ${classify87:0:8} and polaroid.change.records v$records_version; its key cannot be reused"
+revise87() { jq -n --argjson b "$1" --argjson r "$2" '{base_revision: $b, revision: $r}' | bin/polaroid revise-toil-item "$toil87" 2>/dev/null; }
+if refused87="$(revise87 1 "$(toil_revision candidate)")"; then fail "a candidate without a proposal was accepted"; fi
+jq -e '.error.fields[0].field == "revision.proposal"' <<<"$refused87" >/dev/null || fail "unexpected refusal of a candidate without a proposal: $refused87"
+implemented87="$(jq -c '. + {"replacement": {"summary": "a classifier", "references": [{"uri": "https://example.com/classifier"}]}}' <<<"$proposal87")"
+if refused87="$(revise87 1 "$(toil_revision implemented "$implemented87")")"; then fail "observed was followed by implemented"; fi
+jq -e '.error.fields[0].field == "revision.status"' <<<"$refused87" >/dev/null || fail "unexpected refusal of observed -> implemented: $refused87"
+echo "2. refused: a candidate without a proposal, and observed -> implemented"
+revise87 1 "$(toil_revision candidate "$proposal87")" >/dev/null || fail "the candidate revision was refused"
+if refused87="$(revise87 1 "$(toil_revision candidate "$proposal87")")"; then fail "a stale base was accepted"; fi
+jq -e '.error.code == "revision_conflict"' <<<"$refused87" >/dev/null || fail "unexpected refusal of a stale base: $refused87"
+toil_history="$(bin/polaroid get-toil-item "$toil87")"
+jq -e '.latest_revision == 2 and .status == "candidate" and ([.revisions[] | [.revision, .status]] == [[1, "observed"], [2, "candidate"]])' <<<"$toil_history" >/dev/null ||
+	fail "the history is not observed then candidate: $toil_history"
+[[ "$(bin/polaroid get-toil-revision "$toil87" 1)" == "$toil_rev1" ]] || fail "revision 1 changed"
+echo "3. revision 2 (candidate, with a proposal) was appended on base 1; a second revision on base 1 is a revision_conflict; revision 1 is unchanged"
+toil_keys() { bin/polaroid toil-items "$@" | jq -c '[.toil_items[].canonical_key]'; }
+[[ "$(toil_keys status=candidate)" == "[\"$toil_key\"]" && "$(toil_keys status=observed)" == "[]" ]] || fail "the status filter does not use the latest revision"
+[[ "$(toil_keys "repository=$dev_repo")" == "[\"$toil_key\"]" && "$(toil_keys "repository=$fixture_repo")" == "[]" ]] || fail "the local item is not limited to $dev_repo"
+[[ "$(toil_keys "procedure_id=$records_id")" == "[\"$toil_key\"]" && "$(toil_keys "procedure_id=$classify_id")" == "[]" ]] || fail "the procedure filter does not use the sources"
+[[ "$(mcp_tool get_toil_item "{\"canonical_key\":\"$toil_key\"}")" == "$toil_history" ]] || fail "get_toil_item does not return the HTTP document"
+[[ "$(dev_snapshot)" == "$dev_before" ]] || fail "a toil item changed a procedure, execution, verification or binding"
+echo "4. filters use the latest revision: candidate, local to $dev_repo (not $fixture_repo), citing polaroid.change.records (not the run's dev.change.classify); MCP returns the same document; no other record changed"
+
+step "26. Restart polaroidd and confirm every record persisted"
 stop_daemon
 start_daemon
 [[ "$(bin/polaroid get-by-key "$key")" == "$history" ]] || fail "history differs after restart"
@@ -765,10 +818,11 @@ start_daemon
 [[ "$(bin/polaroid get-binding "$binding_b_id")" == "$binding_b_history" ]] || fail "$repo_b binding differs after restart"
 [[ "$(bin/polaroid get-execution "$execution_id")" == "$execution" ]] || fail "execution differs after restart"
 [[ "$(dev_snapshot)" == "$dev_before" ]] || fail "the development procedures, executions or verifications differ after restart"
-echo "every history, binding, execution and verification is byte-for-byte identical after restart"
+[[ "$(bin/polaroid get-toil-item "$toil87")" == "$toil_history" ]] || fail "the toil item differs after restart"
+echo "every history, binding, execution, verification and toil item is byte-for-byte identical after restart"
 stop_daemon
 
-step "26. Upgrade a database written at schema version 6 (#35): history reads back, and registration associates it without rewriting it"
+step "27. Upgrade a database written at schema version 6 (#35): history reads back, and registration associates it without rewriting it"
 legacy="$work/schema-6.db"
 for f in internal/storage/sqlite/migrations/000[1-6]_*.sql; do sqlite3 "$legacy" <"$f"; done
 sqlite3 "$legacy" <<'SQL'

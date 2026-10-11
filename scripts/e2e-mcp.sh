@@ -147,12 +147,12 @@ note "The raw request behind \`post server/discover\`:" '```http' \
 
 ########################################################################
 section "Tool catalogue" \
-	"27 tools mirror the HTTP API one-to-one. 18 only read (including \`discover_procedures\` and \`suggest_duplicates\`, which store nothing) and are annotated \`readOnlyHint\`; 9 write (create/revise procedure, record procedure origin, register repository, add repository alias, create/revise binding, record execution, report feedback) and are annotated non-destructive (they only append). Every tool advertises a JSON Schema generated from its argument type: flat arguments named after record fields, optional ones not required." \
+	"32 tools mirror the HTTP API one-to-one. 21 only read (including \`discover_procedures\` and \`suggest_duplicates\`, which store nothing) and are annotated \`readOnlyHint\`; 11 write (create/revise procedure, record procedure origin, register repository, add repository alias, create/revise binding, record execution, report feedback, create/revise toil item) and are annotated non-destructive (they only append). Every tool advertises a JSON Schema generated from its argument type: flat arguments named after record fields, optional ones not required." \
 	"An MCP client lists tools automatically. By hand: \`post tools/list \"\" \"\"\`."
 show 'post tools/list "" "" | jq -c "[.result.tools[] | {name, readOnly: .annotations.readOnlyHint, destructive: .annotations.destructiveHint, required: .inputSchema.required}]" | jq -c ".[]"'
-check "27 tools" equal "$(wc -l <<<"$LAST" | tr -d ' ')" 27
-check "18 read-only tools" equal "$(grep -c '"readOnly":true' <<<"$LAST")" 18
-check "the 9 write tools are marked non-destructive" equal "$(grep -c '"readOnly":false,"destructive":false' <<<"$LAST")" 9
+check "32 tools" equal "$(wc -l <<<"$LAST" | tr -d ' ')" 32
+check "21 read-only tools" equal "$(grep -c '"readOnly":true' <<<"$LAST")" 21
+check "the 11 write tools are marked non-destructive" equal "$(grep -c '"readOnly":false,"destructive":false' <<<"$LAST")" 11
 show 'post tools/list "" "" | jq ".result.tools[] | select(.name == \"get_graph\") | .inputSchema"'
 check "get_graph requires procedure_id and version; repository and environment are optional" out_has '"required": ['
 
@@ -353,6 +353,30 @@ step get_version "{\"procedure_id\":\"$LEAF\",\"version\":1}" '.scope'
 check "a version names its own scope" equal "$LAST" '"unspecified"'
 
 ########################################################################
+section "Toil items: create, list, revise, history" \
+	"A toil item is an agent's evidence-backed assessment of repetitive work that may be automated (ADR-0034): exact procedure versions as sources, supporting executions, an assessment whose repetition and burden are each observed, hypothesis or unknown, an optional proposal, and a status (observed, candidate, implemented, validated, retired) that is the agent's judgment, not verification. Revisions name \`base_revision\`; a stale one is \`revision_conflict\`." \
+	"Call \`list_toil_items\` first, then \`create_toil_item\` and \`revise_toil_item\`."
+TOIL_CONTENT="\"activity\":\"Classify changed files by hand\",\"applicability\":{\"shared\":{}},\"sources\":[{\"procedure_id\":\"$LEAF\",\"version\":1,\"steps\":[\"run\"]}],\"observations\":[{\"execution_id\":\"$P2\",\"note\":\"a parent run without children\"}],\"assessment\":{\"repetition\":{\"status\":\"observed\"},\"burden\":{\"status\":\"hypothesis\"}},\"status_rationale\":\"Seen in recorded runs.\",\"revision_reason\":\"First assessment.\",\"author\":\"manual.agent\""
+TOIL_PROPOSAL='"proposal":{"inputs":"base and rules","outputs":"classified files","remaining_judgment":"the rules","failure_and_recovery":"fall back to hand classification","acceptance_criteria":["reproduces recorded ranges"]}'
+step create_toil_item "{\"canonical_key\":\"demo.toil\",\"status\":\"observed\",$TOIL_CONTENT}" '{id, canonical_key, latest_revision, status, scope, steps: .revisions[0].sources[0].steps}'
+check "created at revision 1, observed and shared, with its declared steps" json_has '.latest_revision == 1 and .status == "observed" and .scope == "shared" and .steps == ["run"]'
+TOIL="$(ids)"
+step create_toil_item "{\"canonical_key\":\"demo.toil\",\"status\":\"observed\",$TOIL_CONTENT}" '.error.code'
+check "an existing key is canonical_key_exists" json_has '. == "canonical_key_exists"'
+step revise_toil_item "{\"toil_item_id\":\"$TOIL\",\"base_revision\":1,\"status\":\"candidate\",$TOIL_CONTENT}" '.error | {code, fields: [.fields[].field]}'
+check "candidate without a proposal is refused, naming the flat field" json_has '.code == "invalid_request" and .fields == ["proposal"]'
+step revise_toil_item "{\"toil_item_id\":\"$TOIL\",\"base_revision\":1,\"status\":\"candidate\",$TOIL_PROPOSAL,$TOIL_CONTENT}" '{revision, status}'
+check "revise_toil_item appended revision 2, candidate" json_has '.revision == 2 and .status == "candidate"'
+step revise_toil_item "{\"toil_item_id\":\"$TOIL\",\"base_revision\":1,\"status\":\"candidate\",$TOIL_PROPOSAL,$TOIL_CONTENT}" '.error | {code, latest_revision}'
+check "a stale base_revision is revision_conflict with latest_revision 2" json_has '.code == "revision_conflict" and .latest_revision == 2'
+step revise_toil_item "{\"toil_item_id\":\"$TOIL\",\"base_revision\":2,\"status\":\"validated\",$TOIL_PROPOSAL,\"replacement\":{\"summary\":\"s\",\"references\":[{\"uri\":\"u\"}]},\"validation\":{\"rationale\":\"r\",\"references\":[{\"uri\":\"u\"}]},$TOIL_CONTENT}" '.error | {code, fields: [.fields[].field]}'
+check "candidate cannot jump to validated" json_has '.code == "invalid_request" and .fields == ["status"]'
+step list_toil_items "{\"procedure_id\":\"$LEAF\",\"status\":\"candidate\",\"repository\":\"mirror.example/service\"}" '[.toil_items[] | {canonical_key, latest_revision, status}]'
+check "list_toil_items filters by procedure, status and repository (an alias); summaries only" json_has '. == [{"canonical_key":"demo.toil","latest_revision":2,"status":"candidate"}]'
+step get_toil_revision "{\"toil_item_id\":\"$TOIL\",\"revision\":1}" '{revision, status, proposal: has("proposal")}'
+check "revision 1 is unchanged" json_has '. == {"revision":1,"status":"observed","proposal":false}'
+
+########################################################################
 section "Same documents as the HTTP API" \
 	"MCP and HTTP share one set of record shapes (\`internal/transport/wire\`). A tool's text result is byte-identical to the HTTP response body." \
 	"Compare a tool result with the matching \`curl\`."
@@ -365,6 +389,9 @@ for pair in "get_procedure|{\"id\":\"$LEAF\"}|/v1/procedures/$LEAF" \
 	"get_verification|{\"execution_id\":\"$P1\"}|/v1/executions/$P1/verification" \
 	"list_verifications|{\"procedure_id\":\"$PARENT\",\"version\":1}|/v1/procedures/$PARENT/versions/1/verifications" \
 	"get_feedback|{\"id\":\"$FB\"}|/v1/feedback/$FB" \
+	"get_toil_item|{\"canonical_key\":\"demo.toil\"}|/v1/toil-items/$TOIL" \
+	"get_toil_revision|{\"toil_item_id\":\"$TOIL\",\"revision\":2}|/v1/toil-items/$TOIL/revisions/2" \
+	"list_toil_items|{\"repository\":\"github.com/example/service\",\"limit\":1,\"snapshot\":true}|/v1/toil-items?repository=github.com/example/service&limit=1&snapshot=true" \
 	"list_feedback|{\"kind\":\"problem\"}|/v1/feedback?kind=problem" \
 	"get_repository|{\"identifier\":\"mirror.example/service\"}|/v1/repositories/by-identifier/mirror.example/service" \
     "list_procedures|{\"repository\":\"github.com/example/service\",\"limit\":2}|/v1/procedures?repository=github.com/example/service&limit=2" \
@@ -451,10 +478,10 @@ await client.close().catch(() => {});
 EOF
 show '(cd "$TSDIR" && node probe.mjs "$URL/mcp")'
 check "TypeScript SDK 1.32.1 connects at 2025-11-25, without a session" out_has "negotiated: 2025-11-25 session: none"
-check "...lists all 27 tools" out_has "connected; tools: 27"
+check "...lists all 32 tools" out_has "connected; tools: 32"
 check "...and records feedback" out_has "report_feedback: ts.sdk"
 show '(cd "$TSDIR" && npx --no-install mcp-inspector --cli "$URL/mcp" --transport http --method tools/list 2>/dev/null | jq -c "[.tools[].name] | length")'
-check "MCP Inspector 2.10.1 lists the 27 tools" equal "$LAST" 27
+check "MCP Inspector 2.10.1 lists the 32 tools" equal "$LAST" 32
 fi
 VSCODE_GITHUB="/Applications/Visual Studio Code.app/Contents/Resources/app/node_modules.asar.unpacked/@github"
 if [[ "${E2E_INTEROP:-1}" == 0 ]]; then

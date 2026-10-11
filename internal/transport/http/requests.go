@@ -29,6 +29,16 @@ type reviseBindingBody struct {
 	Revision     wire.BindingConfig `json:"revision"`
 }
 
+type createToilItemBody struct {
+	CanonicalKey string           `json:"canonical_key"`
+	Revision     wire.ToilContent `json:"revision"`
+}
+
+type reviseToilItemBody struct {
+	BaseRevision int              `json:"base_revision"`
+	Revision     wire.ToilContent `json:"revision"`
+}
+
 type healthBody struct {
 	Status string `json:"status"`
 }
