@@ -1,13 +1,25 @@
-# Polaroid verification build
+# Polaroid
 
-This archive is a **prerelease verification build** of [Polaroid](https://github.com/ashuangiras/polaroid), a versioned procedural memory service for agents. It is meant for an independent reviewer to test the exact reviewed source. It is **not a stable production release**: there are no compatibility promises between prereleases, and the binaries are not signed or notarized.
+This archive holds a release of [Polaroid](https://github.com/ashuangiras/polaroid), a versioned procedural memory service for agents. `./polaroid version` prints which release it is.
+
+- **Stable releases (`vX.Y.Z`)** are supported for the scope below and follow the [compatibility policy](https://github.com/ashuangiras/polaroid/blob/main/docs/architecture/decisions/0038-stable-releases-and-compatibility.md): within major version 1, later releases only add.
+- **Prereleases (`vX.Y.Z-label`)** let a reviewer test the exact build of one commit, and make no compatibility promise.
+
+Binaries are not signed or notarized.
+
+**Supported scope.**
+
+- One user on one machine runs the service on loopback (`127.0.0.1`). Agents and people on that machine use it through MCP, the `polaroid` command-line client and the JSON HTTP API.
+- Several local agents may use it at the same time.
+- There is no authentication, authorization or TLS. Do not expose it on a network or share it between users.
+- Details and known limitations: [release readiness](https://github.com/ashuangiras/polaroid/blob/main/docs/development/release-readiness.md).
 
 It contains:
 
 | File | What it is |
 | --- | --- |
 | `polaroidd` | The daemon: JSON HTTP API and MCP server on one loopback listener, SQLite storage |
-| `polaroid` | The command-line client, and the local `install`/`status`/… commands for a per-user service |
+| `polaroid` | The command-line client, and the local `install`/`status`/`backup`/… commands |
 | `smoke-test.sh` | A repeatable smoke test that installs nothing (below) |
 | `README.md` | This guide |
 
@@ -64,11 +76,31 @@ To run the daemon by hand instead, always name a database:
 
 Without `-db` (or `POLAROID_DB`), `polaroidd` serves the per-user catalog `~/.polaroid/data/polaroid.db`.
 
-## 4. Managed-service test (separate, optional)
+## 4. Install as a per-user service
 
-`polaroid install` runs Polaroid as a per-user service: a launchd LaunchAgent on macOS (needs a GUI login session), or a systemd user service on Linux (needs a reachable user manager: `systemctl --user show-environment` must succeed). Where neither is available, `install` says so and exits non-zero. Managed testing is then unavailable on that host; the smoke test above still applies.
+`polaroid install` runs Polaroid as a per-user service that starts at login and restarts after a crash, without root:
 
-This test registers a real service with your user's service manager. To keep it isolated from any real installation, use a temporary `HOME`, a separate service name and a separate port:
+- on macOS, a launchd LaunchAgent, which needs a GUI login session;
+- on Linux, a systemd user service, which needs a reachable user manager (`systemctl --user show-environment` must succeed).
+
+Where neither is available, `install` says so and exits non-zero; run `polaroidd` directly there.
+
+```sh
+./polaroid install -from .                  # copies both binaries to ~/.local/bin, registers and starts the service
+export PATH="$HOME/.local/bin:$PATH"        # add this line to your shell's startup file yourself
+polaroid status                             # JSON; exit 0 when running and healthy
+```
+
+- The service runs `~/.local/bin/polaroidd -addr 127.0.0.1:7417 -db ~/.polaroid/data/polaroid.db`.
+- `install` reports `running` only when the managed process owns the endpoint and is healthy. Another process on the port is reported as a conflict and never claimed.
+- `polaroid stop`, `start`, `restart` and `status` operate it. `polaroid uninstall` unregisters it and removes the binaries, and keeps `~/.polaroid` (the catalog and its backups).
+- Diagnostics:
+  - macOS: `~/Library/Logs/Polaroid/polaroidd.log`;
+  - Linux: `journalctl --user -u polaroid.service`.
+
+The [service documentation](https://github.com/ashuangiras/polaroid#run-polaroid-as-a-service) has the details.
+
+**An isolated trial** registers a real service, but with a temporary `HOME`, a separate service name and a separate port, so it never touches a real installation:
 
 ```sh
 H=$(mktemp -d)
@@ -82,20 +114,51 @@ HOME=$H "$H/.local/bin/polaroid" uninstall          # unregisters; keeps $H/.pol
 rm -rf "$H"
 ```
 
-`install` copies both binaries into `$HOME/.local/bin`, registers the service, starts it and waits until the managed process owns the endpoint and is healthy. `status` reports `running` only in that case. Another process on the port is reported as a conflict and never claimed.
+## 5. Use it
 
-For a real installation, run `./polaroid install -from .` with your normal `HOME`. It serves `~/.polaroid/data/polaroid.db`. Read the [service documentation](https://github.com/ashuangiras/polaroid#run-polaroid-as-a-service) first, and back up any existing catalog before upgrading, with the `polaroid` of this archive or the installed one:
+**From an agent (MCP).** Point any MCP client that supports streamable HTTP, with protocol 2026-07-28 or 2025-11-25, at `http://127.0.0.1:7417/mcp`. In VS Code, add this to a workspace's `.vscode/mcp.json`:
 
-```sh
-./polaroid backup                    # the managed catalog, consistent while the service runs, into ~/.polaroid/backups/
-./polaroid inspect-backup ~/.polaroid/backups/polaroid-<UTC time>
+```json
+{"servers": {"polaroid": {"type": "http", "url": "http://127.0.0.1:7417/mcp"}}}
 ```
 
-- **Going back to a previous build:** `polaroid install -from ~/.local/state/polaroid/previous`. This is binary recovery: it keeps the current catalog, and an older `polaroidd` refuses a catalog whose schema a newer build upgraded.
-- **Restoring a backup** is a separate operation that loses the records written after it. Polaroid never does it automatically. Plan it with `polaroid restore -plan BACKUP`, then run `polaroid restore -replace BACKUP`: it keeps a recovery backup of the current catalog, stops and restarts the managed service, and puts the original back if the restored catalog does not start and the failed daemon is confirmed stopped. Otherwise it changes nothing more and reports `rollback-blocked` with the recovery steps ([details](https://github.com/ashuangiras/polaroid#back-up-and-restore-the-catalog)). Rehearse it first on a copy with `-db /tmp/copy.db`.
+The server's instructions describe the agent loop: discover a procedure, resolve it, follow it, record the run, improve the procedure. The client lists 38 tools; each tool's description and argument schema state the formats it accepts. A client that was connected before an upgrade keeps its old tool list: restart its connection to the server (in VS Code, **MCP: List Servers**, then the server, then **Restart Server**), and start a new agent session.
+
+**From the command line.**
+
+```sh
+polaroid health
+polaroid statistics                                          # record counts, payload sizes, storage, write limits
+polaroid discover 'publish a prerelease' repository=github.com/owner/repo
+polaroid help                                                # every command
+```
+
+The CLI prints each response as JSON, and exits 0 on success, 1 when a request fails and 2 for a usage error. The API is documented in [http-api.md](https://github.com/ashuangiras/polaroid/blob/main/docs/architecture/http-api.md), and the MCP tools in [mcp.md](https://github.com/ashuangiras/polaroid/blob/main/docs/architecture/mcp.md).
+
+## 6. Back up, upgrade and roll back
+
+```sh
+polaroid backup                                              # consistent while the service runs; into ~/.polaroid/backups/
+polaroid inspect-backup ~/.polaroid/backups/polaroid-<UTC time>
+```
+
+- **Upgrade.** Back up first. Then verify and extract the new archive and run `./polaroid install -from .` in its directory. The catalog stays where it is. A build that adds a schema migration applies it at start-up; the release notes say whether a release migrates.
+- **Going back to the previous build:** `polaroid install -from ~/.local/state/polaroid/previous`. This is binary recovery: it keeps the current catalog. It works when the schema did not change. An older `polaroidd` refuses a catalog that a newer build migrated.
+- **Restoring a backup** is a separate operation that loses the records written after it. Polaroid never does it automatically.
+  1. Plan it with `polaroid restore -plan BACKUP`.
+  2. Run `polaroid restore -replace BACKUP`. It keeps a recovery backup of the current catalog and stops and restarts the managed service. It puts the original back if the restored catalog does not start and the failed daemon is confirmed stopped. Otherwise it changes nothing more and reports `rollback-blocked`, with the recovery steps ([details](https://github.com/ashuangiras/polaroid#back-up-and-restore-the-catalog)).
+
+  Rehearse it first on a copy with `-db /tmp/copy.db`.
+- **Growth.** History is kept forever, and nothing prunes it:
+  - Keep evidence short and link to logs.
+  - Watch the catalog with `polaroid statistics`.
+  - Backups are full copies that you keep or delete yourself.
+
+  See the [storage policy](https://github.com/ashuangiras/polaroid/blob/main/docs/development/release-readiness.md#storage-growth).
 
 ## Limitations
 
-- This is a prerelease for verification: not a stable release, unsigned and not notarized.
+- Unsigned and not notarized.
 - The managed service supports macOS (launchd) and Linux (systemd user services) only. Other platforms run `polaroidd` directly.
-- The HTTP API and MCP server have no authentication. They are meant for loopback use (the managed service refuses other addresses).
+- The HTTP API and MCP server have no authentication. They are meant for one user on loopback (the managed service refuses other addresses).
+- Nothing prunes history; retiring a procedure or invalidating an execution changes its standing, not the database's size.

@@ -4,7 +4,8 @@
 #   polaroid_<version>_<os>_<arch>.tar.gz   both binaries, README.md, smoke-test.sh
 #   SHA256SUMS                              the SHA-256 of every archive
 #   build-manifest.json                     commit, version, Go, targets, assets
-# VERSION must be the tag at HEAD (vMAJOR.MINOR.PATCH-PRERELEASE): Go embeds it
+# VERSION must be the tag at HEAD: vMAJOR.MINOR.PATCH for a stable release, or
+# vMAJOR.MINOR.PATCH-PRERELEASE (ADR-0038). Go embeds it
 # as the main module's version, and the full commit as vcs.revision. The
 # release workflow (.github/workflows/release.yml) runs this; it needs Go, git,
 # jq, tar and sha256sum or shasum.
@@ -19,7 +20,9 @@ die() {
 [[ $# == 2 ]] || die "usage: scripts/package.sh VERSION OUTDIR"
 VERSION=$1 OUT=$2
 TARGETS="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64"
-[[ $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]] || die "$VERSION is not a prerelease version (vX.Y.Z-label); stable releases are not published"
+[[ $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || die "$VERSION is not a release version (vX.Y.Z or vX.Y.Z-label)"
+PRERELEASE=false
+[[ $VERSION != *-* ]] || PRERELEASE=true
 [[ -z $(git status --porcelain) ]] || die "the checkout has changes; package a clean checkout"
 COMMIT=$(git rev-parse HEAD)
 [[ $(git rev-parse -q --verify "refs/tags/$VERSION^{commit}" || true) == "$COMMIT" ]] || die "tag $VERSION does not point at HEAD ($COMMIT)"
@@ -73,10 +76,10 @@ for target in $TARGETS; do
 done
 
 (cd "$ASSETS" && sha256 ./*.tar.gz | sed 's| \./| |' >SHA256SUMS)
-jq -n --arg version "$VERSION" --arg commit "$COMMIT" --arg time "$(git log -1 --format=%cI)" --arg go "$GOVERSION" \
+jq -n --arg version "$VERSION" --argjson prerelease "$PRERELEASE" --arg commit "$COMMIT" --arg time "$(git log -1 --format=%cI)" --arg go "$GOVERSION" \
 	--arg run "${GITHUB_SERVER_URL:+$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID}" \
 	--argjson assets "$assets" \
-	'{format: 1, name: "polaroid", version: $version, prerelease: true,
+	'{format: 1, name: "polaroid", version: $version, prerelease: $prerelease,
 	  source: {repository: "https://github.com/ashuangiras/polaroid", commit: $commit, commit_time: $time},
 	  build: {go: $go, cgo: false, flags: ["-trimpath"], ci_run: (if $run == "" then null else $run end)},
 	  checksums: "SHA256SUMS", assets: $assets}' >"$ASSETS/build-manifest.json"
