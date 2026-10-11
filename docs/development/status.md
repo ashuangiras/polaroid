@@ -2,6 +2,16 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
+**Catalog lifecycle, first increment: execution-evidence invalidation and procedure retirement ([#91](https://github.com/ashuangiras/polaroid/issues/91), [ADR-0035](../architecture/decisions/0035-evidence-invalidation-and-procedure-retirement.md)), as of 2026-10-11:** implemented, **not released**. The shared instance still runs `v0.5.0-verify.1` at schema 9 and has neither operation; nothing live was invalidated or retired.
+
+- **Invalidation:** `POST /v1/executions/{id}/invalidation` (`reason`, `actor`; MCP `invalidate_execution`, CLI `invalidate-execution`) withdraws one execution as evidence, irreversibly (`409 execution_invalidated` on a second request). The execution reads back unchanged and adds `evidence_status` and `invalidation`. It is never verified (`invalidated`); a parent linking it reports `child_invalidated`, ancestors follow, and no child is substituted. Combination statuses, target verification and contextual selection use only valid executions, so selection falls back to the previous valid run, another version, or none.
+- **Retirement:** `POST /v1/procedures/{id}/retirement` and `/reactivation` (`base_event`, `reason`, `actor`; `409 lifecycle_conflict` / `lifecycle_unchanged`), history at `GET /v1/procedures/{id}/lifecycle/events` (MCP `retire_procedure`, `reactivate_procedure`, `get_procedure_lifecycle`). Retired procedures leave the default list and discovery (`lifecycle=retired|all` shows them), keep every read, binding, reference and execution, mark graph nodes with `retirement`, and refuse new versions, references, bindings and binding revisions (`409 procedure_retired`). Duplicate checks include them with `lifecycle_status`.
+- **Storage:** migration 10 (`execution_invalidations`, `procedure_lifecycle_events`), with immutability, contiguity, alternation and refusal triggers. 37 MCP tools (23 read).
+- **The promotion record, in isolation:** on restored copies of a live backup, execution `01a12ac5-7fc7` was the only `procedure.capability.extract` v2 evidence: it verified v2's combination, was v2's selection evidence and target-verified its own inputs at `833627e`; no live reference or binding selects extract, so a contextual use was shown with an isolated binding (v2 by `01a12ac5-7fc7`). After invalidating it there: v2 has no valid evidence, the binding selects v1 by `01a128de-010e` (still valid and verified), the target is unverified, and the record is unchanged apart from the added fields.
+- **Live correction, after a release that includes #91** (through `polaroid.release.publish` and `polaroid.service.manage`, when the owner asks): back up, upgrade, then `polaroid invalidate-execution 01a12ac5-7fc7-7d9d-bb68-beb68c2a0f95` with the reason recorded in the [evidence](#verification-evidence) and actor `copilot.vscode`; check that extract resolves to v1 by `01a128de-010e` in `github.com/ashuangiras/polaroid` / `darwin-arm64.local`. Separating promotion into its own procedure (feedback `01a12ac5-d046`) is a later task.
+
+Next action: the owner reviews and merges PR for #91; a release and the live correction follow only when asked.
+
 **Toil items ([#87](https://github.com/ashuangiras/polaroid/issues/87), [ADR-0034](../architecture/decisions/0034-toil-items.md)), released and adopted ([#89](https://github.com/ashuangiras/polaroid/issues/89)), as of 2026-10-11:** published as [`v0.5.0-verify.1`](https://github.com/ashuangiras/polaroid/releases/tag/v0.5.0-verify.1). That is a tag on `833627e`, the merge of PR #88. Its tree equals `1af2ee4`, which is `status.md` only, verified at docs scope; the code was verified at `dd44bfc`.
 
 - **Shared instance:**
@@ -367,7 +377,10 @@ Repetition was not a cause: terms are sets, so a word repeated in a procedure or
 
 ## Next work item
 
-No item is scoped beyond #89 (the release and adoption of #87). Second-repository adoption trials are paused. Hosted CI follows the `hosted-ci` binding (local-only; owner decision, 2026-10-10); the local gates and the release workflow's archive tests are the evidence. Candidates, for the owner to choose and file:
+No item is scoped beyond #91 (the first catalog-lifecycle increment, not released). Second-repository adoption trials are paused. Hosted CI follows the `hosted-ci` binding (local-only; owner decision, 2026-10-10); the local gates and the release workflow's archive tests are the evidence. Candidates, for the owner to choose and file:
+
+- Release #91 and correct the live promotion record (steps above), then a procedure for promoting earlier assessments, separate from `procedure.capability.extract` (feedback `01a12ac5-d046`).
+- Later catalog lifecycle work, not scoped: physical purge, retention, usage statistics, payload limits, namespaces, promotion between catalogs, and separate databases.
 
 - Discovery after #81: the remaining misses are vocabulary gaps (synonyms; a procedure whose purpose does not state the task's words) and rare words in long contracts. Options: report which procedures reference a candidate, let procedures declare search terms or aliases in their records, and semantic matching (a new ADR and probably a dependency). Short task descriptions rank poorly (above).
 - Remaining workflow bottlenecks after #65: `internal/lifecycle` runs fresh in both test and race (about 90 s each), and these two runs bound a full `make check`. `make demo` and `make e2e` partly overlap. The lifecycle tests were not profiled.
