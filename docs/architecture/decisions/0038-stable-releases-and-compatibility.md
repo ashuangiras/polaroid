@@ -60,3 +60,4 @@ ADR-0028 published only prereleases (`vX.Y.Z-label`) "until a compatibility poli
 - ADR-0028's "only prereleases are published" is superseded. Its packaging, testing and never-overwrite rules still hold.
 - Write-limit tightening (ADR-0037 at `v0.7`) is no longer possible within `v1`.
 - The `/v1` HTTP prefix and major version 1 coincide by choice. They are separate promises: a `v2` release could keep `/v1`.
+- Go embeds a tag as the build's version only when the tag fits the module path. A `v2.0.0` tag needs the module path to end in `/v2`. Without that, the binaries report a pseudo-version and `scripts/package.sh` refuses them. Changing the module path is therefore part of any `v2`.
