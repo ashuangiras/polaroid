@@ -45,7 +45,7 @@ A version is one immutable definition of a procedure.
 | `revision_reason` | string | client | Required and not blank. For version 1, why the procedure was created. Later, what changed and why. |
 | `created_at` | RFC 3339 timestamp, UTC | server | |
 
-Polaroid checks the shape of `contract` and `instructions`, never their meaning. Each must be a JSON object with valid UTF-8 and unique member names at every level. Polaroid removes insignificant whitespace before storing it. Member order, values, number formatting and string escapes are kept exactly as submitted. String fields are stored exactly as submitted, without trimming.
+Polaroid checks the shape of `contract` and `instructions`, never their meaning. Each must be a JSON object with valid UTF-8 and unique member names at every level. Polaroid removes insignificant whitespace before storing it. Member order, values, number formatting and string escapes are kept exactly as submitted; a response writes an escaped character that needs no escape as the character itself (`"\u00e9"` is returned as `"é"`). String fields are stored exactly as submitted, without trimming. Each has a [size limit](#write-limits-implemented).
 
 Member order is kept as Polaroid receives it, but JSON gives it no meaning (RFC 8259), and some clients reorder members before sending; VS Code Copilot chat does so over MCP. Keep order-sensitive data, such as steps, in arrays, never as ordered object members. This applies to every free-form object on this page.
 
@@ -357,6 +357,14 @@ A procedure identity is `active` or `retired` ([ADR-0035](decisions/0035-evidenc
 - **No cascade.** Retiring a procedure changes no parent, reference, binding or execution, and does not retire the procedures that reference it.
 
 **Storage.** Migration 10 adds `execution_invalidations` (one row per execution at most) and `procedure_lifecycle_events`. The database rejects `UPDATE` and `DELETE` of both, a gap in event numbers, an event that does not change the status (so the first must be a retirement), and inserting a version, a reference, a binding or a binding revision that a retired procedure forbids. `CHECK` constraints repeat the reason and actor rules.
+
+### Write limits (implemented)
+
+Every client-written text and JSON field of every record above has a byte limit, and each write as a whole is bounded too ([ADR-0037](decisions/0037-size-limits-on-new-writes.md); the table is in the [HTTP API](http-api.md#write-limits)). Documents (contract, instructions, evidence, toil assessment and proposal) may be 64 KiB, smaller objects (inputs, attributes, contexts, decision evidence) 16 KiB, prose (philosophy, method, reasons, rationales, notes, details, conditions) 8 KiB, single lines (goal, summary, name, activity, step identifiers, URIs) 2 KiB, a whole write 256 KiB. Identifiers keep their own, stricter formats.
+
+- JSON is measured as stored: after whitespace is removed, with member order and escapes as submitted. Text is measured in UTF-8 bytes, as stored. A response writes an escaped character as itself, so it can be shorter than what was measured.
+- The limits apply to new writes only, in the domain, before anything is stored. Records stored earlier are never re-checked, rewritten or refused on read, backup or restore. A new version or revision that repeats an oversized stored value is a new write and is refused.
+- Nothing is truncated or summarized, and no document is interpreted to measure it.
 
 ## Instruction steps (recommended convention)
 

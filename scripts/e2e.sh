@@ -855,6 +855,23 @@ show 'diff <(jq -c "del(.generated_at, .storage.files)" <<<"$STATS") <(bin/polar
 check "reading statistics changed nothing they count" out_has unchanged
 
 ########################################################################
+section "Size limits on new writes" \
+	"Every persisted text and JSON field has a byte limit, and so has the whole write (ADR-0037): 64 KiB for documents such as evidence, contracts and instructions, 16 KiB for inputs, contexts and decision evidence, 8 KiB for prose, 2 KiB for single lines, 256 KiB per write. JSON is measured after compaction, text as UTF-8 bytes. A value over its limit is refused with \`413 value_too_large\`, naming the field and both sizes, never the content; nothing is stored. The statistics report the policy validation enforces." \
+	"\`bin/polaroid statistics | jq .write_limits\`; any write, e.g. \`bin/polaroid record FILE\`."
+show 'bin/polaroid statistics | jq -c ".write_limits | {policy_version, write_max_bytes, request_max_bytes, fields: (.fields | length), evidence: [.fields[] | select(.record == \"execution\" and .field == \"evidence\") | .max_bytes][0]}"'
+check "policy 1: 37 bounded fields, 256 KiB per write, 1 MiB per request, evidence 64 KiB" json_has '. == {policy_version: 1, write_max_bytes: 262144, request_max_bytes: 1048576, fields: 37, evidence: 65536}'
+run98() { jq -cn --arg p "$CHILD91" --arg c "$C91" --argjson n "$1" '{procedure_id: $p, version: 1, repository: "github.com/example/service-a", commit: $c,
+	environment: {name: "e2e", attributes: {}}, inputs: {}, outcome: "succeeded", evidence: {log: ("x" * ($n - 10))}}'; }
+RUNS98="$(bin/polaroid executions | jq '.executions | length')"
+show 'run98 65536 | bin/polaroid record | jq -c "{evidence_bytes: (.evidence | tojson | length)}"'
+check "evidence of exactly 65,536 bytes is recorded" json_has '. == {evidence_bytes: 65536}'
+show 'run98 65537 | bin/polaroid record 2>/dev/null | jq -c ".error | {code, limits}"; echo "exit ${PIPESTATUS[1]}"'
+check "one byte more is 413 value_too_large naming evidence and both sizes; the CLI exits 1" equal "$LAST" $'{"code":"value_too_large","limits":[{"field":"evidence","bytes":65537,"max_bytes":65536}]}\nexit 1'
+show 'run98 65537 | api POST /v1/executions @- | head -n1; run98 65537 | bin/polaroid record 2>/dev/null | grep -c xxxxxxxx'
+check "the HTTP status is 413 and the response never echoes the value" equal "$LAST" $'HTTP/1.1 413 Request Entity Too Large\n0'
+check "the refused writes stored nothing" equal "$(bin/polaroid executions | jq '.executions | length')" "$((RUNS98 + 1))"
+
+########################################################################
 section "The database enforces immutability itself" \
 	"Even a client that bypasses polaroidd cannot rewrite history: schema triggers reject UPDATE/DELETE of procedures, versions, bindings, binding revisions, references, executions and execution links and decisions, feedback reports, repositories, repository identifiers and procedure origins, gaps in numbering, and pins to missing versions. toil items, revisions and their links, execution invalidations and procedure lifecycle events, \`PRAGMA user_version\` records the schema version (10 migrations)." \
 	"Open the database with \`sqlite3 polaroid.db\` and try the statements below."
