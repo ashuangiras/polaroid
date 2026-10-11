@@ -241,6 +241,56 @@ func TestReportFeedbackDescribesTheReporterFormat(t *testing.T) {
 
 const commit = "0123456789abcdef0123456789abcdef01234567"
 
+// TestWriteToolsDescribeTheirFormats: the formats validation enforces are in
+// the advertised schemas (#106), and their examples are accepted.
+func TestWriteToolsDescribeTheirFormats(t *testing.T) {
+	h := newHarness(t)
+	schemas := map[string]string{}
+	for tool, err := range h.session.Tools(context.Background(), nil) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		schemas[tool.Name] = tool.Description + string(b)
+	}
+	for tool, wants := range map[string][]string{
+		"record_execution": {"40 or 64 lowercase hex characters", "succeeded or failed", "darwin-arm64.local", "a non-empty JSON object",
+			"github.com/owner/repo", "give it with binding_revision, or neither", "rationale is required either way", "at most 65,536 bytes"},
+		"create_procedure": {"joined by single '.', '-' or '_', at most 128 characters", "go.dependency.add", `{\"input\": \"\u003cparent input name\u003e\"}`,
+			"give pin or contextual, not both", "unique within the version", "one line"},
+		"revise_procedure":        {`{\"value\": \u003cany JSON\u003e}`, "give pin or contextual, not both"},
+		"create_binding":          {"in canonical-key form, for example verify-change", "github.com/owner/repo", "give pin or contextual, not both"},
+		"register_repository":     {"no '.' or '..' segment", "a display name, one line"},
+		"add_repository_alias":    {"in the same form as a canonical identifier"},
+		"record_procedure_origin": {"the ID of a registered repository"},
+		"invalidate_execution":    {"joined by single '.', '-' or '_', for example copilot.vscode"},
+		"retire_procedure":        {"joined by single '.', '-' or '_', for example copilot.vscode"},
+		"create_toil_item":        {"at least one exact procedure version", "joined by single '.', '-' or '_', for example copilot.vscode"},
+	} {
+		for _, want := range wants {
+			if !strings.Contains(schemas[tool], want) {
+				t.Errorf("%s does not state %q", tool, want)
+			}
+		}
+	}
+
+	h.ok(t, "register_repository", `{"identifier":"github.com/owner/repo","name":"Example"}`)
+	child := field(t, h.ok(t, "create_procedure", `{"canonical_key":"go.dependency.add","philosophy":"p","method":"m","goal":"Add a dependency.",`+
+		`"contract":{},"instructions":{},"revision_reason":"r"}`), "id")
+	parent := field(t, h.ok(t, "create_procedure", `{"canonical_key":"demo.parent","philosophy":"p","method":"m","contract":{},"instructions":{},"revision_reason":"r",`+
+		`"references":[{"name":"build","procedure_id":"`+child+`","version_policy":{"pin":1},"inputs":{"module":{"input":"module"},"strict":{"value":true}}}]}`), "id")
+	h.ok(t, "create_binding", `{"repository":"github.com/owner/repo","name":"verify-change","procedure_id":"`+parent+`","inputs":{},`+
+		`"version_policy":{"contextual":{}},"revision_reason":"r"}`)
+	childRun := field(t, h.ok(t, "record_execution", `{"procedure_id":"`+child+`","version":1,"repository":"github.com/owner/repo","commit":"`+commit+`",`+
+		`"environment":{"name":"darwin-arm64.local","attributes":{}},"inputs":{"module":"m","strict":true},"outcome":"succeeded","evidence":{"tests":"passed"}}`), "id")
+	h.ok(t, "record_execution", `{"procedure_id":"`+parent+`","version":1,"repository":"github.com/owner/repo","commit":"`+commit+`",`+
+		`"environment":{"name":"ci.ubuntu-latest","attributes":{}},"inputs":{"module":"m"},"outcome":"failed","evidence":{"log":"https://example.com/log"},`+
+		`"children":[{"reference":"build","execution_id":"`+childRun+`"}]}`)
+}
+
 func run(procedureID string, version int, outcome, children string) string {
 	args := `{"procedure_id":"` + procedureID + `","version":` + strconv.Itoa(version) +
 		`,"repository":"github.com/o/r","commit":"` + commit + `","environment":{"name":"ci.linux","attributes":{}},` +

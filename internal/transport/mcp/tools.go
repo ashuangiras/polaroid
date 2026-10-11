@@ -66,7 +66,7 @@ type (
 		Decisions jsontext.Value `json:"decisions,omitzero" jsonschema:"your applicability decisions for the conditional references, as an object from reference path (names from the root joined by /) to true or false; requires commit and inputs. A node with an undecided conditional reference below it is never target-verified"`
 	}
 	createProcedureArgs struct {
-		CanonicalKey string          `json:"canonical_key"`
+		CanonicalKey string          `json:"canonical_key" jsonschema:"the new procedure's unique key: lowercase letters and digits joined by single '.', '-' or '_', at most 128 characters, for example go.dependency.add"`
 		Origin       *wire.NewOrigin `json:"origin,omitzero" jsonschema:"where and why the procedure is created: repository_id and reason"`
 		wire.Definition
 	}
@@ -93,8 +93,8 @@ type (
 		wire.NewAlias
 	}
 	createBindingArgs struct {
-		Repository  string `json:"repository"`
-		Name        string `json:"name"`
+		Repository  string `json:"repository" jsonschema:"the repository identifier, for example github.com/owner/repo; a local procedure version must be local to this repository"`
+		Name        string `json:"name" jsonschema:"the binding's name in the repository, unique there, in canonical-key form, for example verify-change"`
 		ProcedureID string `json:"procedure_id"`
 		wire.BindingConfig
 	}
@@ -488,7 +488,7 @@ func (t *tools) registerToil(s *sdk.Server) {
 			return wire.NewToilHistory(h), flatten(err, "revision.")
 		})
 	add(s, t, "revise_toil_item", "Append a complete revision of a toil item derived from base_revision, which must be the latest. "+
-		"Statuses follow observed -> candidate -> implemented -> validated; validated or implemented go back to candidate when a replacement fails; any status may be retired, and retired reopens as observed; every status may stay the same. "+content, write,
+		"Statuses follow observed -> candidate -> implemented -> validated; candidate may go back to observed; validated or implemented go back to candidate when a replacement fails; any status may be retired, and retired reopens as observed; every status may stay the same. "+content, write,
 		func(ctx context.Context, in reviseToilItemArgs) (any, error) {
 			r, err := t.svc.ReviseToilItem(ctx, in.ToilItemID, memory.ToilRevise{BaseRevision: in.BaseRevision, Content: in.Domain()})
 			return wire.NewToilRevision(r), flatten(err, "revision.")

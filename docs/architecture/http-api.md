@@ -77,10 +77,12 @@ Content-Type: application/json
 HTTP/1.1 201 Created
 Location: /v1/procedures/01a11de2-5b69-705a-a457-278000c106be
 
-{"id":"01a11de2-5b69-705a-a457-278000c106be","canonical_key":"demo.key","created_at":"2026-10-08T23:38:56.233022Z","latest_version":1,
- "versions":[{"procedure_id":"01a11de2-5b69-705a-a457-278000c106be","version":1,"philosophy":"…","method":"…",
+{"id":"01a11de2-5b69-705a-a457-278000c106be","canonical_key":"demo.key","created_at":"2026-10-08T23:38:56.233022Z","latest_version":1,"scope":"unspecified","lifecycle_status":"active",
+ "versions":[{"procedure_id":"01a11de2-5b69-705a-a457-278000c106be","version":1,"philosophy":"…","method":"…","scope":"unspecified",
    "contract":{"inputs":{}},"instructions":{"steps":["a"]},"revision_reason":"Initial version.","created_at":"2026-10-08T23:38:56.233022Z"}]}
 ```
+
+Later examples on this page abbreviate: `…` stands for elided values, and they may leave out members that the surrounding text lists, such as `scope`, `lifecycle_status` and `evidence_status`. The member lists in the text are complete.
 
 A **history** has the fields `id`, `canonical_key`, `created_at`, `latest_version`, `scope`, `lifecycle_status`, `lifecycle_event`, `goal`, `applicability` and `origin` (the last four only when present) and `versions`. A list item has the same fields without `lifecycle_event` and `versions`. `scope`, `goal` and `applicability` describe version `latest_version` only: `scope` is its applicability, `shared`, `local` or `unspecified` ([ADR-0023](decisions/0023-pagination-guarantees-and-scope-labels.md)). `lifecycle_status` is the identity's state, `active` or `retired`, and `lifecycle_event` its latest [lifecycle event](#procedure-lifecycle), omitted when there is none ([ADR-0035](decisions/0035-evidence-invalidation-and-procedure-retirement.md)). A **version** has the fields `procedure_id`, `version`, `philosophy`, `method`, `scope` (this version's own declaration, always present), `goal` and `applicability` (only when given), `contract`, `instructions`, `references` (only when the version has references), `revision_reason` and `created_at`. `contract` and `instructions` are returned with insignificant whitespace removed. Otherwise they are exactly as submitted.
 
@@ -581,7 +583,7 @@ Every error is a JSON object of this form:
 | --- | --- | --- |
 | 400 | `invalid_request` | Malformed JSON, unknown or duplicate members, wrong JSON types, or a field that fails validation (listed in `fields`). Also a version or revision path segment that is not a positive integer, a pinned version the procedure does not have, a reference to an unknown procedure, an execution that does not match its version or binding, and a missing, repeated, invalid or unknown query parameter when listing bindings, executions, verifications, feedback or toil items. Also a toil revision whose status may not follow its base revision's. |
 | 403 | `forbidden` | The `Host` header does not name a loopback address while the daemon listens on loopback, or a browser sent an unsafe cross-origin request. |
-| 404 | `not_found` | Unknown procedure (also as a binding's or execution's `procedure_id`), canonical key, version, binding (also as an execution's `binding_id`), binding revision, execution, feedback report, toil item, toil item key or toil revision, or endpoint. |
+| 404 | `not_found` | Unknown procedure (also as a binding's or execution's `procedure_id`), canonical key, version, binding (also as an execution's `binding_id`), binding revision, execution, feedback report, toil item, toil item key or toil revision, repository (by ID or identifier, also when adding an alias), or endpoint. |
 | 405 | `method_not_allowed` | The endpoint exists, but not for this method. The `Allow` header lists the methods it accepts. |
 | 409 | `canonical_key_exists` | Another procedure already uses the canonical key, or, when creating a toil item, another toil item does. The two namespaces are separate. |
 | 409 | `version_conflict` | `base_version` is not the latest version. `latest_version` is included. |

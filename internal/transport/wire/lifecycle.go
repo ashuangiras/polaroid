@@ -10,7 +10,7 @@ import (
 // (ADR-0035).
 type InvalidationRequest struct {
 	Reason string `json:"reason" jsonschema:"why the execution must no longer be used as evidence: what it claims and why that is wrong"`
-	Actor  string `json:"actor" jsonschema:"who invalidates it, in canonical-key form, for example copilot.vscode"`
+	Actor  string `json:"actor" jsonschema:"who invalidates it, in canonical-key form: lowercase letters and digits joined by single '.', '-' or '_', for example copilot.vscode"`
 }
 
 // Domain returns r in domain form.
@@ -48,7 +48,7 @@ func NewInvalidationState(s memory.InvalidationState) InvalidationState {
 type LifecycleChange struct {
 	BaseEvent int    `json:"base_event" jsonschema:"the latest lifecycle event you read (lifecycle_event of the procedure, 0 if it has none); a stale base is a lifecycle_conflict"`
 	Reason    string `json:"reason" jsonschema:"why the procedure's state changes"`
-	Actor     string `json:"actor" jsonschema:"who changes it, in canonical-key form, for example copilot.vscode"`
+	Actor     string `json:"actor" jsonschema:"who changes it, in canonical-key form: lowercase letters and digits joined by single '.', '-' or '_', for example copilot.vscode"`
 }
 
 // Domain returns c in domain form.

@@ -13,7 +13,7 @@ import (
 type ToilContent struct {
 	Activity        string           `json:"activity"`
 	Applicability   *Applicability   `json:"applicability"`
-	Sources         []ToilSource     `json:"sources"`
+	Sources         []ToilSource     `json:"sources" jsonschema:"at least one exact procedure version {procedure_id, version, steps?}"`
 	Observations    []ToilEvidence   `json:"observations,omitzero"`
 	Assessment      jsontext.Value   `json:"assessment"`
 	Proposal        jsontext.Value   `json:"proposal,omitzero"`
@@ -22,7 +22,7 @@ type ToilContent struct {
 	Replacement     *ToilReplacement `json:"replacement,omitzero"`
 	Validation      *ToilValidation  `json:"validation,omitzero"`
 	RevisionReason  string           `json:"revision_reason"`
-	Author          string           `json:"author"`
+	Author          string           `json:"author" jsonschema:"who writes it, in canonical-key form: lowercase letters and digits joined by single '.', '-' or '_', for example copilot.vscode"`
 }
 
 // ToilSource is an exact procedure version, with optional declared steps.
