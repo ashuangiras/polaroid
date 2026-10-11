@@ -1,6 +1,6 @@
 # 0028. Prerelease verification builds published from tags on main
 
-**Status:** Accepted. **Amended:** 2026-10-10 by [ADR-0031](0031-scoped-verification-and-local-only-ci.md): the release workflow's dry run is dispatched by hand, not started by pull requests.
+**Status:** Accepted. **Amended:** 2026-10-10 by [ADR-0031](0031-scoped-verification-and-local-only-ci.md): the release workflow's dry run is dispatched by hand, not started by pull requests. **Amended:** 2026-10-11 by [ADR-0038](0038-stable-releases-and-compatibility.md): tags `vX.Y.Z` are published as stable releases; the rest of this decision still holds.
 **Date:** 2026-10-10
 
 ## Context

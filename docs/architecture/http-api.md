@@ -676,7 +676,7 @@ All of them exit 2 for a usage error.
 
 ## Compatibility
 
-Within `/v1`, changes are additive only: new endpoints, or new optional response fields. Clients must ignore response fields they do not know. Requests stay strict, so a client sending a field the server does not yet support gets `400`, not silent data loss. A breaking change needs a new version prefix and an ADR.
+Within `/v1`, changes are additive only: new endpoints, or new optional response fields. Clients must ignore response fields they do not know. Requests stay strict, so a client sending a field the server does not yet support gets `400`, not silent data loss. A breaking change needs a new version prefix and an ADR. [ADR-0038](decisions/0038-stable-releases-and-compatibility.md) states the full promise of major version 1 for HTTP, MCP, the CLI, records and catalog files. Before `v1.0.0`, #39 and #98 (below) tightened rules within `/v1`. Within `v1`, write limits are never lowered, and only a patch release may refuse input that the documented contract never allowed.
 
 Pagination is opt-in through `limit` and `after`, so a client that sends neither keeps receiving complete lists ([ADR-0021](decisions/0021-targeted-feedback-and-bounded-lists.md)). The list endpoints still reject any query parameter they do not document.
 

@@ -41,5 +41,6 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0035](0035-evidence-invalidation-and-procedure-retirement.md) | Execution-evidence invalidation and procedure retirement | Accepted |
 | [0036](0036-read-only-catalog-statistics.md) | Read-only catalog statistics | Accepted |
 | [0037](0037-size-limits-on-new-writes.md) | Size limits on new writes | Accepted |
+| [0038](0038-stable-releases-and-compatibility.md) | Stable releases and the compatibility policy | Accepted |
 
 Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.

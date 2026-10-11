@@ -1,7 +1,9 @@
-# Packages a prerelease verification build from a tag on main, tests the
-# archives themselves on native runners and in a container without systemd,
-# publishes them as a GitHub prerelease, then downloads the published assets
-# and tests them again (ADR-0028). It never replaces an existing release.
+# Packages a release from a tag on main, tests the archives themselves on
+# native runners, in a container without systemd and as a systemd user
+# service, publishes them, then downloads the published assets and tests them
+# again (ADR-0028). A tag vX.Y.Z is a stable release, marked latest; a tag
+# vX.Y.Z-label is a prerelease, never marked latest (ADR-0038). It never
+# replaces an existing release.
 # Dispatched by hand without a tag, it is a dry run of the selected branch:
 # it packages it with a local-only tag v0.0.0-dispatch.N and runs every
 # archive test, but publishes nothing. Pull requests no longer start it
@@ -11,11 +13,11 @@ name: release
 
 on:
   push:
-    tags: ["v*-*"]
+    tags: ["v[0-9]*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: An existing prerelease tag on main to publish, for example v0.1.0-verify.1. Leave empty for a dry run of the selected branch, which publishes nothing.
+        description: An existing release tag on main to publish, for example v1.0.0 or v1.0.0-rc.1. Leave empty for a dry run of the selected branch, which publishes nothing.
         required: false
         default: ""
         type: string
@@ -50,12 +52,12 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      - name: Check that the tag is an unpublished prerelease on main
+      - name: Check that the tag is an unpublished release version on main
         if: github.event_name == 'push' || inputs.tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]] || { echo "::error::$TAG is not a prerelease version (vX.Y.Z-label)"; exit 1; }
+          [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::$TAG is not a release version (vX.Y.Z or vX.Y.Z-label)"; exit 1; }
           commit=$(git rev-parse "refs/tags/$TAG^{commit}")
           git merge-base --is-ancestor "$commit" origin/main || { echo "::error::$TAG ($commit) is not on main"; exit 1; }
           if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -69,12 +71,12 @@ jobs:
           git -c user.name=release-dry-run -c user.email=release-dry-run@example.invalid tag -a "$TAG" -m "Dry run of $GITHUB_REF_NAME at $GITHUB_SHA; not published."
           git tag -l --format='%(contents)' "$TAG" >"$RUNNER_TEMP/tag-message.md"
 
-      - name: Build and package
+      - name: Build and package, and write the release notes
         run: |
           scripts/package.sh "$TAG" dist
-          cp "$RUNNER_TEMP/tag-message.md" dist-notes.md
+          scripts/release-notes.sh dist/build-manifest.json "$RUNNER_TEMP/tag-message.md" >release-notes.md
           mkdir release-tests && cp scripts/smoke-archive-check.sh release-tests/
-          cat dist/SHA256SUMS dist/build-manifest.json
+          cat dist/SHA256SUMS dist/build-manifest.json release-notes.md
 
       - name: Keep the assets for the test and publish jobs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -82,7 +84,7 @@ jobs:
           name: release-assets
           path: |
             dist/
-            dist-notes.md
+            release-notes.md
             release-tests/
           if-no-files-found: error
           retention-days: 30
@@ -181,10 +183,80 @@ jobs:
             echo "managed-service testing: unavailable here (no systemd), as reported"
           '
 
+  test-managed-service:
+    # Installs the linux/amd64 archive as a real systemd user service, isolated
+    # by HOME, service name and port, and operates it as a user would.
+    # Lingering is enabled for the runner's user in this disposable VM only, so
+    # that a user manager runs without a login; polaroid install never enables it.
+    name: test linux/amd64 archive as a systemd user service
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: Download the packaged assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-assets
+          path: staged
+
+      - name: Start a systemd user manager for the runner's user
+        run: |
+          sudo loginctl enable-linger "$USER"
+          runtime="/run/user/$(id -u)"
+          for _ in $(seq 1 30); do [ -S "$runtime/bus" ] && break; sleep 1; done
+          echo "XDG_RUNTIME_DIR=$runtime" >> "$GITHUB_ENV"
+          XDG_RUNTIME_DIR="$runtime" systemctl --user show-environment >/dev/null
+
+      - name: Install, operate, back up and uninstall the archive as a managed service
+        run: |
+          set -euo pipefail
+          cd staged/dist
+          sha256sum -c SHA256SUMS
+          commit=$(jq -r .source.commit build-manifest.json)
+          name="polaroid_${TAG}_linux_amd64"
+          review="$RUNNER_TEMP/review" H="$RUNNER_TEMP/managed-home"
+          mkdir -p "$review" "$H"
+          tar -xzf "$name.tar.gz" -C "$review"
+          cd "$review/$name"
+          url=http://127.0.0.1:27417
+          step() { echo "== $*"; }
+          step install
+          HOME=$H ./polaroid install -from . -addr 127.0.0.1:27417 -service-name polaroid-release-test
+          P="$H/.local/bin/polaroid"
+          state() { HOME=$H "$P" status 2>/dev/null | jq -r .state; }
+          HOME=$H "$P" status | jq -e --arg tag "$TAG" --arg c "$commit" '.state == "running" and .manager == "systemd" and .build.version == $tag and .build.revision == $c'
+          curl -sf "$url/healthz"
+          step write and read through the managed service
+          printf '%s' '{"canonical_key":"release.managed","version":{"philosophy":"p","method":"m","contract":{},"instructions":{"steps":["one"]},"revision_reason":"Initial version."}}' |
+            HOME=$H "$P" -server "$url" create >/dev/null
+          before=$(HOME=$H "$P" -server "$url" get-by-key release.managed)
+          step restart
+          pid=$(HOME=$H "$P" status | jq .pid)
+          HOME=$H "$P" restart
+          [[ $(state) == running && $(HOME=$H "$P" status | jq .pid) != "$pid" ]]
+          [[ $(HOME=$H "$P" -server "$url" get-by-key release.managed) == "$before" ]]
+          step back up the running managed catalog, inspect, plan a restore
+          backup=$(HOME=$H "$P" backup | jq -r .path)
+          HOME=$H "$P" inspect-backup "$backup" | jq -e '.valid and .schema_version >= 10'
+          HOME=$H "$P" restore -plan "$backup" >/dev/null
+          step stop and start
+          HOME=$H "$P" stop
+          rc=0; HOME=$H "$P" status >/dev/null || rc=$?; [[ $rc == 3 ]]
+          if curl -sf "$url/healthz" >/dev/null; then echo "::error::the stopped service still answers"; exit 1; fi
+          HOME=$H "$P" start
+          [[ $(state) == running && $(HOME=$H "$P" -server "$url" get-by-key release.managed) == "$before" ]]
+          step uninstall keeps the catalog
+          HOME=$H "$P" uninstall
+          rc=0; HOME=$H ./polaroid status >/dev/null || rc=$?; [[ $rc == 4 ]]
+          [[ -f "$H/.polaroid/data/polaroid.db" && -d "$backup" ]]
+          if curl -sf "$url/healthz" >/dev/null; then echo "::error::the uninstalled service still answers"; exit 1; fi
+          echo "managed service: install, status, restart, backup, inspect-backup, restore -plan, stop, start, uninstall passed"
+
   publish:
-    name: publish the prerelease
+    name: publish the release
     if: github.event_name == 'push' || inputs.tag != ''
-    needs: [package, test-archive, test-without-systemd]
+    needs: [package, test-archive, test-without-systemd, test-managed-service]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -196,52 +268,6 @@ jobs:
           name: release-assets
           path: staged
 
-      - name: Write the release notes
-        run: |
-          set -euo pipefail
-          m=staged/dist/build-manifest.json
-          commit=$(jq -r .source.commit "$m") go=$(jq -r .build.go "$m")
-          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          {
-            echo "**Verification prerelease, not a stable production release.** It lets an independent reviewer download and test the exact build of one source commit. Binaries are unsigned and not notarized."
-            echo
-            echo "- **Source commit:** [\`$commit\`](https://github.com/$GITHUB_REPOSITORY/tree/$commit) (tag \`$TAG\`)"
-            echo "- **Packaging run:** $run_url (\`.github/workflows/release.yml\`)"
-            echo "- **Toolchain:** $go, \`CGO_ENABLED=0\`, \`-trimpath\`; both binaries report \`version\` $TAG and \`revision\` $commit"
-            echo
-            if [[ -s staged/dist-notes.md ]]; then cat staged/dist-notes.md; echo; fi
-            echo "## Assets"
-            echo
-            echo "| Platform | Archive | Tested in the packaging run |"
-            echo "| --- | --- | --- |"
-            echo "| linux/amd64 | \`polaroid_${TAG}_linux_amd64.tar.gz\` | Natively on ubuntu-latest, and in an Alpine container without systemd |"
-            echo "| linux/arm64 | \`polaroid_${TAG}_linux_arm64.tar.gz\` | Natively on ubuntu-24.04-arm |"
-            echo "| darwin/amd64 | \`polaroid_${TAG}_darwin_amd64.tar.gz\` | Natively on macos-15-intel |"
-            echo "| darwin/arm64 | \`polaroid_${TAG}_darwin_arm64.tar.gz\` | Natively on macos-latest (arm64) |"
-            echo
-            echo "Each test verified \`SHA256SUMS\`, extracted the archive, checked both binaries' reported version and commit, and ran the archive's \`smoke-test.sh\` with no checkout, no Go and an empty \`HOME\`: with the runner's temporary directory, with the platform's normal \`TMPDIR\` (on macOS the per-user directory, which ends in \`/\`), and with a \`TMPDIR\` containing spaces. The smoke test includes a backup of the running catalog, its inspection, and a restore with \`polaroid restore\` read back through the API, all inside its temporary directory. It also checked that the script reports a failing daemon or check and still cleans up. After publishing, the same run downloads the published assets, compares them with the tested ones and repeats the linux/amd64 test (job \"test the published assets\")."
-            echo
-            echo "\`SHA256SUMS\` covers every archive. \`build-manifest.json\` gives the full commit, version, Go toolchain, targets and per-asset hashes."
-            echo
-            echo "## Quick start (Linux amd64)"
-            echo
-            echo '```sh'
-            echo "base=https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
-            echo "curl -fsSLO \"\$base/polaroid_${TAG}_linux_amd64.tar.gz\" -O \"\$base/SHA256SUMS\""
-            echo "sha256sum -c --ignore-missing SHA256SUMS"
-            echo "tar -xzf polaroid_${TAG}_linux_amd64.tar.gz && cd polaroid_${TAG}_linux_amd64"
-            echo "./polaroid version && ./polaroidd -version && ./smoke-test.sh"
-            echo '```'
-            echo
-            echo "## Known limitations"
-            echo
-            echo "- Prerelease for verification: no compatibility promises, unsigned, not notarized. On macOS, a browser download may need \`xattr -d com.apple.quarantine polaroid polaroidd\`."
-            echo "- The smoke test runs \`polaroidd\` directly. It does not test the managed service (\`polaroid install\`, launchd, systemd) or a restore of the managed catalog; the archive's README.md describes that separate test, and the repository tests both with \`make lifecycle\`."
-            echo "- The managed service supports macOS (launchd) and Linux (systemd user services) only; elsewhere, run \`polaroidd\` directly."
-            echo "- The API and MCP server have no authentication and are meant for loopback use."
-          } >notes.md
-          cat notes.md
-
       - name: Publish (never replaces an existing release)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -250,8 +276,12 @@ jobs:
           if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "::error::release $TAG already exists; a published version is never replaced"; exit 1
           fi
-          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --verify-tag --prerelease --latest=false \
-            --title "Polaroid $TAG (verification prerelease)" --notes-file notes.md \
+          if [[ $(jq -r .prerelease staged/dist/build-manifest.json) == true ]]; then
+            kind=(--prerelease --latest=false --title "Polaroid $TAG (prerelease)")
+          else
+            kind=(--latest --title "Polaroid $TAG")
+          fi
+          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --verify-tag "${kind[@]}" --notes-file staged/release-notes.md \
             staged/dist/*.tar.gz staged/dist/SHA256SUMS staged/dist/build-manifest.json
 
   test-published:
