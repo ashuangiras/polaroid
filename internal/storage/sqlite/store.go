@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -147,6 +148,9 @@ func (s *Store) AppendVersion(ctx context.Context, baseVersion int, next memory.
 		if !latest.Valid {
 			return memory.ErrNotFound
 		}
+		if err := checkNotRetired(ctx, tx, next.ProcedureID); err != nil {
+			return err
+		}
 		if int(latest.Int64) != baseVersion {
 			return &memory.VersionConflictError{BaseVersion: baseVersion, LatestVersion: int(latest.Int64)}
 		}
@@ -155,10 +159,16 @@ func (s *Store) AppendVersion(ctx context.Context, baseVersion int, next memory.
 }
 
 // ListProcedures implements memory.Store: the latest version decides goal,
-// applicability and the scope and repository filters. Every row read is at
-// or below the snapshot's boundary, which is unbounded for a live read.
+// applicability and the scope and repository filters, and the latest
+// lifecycle event the lifecycle filter. Every row read is at or below the
+// snapshot's boundary, which is unbounded for a live read.
 func (s *Store) ListProcedures(ctx context.Context, f memory.ProcedureFilter) ([]memory.Procedure, error) {
-	marks, err := boundary(f.Snapshot, 4)
+	snapshot := f.Snapshot
+	if len(snapshot) == 4 {
+		// Issued before migration 10, when no procedure had lifecycle events.
+		snapshot = append(slices.Clone(snapshot), 0)
+	}
+	marks, err := boundary(snapshot, 5)
 	if err != nil {
 		return nil, err
 	}
@@ -170,24 +180,37 @@ func (s *Store) ListProcedures(ctx context.Context, f memory.ProcedureFilter) ([
 	if scope == "unspecified" {
 		scope = "none"
 	}
+	lifecycle := f.Lifecycle
+	if lifecycle == "all" {
+		lifecycle = ""
+	}
 	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, canonical_key, created_at, version, goal, scope, scope_repository_id,
+		       origin_repository_id, origin_reason, origin_created_at, lifecycle_event, lifecycle_status
+		FROM (
 		SELECT p.id, p.canonical_key, p.created_at, v.version, v.goal, v.scope, v.scope_repository_id,
-		       o.repository_id, o.reason, o.created_at
+		       o.repository_id AS origin_repository_id, o.reason AS origin_reason, o.created_at AS origin_created_at,
+		       le.event AS lifecycle_event, COALESCE(le.status, 'active') AS lifecycle_status
 		FROM procedures AS p
 		JOIN procedure_versions AS v ON v.procedure_id = p.id
 		     AND v.version = (SELECT MAX(pv.version) FROM procedure_versions AS pv
 		                      WHERE pv.procedure_id = p.id AND pv.rowid <= ?)
 		LEFT JOIN procedure_origins AS o ON o.procedure_id = p.id AND o.rowid <= ?
+		LEFT JOIN procedure_lifecycle_events AS le ON le.procedure_id = p.id
+		     AND le.event = (SELECT MAX(pe.event) FROM procedure_lifecycle_events AS pe
+		                     WHERE pe.procedure_id = p.id AND pe.rowid <= ?)
 		WHERE p.rowid <= ?
 		  AND (? = '' OR p.canonical_key > ?)
 		  AND (? = '' OR COALESCE(v.scope, 'none') = ?)
 		  AND (? = '' OR v.scope IS NOT 'local' OR v.scope_repository_id = (
 		       SELECT ri.repository_id FROM repository_identifiers AS ri WHERE ri.identifier = ? AND ri.rowid <= ?))
 		  AND (? = '' OR instr(p.canonical_key, ?) > 0 OR instr(lower(COALESCE(v.goal, '')), ?) > 0)
-		ORDER BY p.canonical_key
+		)
+		WHERE ? = '' OR lifecycle_status = ?
+		ORDER BY canonical_key
 		LIMIT ?`,
-		marks[1], marks[2], marks[0], afterKey, afterKey, scope, scope, f.Repository, f.Repository, marks[3],
-		f.Query, f.Query, f.Query, fetchLimit(f.Page.Limit))
+		marks[1], marks[2], marks[4], marks[0], afterKey, afterKey, scope, scope, f.Repository, f.Repository, marks[3],
+		f.Query, f.Query, f.Query, lifecycle, lifecycle, fetchLimit(f.Page.Limit))
 	if err != nil {
 		return nil, fmt.Errorf("query procedures: %w", err)
 	}
@@ -196,16 +219,18 @@ func (s *Store) ListProcedures(ctx context.Context, f memory.ProcedureFilter) ([
 	procedures := []memory.Procedure{}
 	for rows.Next() {
 		var p memory.Procedure
-		var created string
+		var created, status string
 		var goal, scope, scopeRepository, originRepository, originReason, originCreated sql.NullString
+		var event sql.NullInt64
 		if err := rows.Scan(&p.ID, &p.CanonicalKey, &created, &p.LatestVersion, &goal, &scope, &scopeRepository,
-			&originRepository, &originReason, &originCreated); err != nil {
+			&originRepository, &originReason, &originCreated, &event, &status); err != nil {
 			return nil, fmt.Errorf("scan procedure: %w", err)
 		}
 		if p.CreatedAt, err = parseTime(created); err != nil {
 			return nil, err
 		}
 		p.Goal, p.Applicability = goal.String, applicability(scope, scopeRepository)
+		p.Lifecycle, p.LifecycleEvent = memory.LifecycleStatus(status), int(event.Int64)
 		if p.Origin, err = origin(originRepository, originReason, originCreated); err != nil {
 			return nil, err
 		}
@@ -222,7 +247,7 @@ func (s *Store) ListProcedures(ctx context.Context, f memory.ProcedureFilter) ([
 func (s *Store) LatestVersions(ctx context.Context, repository string) ([]memory.LatestVersion, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT p.id, p.canonical_key, v.version, v.scope, v.scope_repository_id,
-		       v.goal, v.method, v.philosophy, v.contract, v.instructions
+		       v.goal, v.method, v.philosophy, v.contract, v.instructions, `+lifecycleStatus("p.id")+`
 		FROM procedures AS p
 		JOIN procedure_versions AS v ON v.procedure_id = p.id
 		     AND v.version = (SELECT MAX(pv.version) FROM procedure_versions AS pv WHERE pv.procedure_id = p.id)
@@ -239,11 +264,12 @@ func (s *Store) LatestVersions(ctx context.Context, repository string) ([]memory
 		var v memory.LatestVersion
 		var scope, scopeRepository, goal sql.NullString
 		var contract, instructions []byte
+		var status string
 		if err := rows.Scan(&v.ProcedureID, &v.CanonicalKey, &v.Version, &scope, &scopeRepository,
-			&goal, &v.Method, &v.Philosophy, &contract, &instructions); err != nil {
+			&goal, &v.Method, &v.Philosophy, &contract, &instructions, &status); err != nil {
 			return nil, fmt.Errorf("scan latest version: %w", err)
 		}
-		v.Applicability, v.Goal = applicability(scope, scopeRepository), goal.String
+		v.Applicability, v.Goal, v.Lifecycle = applicability(scope, scopeRepository), goal.String, memory.LifecycleStatus(status)
 		v.Contract, v.Instructions = jsontext.Value(contract), jsontext.Value(instructions)
 		out = append(out, v)
 	}
@@ -271,18 +297,19 @@ const (
 		(SELECT COALESCE(MAX(rowid), 0) FROM procedures),
 		(SELECT COALESCE(MAX(rowid), 0) FROM procedure_versions),
 		(SELECT COALESCE(MAX(rowid), 0) FROM procedure_origins),
-		(SELECT COALESCE(MAX(rowid), 0) FROM repository_identifiers)`
+		(SELECT COALESCE(MAX(rowid), 0) FROM repository_identifiers),
+		(SELECT COALESCE(MAX(rowid), 0) FROM procedure_lifecycle_events)`
 	bindingSnapshot = `SELECT
 		(SELECT COALESCE(MAX(rowid), 0) FROM bindings),
 		(SELECT COALESCE(MAX(rowid), 0) FROM binding_revisions),
 		(SELECT COALESCE(MAX(rowid), 0) FROM repository_identifiers)`
 )
 
-// ProcedureSnapshot implements memory.Store: procedures, versions, origins
-// and repository identifiers, read in one statement.
+// ProcedureSnapshot implements memory.Store: procedures, versions, origins,
+// repository identifiers and lifecycle events, read in one statement.
 func (s *Store) ProcedureSnapshot(ctx context.Context) (memory.Snapshot, error) {
-	marks := make(memory.Snapshot, 4)
-	if err := s.db.QueryRowContext(ctx, procedureSnapshot).Scan(&marks[0], &marks[1], &marks[2], &marks[3]); err != nil {
+	marks := make(memory.Snapshot, 5)
+	if err := s.db.QueryRowContext(ctx, procedureSnapshot).Scan(&marks[0], &marks[1], &marks[2], &marks[3], &marks[4]); err != nil {
 		return nil, fmt.Errorf("read procedure snapshot: %w", err)
 	}
 	return marks, nil
@@ -343,6 +370,9 @@ func origin(repositoryID, reason, created sql.NullString) (*memory.Origin, error
 const historySelect = `
 	SELECT p.id, p.canonical_key, p.created_at,
 	       o.repository_id, o.reason, o.created_at,
+	       (SELECT COUNT(*) FROM procedure_lifecycle_events AS le WHERE le.procedure_id = p.id),
+	       COALESCE((SELECT le.status FROM procedure_lifecycle_events AS le
+	                 WHERE le.procedure_id = p.id ORDER BY le.event DESC LIMIT 1), 'active'),
 	       v.version, v.philosophy, v.method, v.goal, v.scope, v.scope_repository_id,
 	       v.contract, v.instructions, v.revision_reason, v.created_at,
 	       r.name, r.target_procedure_id, r.policy, r.pinned_version, r.inputs, r.condition
@@ -372,7 +402,8 @@ func (s *Store) history(ctx context.Context, query string, args ...any) (memory.
 	defer func() { _ = rows.Close() }()
 
 	var h memory.History
-	var procedureCreated string
+	var procedureCreated, lifecycle string
+	var lifecycleEvent int
 	var originRepository, originReason, originCreated sql.NullString
 	for rows.Next() {
 		var v memory.Version
@@ -382,7 +413,7 @@ func (s *Store) history(ctx context.Context, query string, args ...any) (memory.
 		var refName, refTarget, refPolicy, refCondition sql.NullString
 		var refPin sql.NullInt64
 		if err := rows.Scan(&h.Procedure.ID, &h.Procedure.CanonicalKey, &procedureCreated,
-			&originRepository, &originReason, &originCreated,
+			&originRepository, &originReason, &originCreated, &lifecycleEvent, &lifecycle,
 			&v.Number, &v.Philosophy, &v.Method, &goal, &scope, &scopeRepository,
 			&contract, &instructions, &v.RevisionReason, &versionCreated,
 			&refName, &refTarget, &refPolicy, &refPin, &refInputs, &refCondition); err != nil {
@@ -426,6 +457,7 @@ func (s *Store) history(ctx context.Context, query string, args ...any) (memory.
 	latest := h.Versions[len(h.Versions)-1]
 	h.Procedure.LatestVersion = latest.Number
 	h.Procedure.Goal, h.Procedure.Applicability = latest.Goal, latest.Applicability
+	h.Procedure.Lifecycle, h.Procedure.LifecycleEvent = memory.LifecycleStatus(lifecycle), lifecycleEvent
 	return h, nil
 }
 
@@ -459,6 +491,9 @@ func (s *Store) write(ctx context.Context, fn func(*sql.Tx) error) error {
 // accepts them only for a version that does not exist yet.
 func insertVersion(ctx context.Context, tx *sql.Tx, v memory.Version) error {
 	if err := checkTargets(ctx, tx, v.References); err != nil {
+		return err
+	}
+	if err := checkRetiredTargets(ctx, tx, v.References); err != nil {
 		return err
 	}
 	var scope, scopeRepository, goal any
@@ -551,9 +586,12 @@ func (g txGraph) LatestVersion(ctx context.Context, procedureID string) (int, er
 func (g txGraph) VersionNode(ctx context.Context, procedureID string, version int) (memory.NodeVersion, error) {
 	rows, err := g.tx.QueryContext(ctx, `
 		SELECT p.canonical_key, v.scope, v.scope_repository_id,
+		       le.event, le.status, le.reason, le.actor, le.created_at,
 		       r.name, r.target_procedure_id, r.policy, r.pinned_version, r.inputs, r.condition
 		FROM procedures AS p
 		JOIN procedure_versions AS v ON v.procedure_id = p.id
+		LEFT JOIN procedure_lifecycle_events AS le ON le.procedure_id = p.id
+		     AND le.event = (SELECT MAX(pe.event) FROM procedure_lifecycle_events AS pe WHERE pe.procedure_id = p.id)
 		LEFT JOIN procedure_version_references AS r ON r.procedure_id = v.procedure_id AND r.version = v.version
 		WHERE p.id = ? AND v.version = ?
 		ORDER BY r.position`, procedureID, version)
@@ -566,10 +604,20 @@ func (g txGraph) VersionNode(ctx context.Context, procedureID string, version in
 	found := false
 	for rows.Next() {
 		var scope, scopeRepository, name, target, policy, cond sql.NullString
-		var pin sql.NullInt64
+		var status, reason, actor, created sql.NullString
+		var pin, event sql.NullInt64
 		var inputs []byte
-		if err := rows.Scan(&node.CanonicalKey, &scope, &scopeRepository, &name, &target, &policy, &pin, &inputs, &cond); err != nil {
+		if err := rows.Scan(&node.CanonicalKey, &scope, &scopeRepository, &event, &status, &reason, &actor, &created,
+			&name, &target, &policy, &pin, &inputs, &cond); err != nil {
 			return memory.NodeVersion{}, fmt.Errorf("scan version references: %w", err)
+		}
+		if !found && status.String == string(memory.LifecycleRetired) {
+			at, err := parseTime(created.String)
+			if err != nil {
+				return memory.NodeVersion{}, err
+			}
+			node.Retirement = &memory.LifecycleEvent{ProcedureID: procedureID, Event: int(event.Int64), Status: memory.LifecycleRetired,
+				Reason: reason.String, Actor: actor.String, CreatedAt: at}
 		}
 		found = true
 		node.Applicability = applicability(scope, scopeRepository)

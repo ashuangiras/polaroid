@@ -46,9 +46,9 @@ var queryCommands = map[string]bool{"list": true, "discover": true, "bindings": 
 var commands = []command{
 	{"health", "", "check that the daemon and its storage are available", 0, 0,
 		func(c *client, _ []string) error { return c.do(http.MethodGet, "/healthz", nil) }},
-	{"list", "[NAME=VALUE...]", "list procedures; NAME is repository, scope, q, limit, after or snapshot", 0, 0,
+	{"list", "[NAME=VALUE...]", "list procedures; NAME is repository, scope, q, lifecycle (active, the default, retired or all), limit, after or snapshot", 0, 0,
 		func(c *client, _ []string) error { return c.do(http.MethodGet, c.path("/v1/procedures", nil), nil) }},
-	{"discover", "TASK [NAME=VALUE...]", "find procedures for a task described in words, by shared words (lexical), ranked and explained; NAME is repository or limit", 1, 1,
+	{"discover", "TASK [NAME=VALUE...]", "find procedures for a task described in words, by shared words (lexical), ranked and explained; NAME is repository, lifecycle or limit", 1, 1,
 		func(c *client, args []string) error {
 			return c.do(http.MethodGet, c.path("/v1/procedures/discovery", url.Values{"task": {args[0]}}), nil)
 		}},
@@ -71,6 +71,18 @@ var commands = []command{
 	{"get-version", "ID N", "show version N of a procedure", 2, 2,
 		func(c *client, args []string) error {
 			return c.do(http.MethodGet, procedurePath(args[0])+"/versions/"+url.PathEscape(args[1]), nil)
+		}},
+	{"get-procedure-lifecycle", "ID", "show a procedure's lifecycle state (active or retired) and every retirement and reactivation", 1, 1,
+		func(c *client, args []string) error {
+			return c.do(http.MethodGet, procedurePath(args[0])+"/lifecycle/events", nil)
+		}},
+	{"retire-procedure", "ID [FILE]", "retire a procedure, from request JSON (base_event, reason, actor) in FILE or stdin", 1, 2,
+		func(c *client, args []string) error {
+			return c.send(http.MethodPost, procedurePath(args[0])+"/retirement", args[1:])
+		}},
+	{"reactivate-procedure", "ID [FILE]", "reactivate a retired procedure, from request JSON (base_event, reason, actor) in FILE or stdin", 1, 2,
+		func(c *client, args []string) error {
+			return c.send(http.MethodPost, procedurePath(args[0])+"/reactivation", args[1:])
 		}},
 	{"graph", "ID N [REPO ENV [COMMIT INPUTS [DECISIONS]]]", "show version N's composition graph, resolved in REPO and ENV if given, and verified at COMMIT with INPUTS (a JSON object) and the conditional references' DECISIONS (a JSON object of reference path to true or false) if given", 2, 7,
 		func(c *client, args []string) error {
@@ -132,7 +144,7 @@ var commands = []command{
 		func(c *client, args []string) error {
 			return c.do(http.MethodGet, "/v1/executions/"+url.PathEscape(args[0]), nil)
 		}},
-	{"executions", "[PROCEDURE_ID [REPOSITORY]] [NAME=VALUE...]", "list executions, optionally of a procedure and in a repository; NAME is version, repository, commit, limit or after", 0, 2,
+	{"executions", "[PROCEDURE_ID [REPOSITORY]] [NAME=VALUE...]", "list executions, optionally of a procedure and in a repository; NAME is version, repository, commit, evidence_status (valid or invalidated), limit or after", 0, 2,
 		func(c *client, args []string) error {
 			query := url.Values{}
 			for i, name := range []string{"procedure_id", "repository"} {
@@ -145,6 +157,14 @@ var commands = []command{
 	{"verification", "ID", "show whether an execution is verified, and its combination", 1, 1,
 		func(c *client, args []string) error {
 			return c.do(http.MethodGet, "/v1/executions/"+url.PathEscape(args[0])+"/verification", nil)
+		}},
+	{"invalidate-execution", "ID [FILE]", "withdraw an execution as evidence, permanently, from request JSON (reason, actor) in FILE or stdin; the execution is kept unchanged", 1, 2,
+		func(c *client, args []string) error {
+			return c.send(http.MethodPost, "/v1/executions/"+url.PathEscape(args[0])+"/invalidation", args[1:])
+		}},
+	{"get-execution-invalidation", "ID", "show whether an execution is still valid evidence, and its invalidation", 1, 1,
+		func(c *client, args []string) error {
+			return c.do(http.MethodGet, "/v1/executions/"+url.PathEscape(args[0])+"/invalidation", nil)
 		}},
 	{"verifications", "ID N [REPO [COMMIT [ENV]]]", "list version N's combinations and their status", 2, 5,
 		func(c *client, args []string) error {

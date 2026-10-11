@@ -41,7 +41,13 @@ type executionJSON struct {
 		Rationale  string         `json:"rationale"`
 		Evidence   jsontext.Value `json:"evidence"`
 	} `json:"decisions"`
-	CreatedAt time.Time `json:"created_at"`
+	CreatedAt      time.Time `json:"created_at"`
+	EvidenceStatus string    `json:"evidence_status"`
+	Invalidation   *struct {
+		Reason    string    `json:"reason"`
+		Actor     string    `json:"actor"`
+		CreatedAt time.Time `json:"created_at"`
+	} `json:"invalidation"`
 }
 
 // executionRequest returns a record-execution body. fields overrides or adds
@@ -101,7 +107,7 @@ func TestRecordAndReadAnExecution(t *testing.T) {
 	}
 	want := fmt.Sprintf(`{"id":%q,"procedure_id":%q,"version":2,"binding_id":%q,"binding_revision":1,"repository":"github.com/ashuangiras/polaroid",`+
 		`"commit":%q,"environment":{"name":"ci.ubuntu-latest","attributes":{"os":"linux","go":"1.27.2"}},"inputs":{"module":"modernc.org/sqlite"},`+
-		`"outcome":"succeeded","evidence":{"commands":[{"run":"make ci","exit":0}],"log":"https://example.com/log#sha256=ab"},"created_at":%q}`,
+		`"outcome":"succeeded","evidence":{"commands":[{"run":"make ci","exit":0}],"log":"https://example.com/log#sha256=ab"},"created_at":%q,"evidence_status":"valid"}`,
 		e.ID, f.procedure, f.pinned, fullCommit, e.CreatedAt.Format(time.RFC3339Nano))
 	if got := strings.TrimSpace(string(created.body)); got != want {
 		t.Fatalf("execution =\n %s\nwant\n %s", got, want)

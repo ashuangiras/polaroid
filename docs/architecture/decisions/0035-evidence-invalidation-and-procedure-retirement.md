@@ -25,7 +25,7 @@ Lifecycle state is append-only metadata in its own tables, next to the immutable
 
 **Procedure retirement.**
 
-- A procedure identity is `active` until its first lifecycle event. `POST /v1/procedures/{id}/retirement` and `POST /v1/procedures/{id}/reactivation` take `{base_event, reason, actor}` and append event `base_event + 1`. A stale `base_event` is `409 lifecycle_conflict` with `latest_event`; retiring a retired procedure, or reactivating an active one, is `409 lifecycle_unchanged`. Events alternate, the first is a retirement, and `GET /v1/procedures/{id}/lifecycle` returns the state and every event.
+- A procedure identity is `active` until its first lifecycle event. `POST /v1/procedures/{id}/retirement` and `POST /v1/procedures/{id}/reactivation` take `{base_event, reason, actor}` and append event `base_event + 1`. A stale `base_event` is `409 lifecycle_conflict` with `latest_event`; retiring a retired procedure, or reactivating an active one, is `409 lifecycle_unchanged`. Events alternate, the first is a retirement, and `GET /v1/procedures/{id}/lifecycle/events` returns the state and every event.
 - **Reads.** Procedures report `lifecycle_status`, and a procedure's history also `lifecycle_event`. Retrieval by ID, key and exact version, graphs, bindings and executions keep working. The procedure list and discovery take `lifecycle`: `active` (the default), `retired` or `all`. A procedure list snapshot fixes lifecycle state at its first page. Duplicate checks always compare against every procedure, report `lifecycle_status` on suggestions and on `key_collision`, so retirement never invites a second identity for the same knowledge.
 - **Resolution and graphs** select exactly what they selected before. A node of a retired procedure carries `retirement` (its latest event): its selection evidence and target verification remain visible, because retirement does not erase evidence that an execution satisfied its contract. Graphs of active procedures are unchanged.
 - **Writes refused** with `409 procedure_retired`, naming the reactivation: a version of a retired procedure; a version with a reference, pinned or contextual, to a retired procedure (`fields` name each reference); a binding, or a binding revision, of a retired procedure. Executions, origins, feedback and toil items are still accepted, because they record what happened. Retirement never changes a parent, a reference or a binding.
@@ -37,7 +37,7 @@ Lifecycle state is append-only metadata in its own tables, next to the immutable
 | invalidate | `POST /v1/executions/{id}/invalidation` | `invalidate_execution` | `invalidate-execution` |
 | invalidation state | `GET /v1/executions/{id}/invalidation` | `get_execution_invalidation` | `get-execution-invalidation` |
 | retire, reactivate | `POST /v1/procedures/{id}/retirement`, `…/reactivation` | `retire_procedure`, `reactivate_procedure` | `retire-procedure`, `reactivate-procedure` |
-| lifecycle history | `GET /v1/procedures/{id}/lifecycle` | `get_procedure_lifecycle` | `get-procedure-lifecycle` |
+| lifecycle history | `GET /v1/procedures/{id}/lifecycle/events` | `get_procedure_lifecycle` | `get-procedure-lifecycle` |
 
 The execution list also filters by `evidence_status`.
 

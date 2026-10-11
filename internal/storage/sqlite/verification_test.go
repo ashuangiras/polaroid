@@ -28,7 +28,7 @@ func TestVerificationReadsStoredExecutions(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := memory.Verification{
-		ExecutionID: "p", ProcedureID: "par", Version: 1, Verified: true,
+		ExecutionID: "p", ProcedureID: "par", Version: 1, Verified: true, EvidenceStatus: memory.EvidenceValid,
 		Combination: memory.Combination{
 			Repository: "github.com/ashuangiras/polaroid", Commit: commitA, Environment: "ci.ubuntu-latest",
 			Inputs:   []byte(`{"module":"modernc.org/sqlite"}`),

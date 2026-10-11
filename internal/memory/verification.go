@@ -11,8 +11,8 @@ import (
 
 // VerificationReader gives verification a consistent view of executions.
 type VerificationReader interface {
-	// Run returns an execution with its inputs and children but without its
-	// evidence, or an error wrapping ErrNotFound.
+	// Run returns an execution with its inputs, children and invalidation
+	// but without its evidence, or an error wrapping ErrNotFound.
 	Run(ctx context.Context, id string) (Execution, error)
 	// RunIDs returns the IDs of the executions f selects, oldest first.
 	RunIDs(ctx context.Context, f VerificationFilter) ([]string, error)
@@ -44,10 +44,12 @@ type VerificationFilter struct {
 type ProblemCode string
 
 const (
+	ProblemInvalidated         ProblemCode = "invalidated"
 	ProblemOutcomeFailed       ProblemCode = "outcome_failed"
 	ProblemMissingChild        ProblemCode = "missing_child"
 	ProblemChildInputsMismatch ProblemCode = "child_inputs_mismatch"
 	ProblemChildNotVerified    ProblemCode = "child_not_verified"
+	ProblemChildInvalidated    ProblemCode = "child_invalidated"
 	ProblemMissingDecision     ProblemCode = "missing_decision"
 )
 
@@ -91,32 +93,38 @@ type ChildVersion struct {
 	Children  []ChildVersion
 }
 
-// Verification judges one execution.
+// Verification judges one execution. EvidenceStatus is the execution's own;
+// an invalidated execution is never verified (ADR-0035).
 type Verification struct {
-	ExecutionID string
-	ProcedureID string
-	Version     int
-	Verified    bool
-	Problems    []VerificationProblem
-	Combination Combination
+	ExecutionID    string
+	ProcedureID    string
+	Version        int
+	Verified       bool
+	EvidenceStatus EvidenceStatus
+	Problems       []VerificationProblem
+	Combination    Combination
 }
 
 // CombinationStatus is one combination of a version with its executions,
-// oldest first. Its status is the verification of the latest one. For a
-// target, Undecided lists the reference paths of conditional references
+// oldest first. Its status is the verification of the latest valid one;
+// InvalidatedExecutionIDs lists the executions that never decide it
+// (ADR-0035), and LatestExecutionID is empty when no valid one exists. For
+// a target, Undecided lists the reference paths of conditional references
 // without a target decision; then no execution is looked up (ADR-0029).
 type CombinationStatus struct {
-	Combination       Combination
-	Verified          bool
-	LatestExecutionID string
-	ExecutionIDs      []string
-	Undecided         []string
+	Combination             Combination
+	Verified                bool
+	LatestExecutionID       string
+	ExecutionIDs            []string
+	InvalidatedExecutionIDs []string
+	Undecided               []string
 }
 
-// VerifyExecution judges one stored execution (ADR-0012, ADR-0029): it is
-// verified if it succeeded and every reference of its version is fulfilled
-// by a linked child that is itself verified, except a conditional reference
-// recorded as not applicable; every conditional reference needs a decision.
+// VerifyExecution judges one stored execution (ADR-0012, ADR-0029,
+// ADR-0035): it is verified if it is valid evidence, it succeeded, and every
+// reference of its version is fulfilled by a linked child that is itself
+// verified, except a conditional reference recorded as not applicable;
+// every conditional reference needs a decision.
 func VerifyExecution(ctx context.Context, r VerificationReader, id string) (Verification, error) {
 	return newVerifier(r).verify(ctx, id)
 }
@@ -145,6 +153,10 @@ func ListCombinations(ctx context.Context, r VerificationReader, f VerificationF
 		}
 		s := &statuses[i]
 		s.ExecutionIDs = append(s.ExecutionIDs, id)
+		if ver.EvidenceStatus == EvidenceInvalidated {
+			s.InvalidatedExecutionIDs = append(s.InvalidatedExecutionIDs, id)
+			continue
+		}
 		s.LatestExecutionID, s.Verified = id, ver.Verified
 	}
 	return statuses, nil
@@ -181,10 +193,14 @@ func (v *verifier) verify(ctx context.Context, id string) (Verification, error) 
 	}
 	repository, repositoryID := combinationRepository(e.Repository, e.Identity)
 	out := Verification{
-		ExecutionID: id,
-		ProcedureID: e.ProcedureID,
-		Version:     e.Version,
-		Combination: Combination{Repository: repository, RepositoryID: repositoryID, Commit: e.Commit, Environment: e.Environment.Name, Inputs: inputs},
+		ExecutionID:    id,
+		ProcedureID:    e.ProcedureID,
+		Version:        e.Version,
+		EvidenceStatus: e.EvidenceStatus(),
+		Combination:    Combination{Repository: repository, RepositoryID: repositoryID, Commit: e.Commit, Environment: e.Environment.Name, Inputs: inputs},
+	}
+	if e.Invalidation != nil {
+		out.Problems = append(out.Problems, VerificationProblem{Code: ProblemInvalidated})
 	}
 	if e.Outcome != OutcomeSucceeded {
 		out.Problems = append(out.Problems, VerificationProblem{Code: ProblemOutcomeFailed})
@@ -230,7 +246,10 @@ func (v *verifier) verify(ctx context.Context, id string) (Verification, error) 
 		if !bytes.Equal(want, child.Combination.Inputs) {
 			out.Problems = append(out.Problems, VerificationProblem{Code: ProblemChildInputsMismatch, Reference: name, ExecutionID: childID})
 		}
-		if !child.Verified {
+		switch {
+		case child.EvidenceStatus == EvidenceInvalidated:
+			out.Problems = append(out.Problems, VerificationProblem{Code: ProblemChildInvalidated, Reference: name, ExecutionID: childID})
+		case !child.Verified:
 			out.Problems = append(out.Problems, VerificationProblem{Code: ProblemChildNotVerified, Reference: name, ExecutionID: childID})
 		}
 	}

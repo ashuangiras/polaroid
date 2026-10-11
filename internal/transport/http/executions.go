@@ -36,15 +36,16 @@ func (a *api) getExecution(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) listExecutions(w http.ResponseWriter, r *http.Request) {
-	query, ok := strictQuery(w, r, "procedure_id", "version", "repository", "commit", "limit", "after")
+	query, ok := strictQuery(w, r, "procedure_id", "version", "repository", "commit", "evidence_status", "limit", "after")
 	if !ok {
 		return
 	}
 	page, ok := pageQuery(w, query)
-	if !ok || !nonEmpty(w, query, "procedure_id", "repository", "commit") {
+	if !ok || !nonEmpty(w, query, "procedure_id", "repository", "commit", "evidence_status") {
 		return
 	}
-	f := memory.ExecutionFilter{ProcedureID: query.Get("procedure_id"), Repository: query.Get("repository"), Commit: query.Get("commit"), Page: page}
+	f := memory.ExecutionFilter{ProcedureID: query.Get("procedure_id"), Repository: query.Get("repository"), Commit: query.Get("commit"),
+		EvidenceStatus: memory.EvidenceStatus(query.Get("evidence_status")), Page: page}
 	if v := query.Get("version"); query.Has("version") {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 1 {
@@ -72,6 +73,29 @@ func (a *api) getVerification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.respond(w, r, http.StatusOK, wire.NewVerification(v))
+}
+
+func (a *api) invalidateExecution(w http.ResponseWriter, r *http.Request) {
+	var body wire.InvalidationRequest
+	if !decode(w, r, &body) {
+		return
+	}
+	s, err := a.svc.InvalidateExecution(r.Context(), r.PathValue("id"), body.Domain())
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	w.Header().Set("Location", "/v1/executions/"+url.PathEscape(s.ExecutionID)+"/invalidation")
+	a.respond(w, r, http.StatusCreated, wire.NewInvalidationState(s))
+}
+
+func (a *api) getInvalidation(w http.ResponseWriter, r *http.Request) {
+	s, err := a.svc.ExecutionInvalidation(r.Context(), r.PathValue("id"))
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	a.respond(w, r, http.StatusOK, wire.NewInvalidationState(s))
 }
 
 func (a *api) listVerifications(w http.ResponseWriter, r *http.Request) {

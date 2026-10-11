@@ -161,7 +161,7 @@ func (c ResolutionContext) withOwnTarget() ResolutionContext {
 	return c
 }
 
-// VersionRun is the latest execution of one version in a context.
+// VersionRun is the latest valid execution of one version in a context.
 type VersionRun struct {
 	Version     int
 	ExecutionID string
@@ -173,7 +173,8 @@ type ResolutionReader interface {
 	GraphReader
 	VerificationReader
 	// LatestRuns returns the latest execution of each version of a procedure
-	// in c, highest version first. c.Repository matches by identity.
+	// in c that is not invalidated (ADR-0035), highest version first.
+	// c.Repository matches by identity.
 	LatestRuns(ctx context.Context, procedureID string, c ResolutionContext) ([]VersionRun, error)
 	// Identity returns the registered repository identifier belongs to, or
 	// the zero value if it is not registered.
@@ -213,7 +214,7 @@ func ResolveGraph(ctx context.Context, r ResolutionReader, procedureID string, p
 	if err != nil {
 		return Resolution{}, err
 	}
-	root := GraphNode{ProcedureID: procedureID, CanonicalKey: node.CanonicalKey, Version: version, Applicability: node.Applicability, VerifiedBy: verifiedBy}
+	root := GraphNode{ProcedureID: procedureID, CanonicalKey: node.CanonicalKey, Version: version, Applicability: node.Applicability, Retirement: node.Retirement, VerifiedBy: verifiedBy}
 	if err := w.expand(ctx, &root, node.References, 0); err != nil {
 		return Resolution{}, err
 	}

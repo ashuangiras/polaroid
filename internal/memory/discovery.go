@@ -28,13 +28,14 @@ const (
 )
 
 // LatestVersion is a procedure's latest version as discovery reads it: its
-// identity, applicability and descriptive content, without references,
-// origin, revision reason or timestamps.
+// identity, applicability, lifecycle state and descriptive content, without
+// references, origin, revision reason or timestamps.
 type LatestVersion struct {
 	ProcedureID   string
 	CanonicalKey  string
 	Version       int
 	Applicability Applicability
+	Lifecycle     LifecycleStatus
 	Goal          string
 	Method        string
 	Philosophy    string
@@ -207,25 +208,30 @@ func (d document) matches(q query, n int) []FieldMatch {
 
 // CandidateVersion identifies and describes the version a candidate was
 // found in: always its procedure's latest version at the time of the read.
+// Lifecycle is its procedure's lifecycle state (ADR-0035).
 type CandidateVersion struct {
 	ProcedureID   string
 	CanonicalKey  string
 	Version       int
 	Applicability Applicability
+	Lifecycle     LifecycleStatus
 	Goal          string
 	Method        string
 }
 
 func candidateVersion(v LatestVersion) CandidateVersion {
 	return CandidateVersion{ProcedureID: v.ProcedureID, CanonicalKey: v.CanonicalKey, Version: v.Version,
-		Applicability: v.Applicability, Goal: v.Goal, Method: v.Method}
+		Applicability: v.Applicability, Lifecycle: v.Lifecycle, Goal: v.Goal, Method: v.Method}
 }
 
 // DiscoveryRequest asks for procedures relevant to a task, optionally only
 // those applicable in a repository, at most Limit (0 for the default).
+// Lifecycle (active, the default, retired or all) selects by lifecycle
+// state (ADR-0035).
 type DiscoveryRequest struct {
 	Task       string
 	Repository string
+	Lifecycle  string
 	Limit      int
 }
 
@@ -291,13 +297,15 @@ func (s *Service) DiscoverProcedures(ctx context.Context, r DiscoveryRequest) (D
 		}
 	}
 	limit := discoveryScope(&p, r.Repository, r.Limit)
+	lifecycle := lifecycleFilter(&p, "lifecycle", r.Lifecycle)
 	if err := p.err(); err != nil {
 		return Discovery{}, err
 	}
-	latest, err := s.store.LatestVersions(ctx, r.Repository)
+	all, err := s.store.LatestVersions(ctx, r.Repository)
 	if err != nil {
 		return Discovery{}, fmt.Errorf("read latest versions: %w", err)
 	}
+	latest := slices.DeleteFunc(all, func(v LatestVersion) bool { return !matchesLifecycle(lifecycle, v.Lifecycle) })
 	docs := make([]document, len(latest))
 	for i, v := range latest {
 		docs[i] = newDocument(v)
@@ -422,11 +430,13 @@ type DuplicateRequest struct {
 	Limit              int
 }
 
-// KeyCollision is an existing procedure with the proposed canonical key.
+// KeyCollision is an existing procedure with the proposed canonical key,
+// whatever its lifecycle state.
 type KeyCollision struct {
 	ProcedureID   string
 	CanonicalKey  string
 	LatestVersion int
+	Lifecycle     LifecycleStatus
 }
 
 // Suggestion is an existing procedure whose descriptive summary overlaps a
@@ -489,11 +499,14 @@ func (s *Service) SuggestDuplicates(ctx context.Context, r DuplicateRequest) (Du
 		h, err := s.store.HistoryByKey(ctx, r.CanonicalKey)
 		switch {
 		case err == nil && h.Procedure.ID != r.ExcludeProcedureID:
-			out.KeyCollision = &KeyCollision{ProcedureID: h.Procedure.ID, CanonicalKey: h.Procedure.CanonicalKey, LatestVersion: h.Procedure.LatestVersion}
+			out.KeyCollision = &KeyCollision{ProcedureID: h.Procedure.ID, CanonicalKey: h.Procedure.CanonicalKey,
+				LatestVersion: h.Procedure.LatestVersion, Lifecycle: h.Procedure.Lifecycle}
 		case err != nil && !errors.Is(err, ErrNotFound):
 			return Duplicates{}, fmt.Errorf("read procedure by key: %w", err)
 		}
 	}
+	// Retired procedures are compared too: retiring knowledge must not invite
+	// a second identity for it (ADR-0035).
 	latest, err := s.store.LatestVersions(ctx, r.Repository)
 	if err != nil {
 		return Duplicates{}, fmt.Errorf("read latest versions: %w", err)

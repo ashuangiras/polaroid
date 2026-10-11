@@ -33,6 +33,7 @@ type (
 		Repository string `json:"repository,omitzero" jsonschema:"only procedures whose latest version applies in this repository identifier: shared, unspecified, or local to it"`
 		Scope      string `json:"scope,omitzero" jsonschema:"only procedures whose latest version is shared, local or unspecified"`
 		Q          string `json:"q,omitzero" jsonschema:"only procedures whose canonical key or goal contains this text, ignoring ASCII case"`
+		Lifecycle  string `json:"lifecycle,omitzero" jsonschema:"active (the default), retired or all"`
 		pageArgs
 		snapshotArgs
 	}
@@ -43,6 +44,7 @@ type (
 	discoverArgs struct {
 		Task       string `json:"task" jsonschema:"the task you need to perform, in your own words (at most 4096 bytes)"`
 		Repository string `json:"repository,omitzero" jsonschema:"search only procedures whose latest version applies in this repository identifier: shared, unspecified, or local to it; omit to search the whole catalog"`
+		Lifecycle  string `json:"lifecycle,omitzero" jsonschema:"search active procedures (the default), retired ones, or all"`
 		Limit      int    `json:"limit,omitzero" jsonschema:"return at most this many candidates (1 to 50, default 10)"`
 	}
 	versionRef struct {
@@ -111,14 +113,26 @@ type (
 		targetArgs
 	}
 	listExecutionsArgs struct {
-		ProcedureID string `json:"procedure_id,omitzero"`
-		Version     int    `json:"version,omitzero" jsonschema:"requires procedure_id"`
-		Repository  string `json:"repository,omitzero" jsonschema:"a repository identifier; a registered one matches every identifier of its repository"`
-		Commit      string `json:"commit,omitzero"`
+		ProcedureID    string `json:"procedure_id,omitzero"`
+		Version        int    `json:"version,omitzero" jsonschema:"requires procedure_id"`
+		Repository     string `json:"repository,omitzero" jsonschema:"a repository identifier; a registered one matches every identifier of its repository"`
+		Commit         string `json:"commit,omitzero"`
+		EvidenceStatus string `json:"evidence_status,omitzero" jsonschema:"only valid or only invalidated executions"`
 		pageArgs
 	}
 	executionRef struct {
 		ExecutionID string `json:"execution_id"`
+	}
+	invalidateArgs struct {
+		ExecutionID string `json:"execution_id"`
+		wire.InvalidationRequest
+	}
+	lifecycleArgs struct {
+		ProcedureID string `json:"procedure_id"`
+		wire.LifecycleChange
+	}
+	procedureIDArgs struct {
+		ProcedureID string `json:"procedure_id"`
 	}
 	listVerificationsArgs struct {
 		ProcedureID string `json:"procedure_id"`
@@ -187,25 +201,28 @@ func (a targetArgs) target() *memory.Target {
 func (t *tools) register(s *sdk.Server) {
 	const read, write = true, false
 
-	add(s, t, "list_procedures", "List procedures, ordered by canonical key, with origin and the scope (shared, local or unspecified), goal and applicability of version latest_version only. "+
+	add(s, t, "list_procedures", "List procedures, ordered by canonical key, with origin, lifecycle_status and the scope (shared, local or unspecified), goal and applicability of version latest_version only. "+
 		"Unspecified declares nothing: admissible everywhere, not a claim of reuse. Before reusing one, resolve it and read the selected version's scope and contract. "+
+		"Retired procedures are left out unless lifecycle is retired or all. "+
 		"Pass repository to see only the procedures that apply in it, scope or q to narrow further, limit to page, and snapshot to page a fixed snapshot.", read,
 		func(ctx context.Context, in listProceduresArgs) (any, error) {
-			ps, next, err := t.svc.ListProcedures(ctx, memory.ProcedureFilter{Repository: in.Repository, Scope: in.Scope, Query: in.Q, Page: in.page()})
+			ps, next, err := t.svc.ListProcedures(ctx, memory.ProcedureFilter{Repository: in.Repository, Scope: in.Scope, Query: in.Q, Lifecycle: in.Lifecycle, Page: in.page()})
 			return wire.NewProcedureList(ps, next), err
 		})
 	add(s, t, "discover_procedures", "Find procedures for a task described in your own words, by lexical matching (shared words, not meaning). "+
 		"Searches each procedure's latest version: canonical key, goal, method, philosophy, and the text of contract and instructions. "+
 		"Candidates are ranked by score (ADR-0033): each matched term adds its rarity among the candidates times the weight of the best field holding it (4 canonical key or goal, 2 method, 1 philosophy, contract or instructions; long prose weighs less), and contract and instruction matches together are capped. "+
 		"contributions and matches explain each candidate. The score ranks, it is not a confidence. "+
+		"Retired procedures are searched only with lifecycle retired or all. "+
 		"Subprocedures are found like any procedure. A candidate is not a recommendation and not verified for you: read its version, judge it, and resolve it before reuse.", read,
 		func(ctx context.Context, in discoverArgs) (any, error) {
-			d, err := t.svc.DiscoverProcedures(ctx, memory.DiscoveryRequest{Task: in.Task, Repository: in.Repository, Limit: in.Limit})
+			d, err := t.svc.DiscoverProcedures(ctx, memory.DiscoveryRequest{Task: in.Task, Repository: in.Repository, Lifecycle: in.Lifecycle, Limit: in.Limit})
 			return wire.NewDiscovery(d), err
 		})
-	add(s, t, "suggest_duplicates", "Before create_procedure or revise_procedure, check a proposal (method, philosophy, optional goal and canonical_key) against existing procedures. "+
+	add(s, t, "suggest_duplicates", "Before create_procedure or revise_procedure, check a proposal (method, philosophy, optional goal and canonical_key) against existing procedures, retired ones included. "+
 		"key_collision names a procedure that already has the canonical key, which create_procedure would refuse. "+
 		"suggestions are advisory content overlaps: similarity is 2 x shared terms / (proposal terms + candidate terms) over canonical key, goal, method and philosophy, at least 0.35. "+
+		"A retired match (lifecycle_status retired) is knowledge that was withdrawn: reactivate and revise it rather than create a second identity, if it fits. "+
 		"Pass exclude_procedure_id when revising. Reuse, revise or create is your decision; nothing is stored.", read,
 		func(ctx context.Context, in wire.DuplicateCheck) (any, error) {
 			d, err := t.svc.SuggestDuplicates(ctx, in.Domain())
@@ -338,18 +355,18 @@ func (t *tools) register(s *sdk.Server) {
 			e, err := t.svc.Execution(ctx, in.ID)
 			return wire.NewExecution(e), err
 		})
-	add(s, t, "list_executions", "List executions, oldest first, without inputs and evidence: optionally of one procedure and version, in one repository, at one commit.", read,
+	add(s, t, "list_executions", "List executions, oldest first, without inputs and evidence: optionally of one procedure and version, in one repository, at one commit, with one evidence_status (valid or invalidated).", read,
 		func(ctx context.Context, in listExecutionsArgs) (any, error) {
 			es, next, err := t.svc.ListExecutions(ctx, memory.ExecutionFilter{ProcedureID: in.ProcedureID, Version: in.Version,
-				Repository: in.Repository, Commit: in.Commit, Page: in.page()})
+				Repository: in.Repository, Commit: in.Commit, EvidenceStatus: memory.EvidenceStatus(in.EvidenceStatus), Page: in.page()})
 			return wire.NewExecutionList(es, next), err
 		})
-	add(s, t, "get_verification", "Whether an execution is verified, why not, and the combination it belongs to.", read,
+	add(s, t, "get_verification", "Whether an execution is verified, why not, and the combination it belongs to. An invalidated execution is never verified (problem invalidated); a parent of one reports child_invalidated.", read,
 		func(ctx context.Context, in executionRef) (any, error) {
 			v, err := t.svc.Verification(ctx, in.ExecutionID)
 			return wire.NewVerification(v), err
 		})
-	add(s, t, "list_verifications", "List a version's execution combinations, each judged by its latest execution.", read,
+	add(s, t, "list_verifications", "List a version's execution combinations, each judged by its latest valid execution; invalidated ones are listed in invalidated_execution_ids and never decide.", read,
 		func(ctx context.Context, in listVerificationsArgs) (any, error) {
 			vs, err := t.svc.Verifications(ctx, memory.VerificationFilter{
 				ProcedureID: in.ProcedureID, Version: in.Version, Repository: in.Repository, Commit: in.Commit, Environment: in.Environment,
@@ -378,6 +395,43 @@ func (t *tools) register(s *sdk.Server) {
 			return wire.NewFeedback(f), err
 		})
 	t.registerToil(s)
+	t.registerLifecycle(s)
+}
+
+// registerLifecycle adds the evidence invalidation and procedure retirement
+// tools (ADR-0035).
+func (t *tools) registerLifecycle(s *sdk.Server) {
+	const read, write = true, false
+	add(s, t, "invalidate_execution", "Withdraw one execution as evidence, permanently, with a precise reason and your actor name (canonical-key form). "+
+		"Use it when the run did not do what its procedure version claims, for example it was recorded against the wrong version. "+
+		"The execution and its evidence stay unchanged and readable; it stops supporting contextual selection and target verification, and parents linking it are no longer verified. "+
+		"Nothing replaces it automatically: record a new genuine execution. A second invalidation is execution_invalidated.", write,
+		func(ctx context.Context, in invalidateArgs) (any, error) {
+			st, err := t.svc.InvalidateExecution(ctx, in.ExecutionID, in.Domain())
+			return wire.NewInvalidationState(st), err
+		})
+	add(s, t, "get_execution_invalidation", "Whether an execution is still valid evidence, and its invalidation (reason, actor, created_at) if it was withdrawn.", read,
+		func(ctx context.Context, in executionRef) (any, error) {
+			st, err := t.svc.ExecutionInvalidation(ctx, in.ExecutionID)
+			return wire.NewInvalidationState(st), err
+		})
+	add(s, t, "get_procedure_lifecycle", "A procedure's lifecycle state (active or retired), latest_event and every retirement and reactivation with its reason and actor.", read,
+		func(ctx context.Context, in procedureIDArgs) (any, error) {
+			l, err := t.svc.ProcedureLifecycle(ctx, in.ProcedureID)
+			return wire.NewLifecycle(l), err
+		})
+	add(s, t, "retire_procedure", "Retire a procedure so it is no longer used for new work, with base_event (the latest lifecycle event you read, 0 if none), a reason and your actor name. "+
+		"It leaves discovery and list_procedures by default; its versions, bindings, references and executions stay unchanged and resolvable, and graph nodes of it carry retirement. "+
+		"New versions of it, new references to it and new bindings or binding revisions of it are refused (procedure_retired). Parents are not retired with it.", write,
+		func(ctx context.Context, in lifecycleArgs) (any, error) {
+			l, err := t.svc.RetireProcedure(ctx, in.ProcedureID, in.Domain())
+			return wire.NewLifecycle(l), err
+		})
+	add(s, t, "reactivate_procedure", "Reactivate a retired procedure, with base_event (the latest lifecycle event you read), a reason and your actor name. The retirement stays in its history.", write,
+		func(ctx context.Context, in lifecycleArgs) (any, error) {
+			l, err := t.svc.ReactivateProcedure(ctx, in.ProcedureID, in.Domain())
+			return wire.NewLifecycle(l), err
+		})
 }
 
 // registerToil adds the toil item tools (ADR-0034).

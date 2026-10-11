@@ -23,11 +23,14 @@ type GraphReader interface {
 	VersionNode(ctx context.Context, procedureID string, version int) (NodeVersion, error)
 }
 
-// NodeVersion is what a graph walk reads of one version.
+// NodeVersion is what a graph walk reads of one version. Retirement is its
+// procedure's latest lifecycle event when the procedure is retired, nil
+// otherwise (ADR-0035).
 type NodeVersion struct {
 	CanonicalKey  string
 	Applicability Applicability
 	References    []Reference
+	Retirement    *LifecycleEvent
 }
 
 // GraphNode is one procedure version in a composition graph, with the exact
@@ -35,12 +38,14 @@ type NodeVersion struct {
 // the resolution context, if any (ADR-0013), and Evidence says where that
 // execution ran. Target is the status of the node's selected combination at
 // a requested target (ADR-0018); nil without one. Applicability is the
-// version's declared scope (ADR-0020).
+// version's declared scope (ADR-0020). Retirement is set when the procedure
+// is retired (ADR-0035): selection and evidence are unchanged by it.
 type GraphNode struct {
 	ProcedureID   string
 	CanonicalKey  string
 	Version       int
 	Applicability Applicability
+	Retirement    *LifecycleEvent
 	VerifiedBy    string
 	Evidence      *SelectionEvidence
 	Target        *CombinationStatus
@@ -132,7 +137,7 @@ func ExpandGraph(ctx context.Context, r GraphReader, procedureID string, version
 	if err != nil {
 		return GraphNode{}, err
 	}
-	root := GraphNode{ProcedureID: procedureID, CanonicalKey: node.CanonicalKey, Version: version, Applicability: node.Applicability}
+	root := GraphNode{ProcedureID: procedureID, CanonicalKey: node.CanonicalKey, Version: version, Applicability: node.Applicability, Retirement: node.Retirement}
 	w := &walker{r: r, nodes: 1, onPath: map[string]bool{procedureID: true}}
 	if err := w.expand(ctx, &root, node.References, 0); err != nil {
 		return GraphNode{}, err
@@ -176,7 +181,7 @@ func (w *walker) expand(ctx context.Context, node *GraphNode, refs []Reference, 
 		if err != nil {
 			return fmt.Errorf("read reference %q target: %w", ref.Name, err)
 		}
-		child := GraphNode{ProcedureID: ref.ProcedureID, CanonicalKey: next.CanonicalKey, Version: version, Applicability: next.Applicability, VerifiedBy: verifiedBy}
+		child := GraphNode{ProcedureID: ref.ProcedureID, CanonicalKey: next.CanonicalKey, Version: version, Applicability: next.Applicability, Retirement: next.Retirement, VerifiedBy: verifiedBy}
 		w.onPath[ref.ProcedureID] = true
 		if err := w.expand(ctx, &child, next.References, depth+1); err != nil {
 			return err

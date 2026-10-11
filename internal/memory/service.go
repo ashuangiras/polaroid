@@ -180,6 +180,23 @@ type Store interface {
 	// ToilSnapshot returns the current boundary of the toil item list.
 	ToilSnapshot(ctx context.Context) (Snapshot, error)
 
+	// InvalidateExecution stores inv. It returns an error wrapping
+	// ErrNotFound if the execution does not exist, and
+	// ErrExecutionInvalidated if it already has an invalidation.
+	InvalidateExecution(ctx context.Context, inv Invalidation) error
+
+	// ProcedureLifecycle returns a procedure's lifecycle events, or an error
+	// wrapping ErrNotFound.
+	ProcedureLifecycle(ctx context.Context, procedureID string) (Lifecycle, error)
+
+	// AppendLifecycleEvent stores e if, and only if, baseEvent is the
+	// procedure's latest event (0 for none) and e changes its status; the
+	// checks and the write are one atomic step. Callers set e.Event to
+	// baseEvent+1. It returns the lifecycle after the write, an error
+	// wrapping ErrNotFound, a *LifecycleConflictError, or
+	// ErrLifecycleUnchanged.
+	AppendLifecycleEvent(ctx context.Context, baseEvent int, e LifecycleEvent) (Lifecycle, error)
+
 	// Ping reports whether the store can serve requests.
 	Ping(ctx context.Context) error
 }
@@ -203,7 +220,7 @@ func (s *Service) CreateProcedure(ctx context.Context, in NewProcedure) (History
 	}
 	now := timestamp()
 	p := Procedure{ID: uuid.NewV7().String(), CanonicalKey: in.CanonicalKey, CreatedAt: now, LatestVersion: 1,
-		Goal: def.Goal, Applicability: def.Applicability}
+		Goal: def.Goal, Applicability: def.Applicability, Lifecycle: LifecycleActive}
 	if in.Origin != nil {
 		o := *in.Origin
 		o.CreatedAt = now
@@ -217,6 +234,10 @@ func (s *Service) CreateProcedure(ctx context.Context, in NewProcedure) (History
 		var missing *MissingTargetsError
 		if errors.As(err, &missing) {
 			return History{}, missingTargets(def.References, missing)
+		}
+		var retired *RetiredProcedureError
+		if errors.As(err, &retired) {
+			return History{}, retiredWrite(retired, "", def.References)
 		}
 		if gerr := graphError(err); gerr != nil {
 			return History{}, gerr
@@ -250,6 +271,10 @@ func (s *Service) ReviseProcedure(ctx context.Context, procedureID string, in Re
 		if errors.As(err, &missing) {
 			return Version{}, missingTargets(def.References, missing)
 		}
+		var retired *RetiredProcedureError
+		if errors.As(err, &retired) {
+			return Version{}, retiredWrite(retired, "", def.References)
+		}
 		return Version{}, fmt.Errorf("append version: %w", err)
 	}
 	return v, nil
@@ -259,12 +284,15 @@ func (s *Service) ReviseProcedure(ctx context.Context, procedureID string, in Re
 // keeps those whose latest version is applicable in that repository; Scope
 // (shared, local or unspecified) those whose latest version declares it;
 // Query those whose canonical key or latest goal contains it, ignoring ASCII
-// case. After and Snapshot are set by the service for the store: with a
-// Snapshot, "latest" and registration are as of its boundary (ADR-0023).
+// case; Lifecycle (active, the default, retired or all) those in that
+// lifecycle state (ADR-0035). After and Snapshot are set by the service for
+// the store: with a Snapshot, "latest", lifecycle and registration are as of
+// its boundary (ADR-0023).
 type ProcedureFilter struct {
 	Repository string
 	Scope      string
 	Query      string
+	Lifecycle  string
 	Page       Page
 	After      *Position
 	Snapshot   Snapshot
@@ -286,7 +314,13 @@ func (s *Service) ListProcedures(ctx context.Context, f ProcedureFilter) ([]Proc
 		p.add("q", "must not be blank")
 	}
 	f.Query = strings.ToLower(f.Query)
-	g := newPager("procedures", false, f.Page, f.Repository, f.Scope, f.Query)
+	f.Lifecycle = lifecycleFilter(&p, "lifecycle", f.Lifecycle)
+	params := []string{f.Repository, f.Scope, f.Query}
+	if f.Lifecycle != string(LifecycleActive) {
+		// The default adds nothing, so cursors issued before ADR-0035 continue.
+		params = append(params, "lifecycle="+f.Lifecycle)
+	}
+	g := newPager("procedures", false, f.Page, params...)
 	f.After = g.start(&p)
 	if err := p.err(); err != nil {
 		return nil, "", err

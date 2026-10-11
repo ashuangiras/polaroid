@@ -20,9 +20,9 @@ func TestScopeLabelsNameTheirVersion(t *testing.T) {
 
 	list := s.call(t, http.MethodGet, "/v1/procedures", "").body
 	for _, want := range []string{
-		`"canonical_key":"d.legacy","created_at"`, `"latest_version":1,"scope":"unspecified"`,
-		`"latest_version":1,"scope":"shared","goal":"Shared.","applicability":{"shared":{}}`,
-		`"latest_version":1,"scope":"local","applicability":{"repository":"` + a + `"}`,
+		`"canonical_key":"d.legacy","created_at"`, `"latest_version":1,"scope":"unspecified","lifecycle_status":"active"`,
+		`"latest_version":1,"scope":"shared","lifecycle_status":"active","goal":"Shared.","applicability":{"shared":{}}`,
+		`"latest_version":1,"scope":"local","lifecycle_status":"active","applicability":{"repository":"` + a + `"}`,
 	} {
 		if !strings.Contains(string(list), want) {
 			t.Fatalf("list lacks %s:\n%s", want, list)
