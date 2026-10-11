@@ -8,20 +8,23 @@ import (
 	"github.com/ashuangiras/polaroid/internal/memory"
 )
 
-// lifecycleStatus is the current lifecycle state of the procedure whose ID
-// is the SQL expression id: its latest event's status, or active
-// (ADR-0035).
-func lifecycleStatus(id string) string {
-	return `COALESCE((SELECT le.status FROM procedure_lifecycle_events AS le
-		WHERE le.procedure_id = ` + id + ` ORDER BY le.event DESC LIMIT 1), 'active')`
-}
+// The current lifecycle state of a procedure: its latest event's status,
+// or active (ADR-0035). lifecycleStatusOfParam takes the procedure ID as a
+// parameter; lifecycleStatusOfP reads it from p.id.
+const (
+	lifecycleStatusHead = `COALESCE((SELECT le.status FROM procedure_lifecycle_events AS le
+		WHERE le.procedure_id = `
+	lifecycleStatusTail    = ` ORDER BY le.event DESC LIMIT 1), 'active')`
+	lifecycleStatusOfParam = lifecycleStatusHead + `?` + lifecycleStatusTail
+	lifecycleStatusOfP     = lifecycleStatusHead + `p.id` + lifecycleStatusTail
+)
 
 // isRetired reports whether a procedure is retired now. Lifecycle events
 // are appended only under the write lock, so the answer holds for the
 // transaction.
 func isRetired(ctx context.Context, tx *sql.Tx, procedureID string) (bool, error) {
 	var status string
-	if err := tx.QueryRowContext(ctx, `SELECT `+lifecycleStatus("?"), procedureID).Scan(&status); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT `+lifecycleStatusOfParam, procedureID).Scan(&status); err != nil {
 		return false, fmt.Errorf("read lifecycle status: %w", err)
 	}
 	return status == string(memory.LifecycleRetired), nil

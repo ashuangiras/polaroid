@@ -247,7 +247,7 @@ func (s *Store) ListProcedures(ctx context.Context, f memory.ProcedureFilter) ([
 func (s *Store) LatestVersions(ctx context.Context, repository string) ([]memory.LatestVersion, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT p.id, p.canonical_key, v.version, v.scope, v.scope_repository_id,
-		       v.goal, v.method, v.philosophy, v.contract, v.instructions, `+lifecycleStatus("p.id")+`
+		       v.goal, v.method, v.philosophy, v.contract, v.instructions, `+lifecycleStatusOfP+`
 		FROM procedures AS p
 		JOIN procedure_versions AS v ON v.procedure_id = p.id
 		     AND v.version = (SELECT MAX(pv.version) FROM procedure_versions AS pv WHERE pv.procedure_id = p.id)
