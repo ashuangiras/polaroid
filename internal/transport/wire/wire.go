@@ -77,11 +77,11 @@ func kindName(k jsontext.Kind) string {
 type Definition struct {
 	Philosophy     string         `json:"philosophy"`
 	Method         string         `json:"method"`
-	Goal           string         `json:"goal,omitzero"`
+	Goal           string         `json:"goal,omitzero" jsonschema:"one line: what the procedure achieves"`
 	Applicability  *Applicability `json:"applicability,omitzero"`
 	Contract       jsontext.Value `json:"contract"`
 	Instructions   jsontext.Value `json:"instructions"`
-	References     []Reference    `json:"references,omitzero"`
+	References     []Reference    `json:"references,omitzero" jsonschema:"named subprocedures this version composes, each {name, procedure_id, version_policy, inputs, condition?}"`
 	RevisionReason string         `json:"revision_reason"`
 }
 
@@ -138,7 +138,7 @@ func NewApplicability(a memory.Applicability) *Applicability {
 
 // NewOrigin is a client-supplied procedure origin.
 type NewOrigin struct {
-	RepositoryID string `json:"repository_id"`
+	RepositoryID string `json:"repository_id" jsonschema:"the ID of a registered repository (register_repository, get_repository)"`
 	Reason       string `json:"reason"`
 }
 
@@ -164,11 +164,11 @@ func newOrigin(o *memory.Origin) *Origin {
 // Reference is one named subprocedure reference, in requests and responses
 // alike. condition is omitted for a required reference (ADR-0029).
 type Reference struct {
-	Name          string         `json:"name"`
+	Name          string         `json:"name" jsonschema:"unique within the version, in canonical-key form, for example build"`
 	ProcedureID   string         `json:"procedure_id"`
 	VersionPolicy VersionPolicy  `json:"version_policy"`
-	Inputs        jsontext.Value `json:"inputs"`
-	Condition     *string        `json:"condition,omitzero"`
+	Inputs        jsontext.Value `json:"inputs" jsonschema:"maps each child input name to {\"input\": \"<parent input name>\"} or {\"value\": <any JSON>}, for example {\"module\": {\"input\": \"module\"}, \"strict\": {\"value\": true}}; {} when the child takes no inputs"`
+	Condition     *string        `json:"condition,omitzero" jsonschema:"makes the reference conditional: it applies only when this holds, which the executing agent decides and records; omit for a required reference"`
 }
 
 func references(body []Reference) []memory.Reference {
@@ -196,8 +196,8 @@ func newReferences(refs []memory.Reference) []Reference {
 // VersionPolicy is {"pin": N} or {"contextual": {}}. It is used both ways,
 // so a response returns a policy exactly as it was accepted.
 type VersionPolicy struct {
-	Pin        *int              `json:"pin,omitzero"`
-	Contextual *ContextualPolicy `json:"contextual,omitzero"`
+	Pin        *int              `json:"pin,omitzero" jsonschema:"use exactly this version; give pin or contextual, not both"`
+	Contextual *ContextualPolicy `json:"contextual,omitzero" jsonschema:"{} to select the version from verification evidence, else the latest; give pin or contextual, not both"`
 }
 
 // ContextualPolicy has no members yet; any member is rejected.
@@ -227,7 +227,7 @@ func NewVersionPolicy(p memory.VersionPolicy) VersionPolicy {
 
 // BindingConfig is the client-supplied content of a binding revision.
 type BindingConfig struct {
-	Inputs         jsontext.Value `json:"inputs"`
+	Inputs         jsontext.Value `json:"inputs" jsonschema:"the repository's inputs for the procedure, a JSON object ({} if none)"`
 	VersionPolicy  VersionPolicy  `json:"version_policy"`
 	RevisionReason string         `json:"revision_reason"`
 }
@@ -691,8 +691,8 @@ func NewBindingResolution(r memory.BindingResolution) BindingResolution {
 }
 
 type Environment struct {
-	Name       string         `json:"name"`
-	Attributes jsontext.Value `json:"attributes"`
+	Name       string         `json:"name" jsonschema:"canonical-key form: lowercase letters and digits joined by single '.', '-' or '_', for example darwin-arm64.local or ci.ubuntu-latest"`
+	Attributes jsontext.Value `json:"attributes" jsonschema:"a JSON object describing the environment, for example tool versions; {} if nothing"`
 }
 
 type EnvironmentName struct {
@@ -702,17 +702,17 @@ type EnvironmentName struct {
 // ExecutionRecord is the client-supplied content of an execution.
 type ExecutionRecord struct {
 	ProcedureID     string         `json:"procedure_id"`
-	Version         int            `json:"version"`
-	BindingID       string         `json:"binding_id,omitzero"`
-	BindingRevision int            `json:"binding_revision,omitzero"`
-	Repository      string         `json:"repository"`
-	Commit          string         `json:"commit"`
-	Environment     Environment    `json:"environment"`
-	Inputs          jsontext.Value `json:"inputs"`
-	Outcome         string         `json:"outcome"`
-	Evidence        jsontext.Value `json:"evidence"`
-	Children        []Child        `json:"children,omitzero"`
-	Decisions       []Decision     `json:"decisions,omitzero"`
+	Version         int            `json:"version" jsonschema:"the exact version that ran; it must apply in repository"`
+	BindingID       string         `json:"binding_id,omitzero" jsonschema:"the binding this run followed; give it with binding_revision, or neither"`
+	BindingRevision int            `json:"binding_revision,omitzero" jsonschema:"the binding revision this run followed; requires binding_id"`
+	Repository      string         `json:"repository" jsonschema:"the repository identifier: '/'-separated segments of lowercase letters, digits, '.', '_' and '-', at most 255 characters, without a scheme or .git, for example github.com/owner/repo"`
+	Commit          string         `json:"commit" jsonschema:"the full commit hash the run used: 40 or 64 lowercase hex characters, as git rev-parse HEAD prints it"`
+	Environment     Environment    `json:"environment" jsonschema:"where it ran: {name, attributes}"`
+	Inputs          jsontext.Value `json:"inputs" jsonschema:"the effective inputs, a JSON object ({} if none); a child's must equal what its reference maps from the parent's"`
+	Outcome         string         `json:"outcome" jsonschema:"succeeded or failed"`
+	Evidence        jsontext.Value `json:"evidence" jsonschema:"a non-empty JSON object: results, short excerpts and references to logs, commits and URLs; at most 65,536 bytes"`
+	Children        []Child        `json:"children,omitzero" jsonschema:"child executions recorded before this one, each {reference, execution_id}"`
+	Decisions       []Decision     `json:"decisions,omitzero" jsonschema:"one per conditional reference: {reference, applicable, rationale, evidence?}; rationale is required either way"`
 }
 
 // Child links a child execution to the reference it fulfilled.
@@ -1077,8 +1077,8 @@ func NewFeedbackList(reports []memory.Feedback, next string) FeedbackList {
 
 // NewRepository is a request to register a repository (ADR-0019).
 type NewRepository struct {
-	Identifier string `json:"identifier"`
-	Name       string `json:"name"`
+	Identifier string `json:"identifier" jsonschema:"the canonical identifier: '/'-separated segments of lowercase letters, digits, '.', '_' and '-', at most 255 characters, no '.' or '..' segment, without a scheme or .git, for example github.com/owner/repo"`
+	Name       string `json:"name" jsonschema:"a display name, one line"`
 }
 
 // Domain returns r in domain form.
@@ -1088,7 +1088,7 @@ func (r NewRepository) Domain() memory.NewRepository {
 
 // NewAlias is a request to add an alias to a repository.
 type NewAlias struct {
-	Identifier string `json:"identifier"`
+	Identifier string `json:"identifier" jsonschema:"another identifier of the same repository, in the same form as a canonical identifier, for example gitlab.example.com/owner/repo"`
 	Reason     string `json:"reason"`
 }
 

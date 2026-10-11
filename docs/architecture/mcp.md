@@ -70,7 +70,7 @@ A successful result carries the record exactly as the HTTP API returns it ([http
 
 ### Errors
 
-A failed call is a tool error (`isError: true`). It carries the HTTP API's error body, `{"error":{"code","message",…}}`, as text and as structured content, with the same codes: `invalid_request`, `not_found`, `version_conflict` (with `latest_version`), `revision_conflict`, `canonical_key_exists`, `binding_exists`, `repository_identifier_exists`, `origin_exists`, `reference_cycle`, `graph_too_large`, `execution_invalidated`, `lifecycle_conflict` (with `latest_event`), `lifecycle_unchanged`, `procedure_retired`, `value_too_large` (with `limits`) and `internal`.
+A failed call is a tool error (`isError: true`). It carries the HTTP API's error body, `{"error":{"code","message",…}}`, as text and as structured content, with the same codes: `invalid_request`, `not_found`, `version_conflict` (with `latest_version`), `revision_conflict` (with `latest_revision`), `canonical_key_exists`, `binding_exists`, `repository_identifier_exists`, `origin_exists`, `reference_cycle` (with `cycle`), `graph_too_large`, `execution_invalidated`, `lifecycle_conflict` (with `latest_event`), `lifecycle_unchanged`, `procedure_retired`, `value_too_large` (with `limits`) and `internal`.
 
 Field names in `fields` are the flat argument names. For example, a missing `philosophy` is reported as `philosophy`, not `version.philosophy`, and a reference to a retired procedure as `references[0].procedure_id`. A reference is still reported as `references[i]…`. An unexpected failure is logged, and only `internal` is returned.
 
