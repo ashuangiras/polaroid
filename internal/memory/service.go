@@ -197,6 +197,11 @@ type Store interface {
 	// ErrLifecycleUnchanged.
 	AppendLifecycleEvent(ctx context.Context, baseEvent int, e LifecycleEvent) (Lifecycle, error)
 
+	// Statistics returns the catalog's statistics except GeneratedAt, with
+	// everything but Storage.Files read from one snapshot by aggregate
+	// queries. It writes nothing.
+	Statistics(ctx context.Context) (Statistics, error)
+
 	// Ping reports whether the store can serve requests.
 	Ping(ctx context.Context) error
 }

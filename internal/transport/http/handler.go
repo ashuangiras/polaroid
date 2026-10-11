@@ -80,6 +80,7 @@ func NewHandler(svc *memory.Service, logger *slog.Logger) http.Handler {
 	a.mux.HandleFunc("GET /v1/toil-items/{id}", a.getToilItem)
 	a.mux.HandleFunc("POST /v1/toil-items/{id}/revisions", a.reviseToilItem)
 	a.mux.HandleFunc("GET /v1/toil-items/{id}/revisions/{revision}", a.getToilRevision)
+	a.mux.HandleFunc("GET /v1/statistics", a.getStatistics)
 
 	csrf := http.NewCrossOriginProtection()
 	csrf.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -124,6 +125,18 @@ func (a *api) health(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.respond(w, r, http.StatusOK, healthBody{Status: "ok"})
+}
+
+func (a *api) getStatistics(w http.ResponseWriter, r *http.Request) {
+	if _, ok := strictQuery(w, r); !ok {
+		return
+	}
+	st, err := a.svc.Statistics(r.Context())
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	a.respond(w, r, http.StatusOK, wire.NewStatistics(st))
 }
 
 func (a *api) createProcedure(w http.ResponseWriter, r *http.Request) {

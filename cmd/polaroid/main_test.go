@@ -8,9 +8,11 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -465,6 +467,8 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		{"feedbacks", "problem", "x"},
 		{"get-feedback"},
 		{"get-feedback", "a", "b"},
+		{"statistics", "a"},
+		{"statistics", "q=x"},
 		{"-server", "ftp://example.com", "list"},
 		{"-server", "127.0.0.1:7417", "list"},
 		{"-no-such-flag", "list"},
@@ -474,6 +478,48 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 			t.Errorf("%v: exit %d, stderr %q; want exit %d with a message", args, r.code, r.stderr, exitUsage)
 		}
 	}
+}
+
+func TestStatisticsCommand(t *testing.T) {
+	server := newServer(t)
+	mustSucceed(t, cli("", nil, "-server", server, "create", writeFile(t, createJSON)))
+	mustSucceed(t, cli(reviseJSON, nil, "-server", server, "revise", procedureIDOf(t, server)))
+
+	r := cli("", nil, "-server", server, "statistics")
+	mustSucceed(t, r)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, server+"/v1/statistics", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generated := regexp.MustCompile(`"generated_at":"[^"]+"`)
+	if got, want := generated.ReplaceAllString(r.stdout, ""), generated.ReplaceAllString(string(body), ""); got != want || r.stderr != "" {
+		t.Fatalf("statistics printed %s (stderr %q)\nthe API returns %s", r.stdout, r.stderr, body)
+	}
+	if !strings.Contains(r.stdout, `"procedures":1,"procedure_versions":2,`) {
+		t.Fatalf("statistics = %s", r.stdout)
+	}
+}
+
+func procedureIDOf(t *testing.T, server string) string {
+	t.Helper()
+	r := cli("", nil, "-server", server, "get-by-key", "go.dependency.add")
+	mustSucceed(t, r)
+	var h struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(r.stdout), &h); err != nil {
+		t.Fatal(err)
+	}
+	return h.ID
 }
 
 func TestHelp(t *testing.T) {

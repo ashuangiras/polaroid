@@ -35,7 +35,8 @@ const timeLayout = "2006-01-02T15:04:05.000000000Z"
 
 // Store is a memory.Store backed by one SQLite database file.
 type Store struct {
-	db *sql.DB
+	db   *sql.DB
+	path string
 }
 
 var _ memory.Store = (*Store)(nil)
@@ -55,7 +56,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("prepare database %s: %w", path, err)
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, path: path}, nil
 }
 
 // Close releases the database. Stored records remain on disk.
