@@ -89,6 +89,7 @@ type errorJSON struct {
 	Code          string `json:"code"`
 	Message       string `json:"message"`
 	LatestVersion int    `json:"latest_version"`
+	LatestEvent   int    `json:"latest_event"`
 	Fields        []struct {
 		Field   string `json:"field"`
 		Message string `json:"message"`

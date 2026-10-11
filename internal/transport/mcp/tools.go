@@ -489,6 +489,15 @@ func (t *tools) registerToil(s *sdk.Server) {
 // flatten renames the domain's field paths to the flat argument names,
 // for example version.method to method.
 func flatten(err error, prefix string) error {
+	var retired *memory.RetiredProcedureError
+	if errors.As(err, &retired) {
+		out := *retired
+		out.Fields = slices.Clone(retired.Fields)
+		for i := range out.Fields {
+			out.Fields[i].Field = strings.TrimPrefix(out.Fields[i].Field, prefix)
+		}
+		return &out
+	}
 	var invalid *memory.ValidationError
 	if !errors.As(err, &invalid) {
 		return err
