@@ -122,7 +122,7 @@ Each criterion must be met for a stable `vX.Y.Z`. Otherwise the release stays a 
 | 8 | The release target's code is verified | The full gate (`verify-change`) at the release commit's code, and `make lifecycle` against launchd | `verify-change` at `6c98ce3`, verified (`dev.change.verify` `01a12c58-be35`); `make lifecycle` launchd 68/0 (`polaroid.lifecycle.check` `01a12c59-bfe5`). `verify-change` again at the tagged tree, which adds documentation and the release procedure's fixture; cited by the release execution | Met |
 | 9 | The pipeline publishes the release kind correctly | A stable tag becomes a stable release marked latest; every archive is tested natively, without systemd, and as a systemd user service | #108 dry run 38162980089; `v1.0.0-rc.1` run 38163822689 published a prerelease that was not marked latest; `v1.0.0` run [38168355796](https://github.com/ashuangiras/polaroid/actions/runs/38168355796): all nine jobs passed, including the systemd user-service job, and it published a stable release marked latest | Met |
 | 10 | The candidate works as a user receives it | On native platforms, from the published candidate archives: fresh install, MCP and CLI connection, restart and ownership, upgrade from `v0.7.0-verify.1` with history kept, online backup, inspection and restore, rollback to the previous build, and fresh-client tool discovery | `v1.0.0-rc.1` archives downloaded anonymously and checked; an isolated launchd candidate run on darwin/arm64, 26 checks with none failed (repeated with the published `v1.0.0` archive before the upgrade: 26/0); the acceptance chats listed the tools. The other platforms: the release runners' native smoke and harness tests, and the systemd user-service job | Met, natively on darwin/arm64 only |
-| 11 | Independent agents adopt it | Fresh agents with public onboarding discover, judge, create or reuse, record and later retrieve procedures in an existing codebase | [Acceptance](#acceptance-by-independent-agents): three fresh chats on google/uuid | Met for discovery, reuse, binding, recording and retrieval. Creation untested; memory confound |
+| 11 | Independent agents adopt it | Fresh agents with public onboarding discover, judge, create or reuse, record and later retrieve procedures in an existing codebase | [Acceptance](#acceptance-by-independent-agents): three fresh chats on google/uuid (inspected); three Codex agents on ItsDangerous with `v0.7.0-verify.1` (agent reports, [bundle](acceptance/itsdangerous-2026-10-11/README.md)) | Met for discovery, reuse, binding, recording and retrieval. Creation untested; memory confound |
 | 12 | The published artifacts are intact | All archives, `SHA256SUMS` and `build-manifest.json`, downloaded anonymously, with checksums, binary hashes and the source commit matching; the unmodified smoke tests pass; no private data | Release execution `01a12c80-30e8` (`polaroid.release.publish` v3), archive check `01a12c77-93ce`: the six assets downloaded without credentials; checksums, manifest hashes, `source.commit` `23b2946` and `prerelease` false match; the listings hold no database, private path or credential; harness 22/0 on darwin/arm64 | Met |
 | 13 | The shared service adopts it | A backup is taken and the inventory is identical; native ownership, version, commit, endpoint, database and schema are confirmed; a fresh Copilot session makes real calls | Upgrade execution `01a12c7f-edee` (`polaroid.service.manage` v5): backups before and after are valid; 651 reads identical (digest `255b72604873e1ac`); launchd pid 66355, `v1.0.0` `23b2946`, the same endpoint and database, schema 10; a fresh Copilot chat made six read calls, and its values match HTTP | Met |
 
@@ -130,7 +130,25 @@ Each criterion must be met for a stable `vX.Y.Z`. Otherwise the release stays a 
 
 Two sources of evidence, kept apart by provenance.
 
-**Reported, not inspected.** The owner reported earlier trials on ItsDangerous in which two agents used Polaroid. Their transcripts and catalogs were not available to this review, so they are cited as reported and are not counted as evidence here.
+**External trials on ItsDangerous: agent reports, partly checked.** The owner ran three Codex agents in an existing checkout of [pallets/itsdangerous](https://github.com/pallets/itsdangerous), with the published **`v0.7.0-verify.1`** build and an isolated catalog. The [evidence bundle](acceptance/itsdangerous-2026-10-11/README.md) holds their reports.
+
+- **Supplied:** the three reports.
+- **Not supplied:** the supporting records, the catalog and the transcripts, so most of the results are agent reports, not inspected.
+- **Checked here:**
+  - the build, its archive digest and the upstream base commit;
+  - the CLI defect report 2 hit, `=` in a task, which was reproduced independently in #102 and fixed in `v1.0.0`.
+
+As reported:
+
+| Agent | Did | Tests |
+| --- | --- | --- |
+| Initial agent, with prior Polaroid context | Created a shared pytest procedure and a local expiry-boundary procedure; completed two tasks; revised its procedure to v2; recorded verified executions; backed up and restored the catalog | 300, then 312 |
+| Fresh agent, no inherited conversation | Discovered the existing procedure, judged v2 inapplicable, revised the same identity to v3 for zero-second expiry, and recorded verified executions at its task commit | 322 |
+| Second fresh agent | Reused v3 unchanged for one-second expiry; invalidated its two executions with a wrong environment label and recorded accurate replacements | 337 |
+
+No duplicate procedure identities were created by the fresh agents.
+
+All three were bounded Python test-coverage tasks in one repository and one environment. They test `v0.7.0-verify.1`, not `v1.0.0` or `v1.0.1`.
 
 **Observed trial (2026-10-11).** Three fresh VS Code Copilot chats, one after another, each had a short task in an existing codebase they had not seen: a clone of [google/uuid](https://github.com/google/uuid) at `2d3c2a9`. An isolated managed service on another port served a copy of the shared catalog. The agents had only the public onboarding: the MCP server's instructions and the tool descriptions. Their transcripts and the trial catalog were inspected afterwards. A fourth chat opened in that workspace stopped before any Polaroid call and is not counted.
 
@@ -161,7 +179,20 @@ Sessions A and B ran on `v1.0.0-rc.1`. Their prompts said "do not commit", which
 - recorded executions;
 - built on each other's records: B found A's registration, and C found B's binding.
 
-With the #112 guidance, the last agent recorded a verified execution at the commit that ran. Two things remain unproven: creating a procedure, and a trial without the memory confound.
+With the #112 guidance, the last agent recorded a verified execution at the commit that ran.
+
+**What the two sources cover together, and what remains.**
+
+| Gap after the google/uuid trial | ItsDangerous reports | Status |
+| --- | --- | --- |
+| Creating a procedure | The initial agent created two. It had prior Polaroid context, so this is not creation by a fresh independent agent | Still open for fresh agents |
+| Revising a stored procedure, which no uuid agent did | A fresh agent revised the same identity to v3 after filing feedback; another reused v3 unchanged | Reported, not inspected |
+| Agents without Copilot's persistent memory | Codex agents with no inherited conversation, as reported; whether their harness kept other memory was not observed | Reported, not inspected |
+| Correcting wrong evidence | An agent invalidated its own mislabelled executions and recorded replacements | Reported, not inspected |
+| A different language and repository layout | Python and pytest, in contrast to Go in google/uuid | Reported, not inspected |
+| The current release | Neither source tested `v1.0.1`; the observed uuid trial used `v1.0.0-rc.1` and `6c98ce3`, the reports `v0.7.0-verify.1` | Open |
+
+The inspected evidence is still the google/uuid trial. The ItsDangerous reports are consistent with it and add revision and self-correction, but they are counted as agent reports.
 
 ## Known limitations
 
@@ -174,5 +205,5 @@ With the #112 guidance, the last agent recorded a verified execution at the comm
 - Concurrent restores of one catalog are not coordinated.
 - **Reads under saturation.** Graph walks, resolutions and verification take the write lock for their snapshot. Under continuous writing from several clients, such a read can wait past the 5-second lock timeout and fail with `500 internal`. It happened once in 29,390 resolutions in sustained run 1, and never at agent pace. Retry. [#111](https://github.com/ashuangiras/polaroid/issues/111) tracks a fix that changes no contract.
 - **Evidence is what agents claim.** Polaroid cannot see a working tree. An execution is accurate only if the agent committed what it ran, as the contract says ([#112](https://github.com/ashuangiras/polaroid/issues/112)). Wrong evidence is withdrawn with `invalidate_execution`.
-- **Acceptance gaps.** No independent agent has yet created a procedure in a trial, and the observed trials ran with the user's persistent Copilot memory. The ItsDangerous trials are reported, not inspected.
+- **Acceptance gaps.** No fresh independent agent has been observed creating a procedure: the ItsDangerous procedures were created by an agent with prior Polaroid context. The inspected trials ran with the user's persistent Copilot memory. The ItsDangerous reports cover revision, reuse and self-correction without that memory, but their supporting records were not supplied, and they concern `v0.7.0-verify.1`.
 - **Platform coverage.** Install, upgrade, backup, restore and rollback ran natively only on macOS arm64, on the maintainer's machine. On Linux, the release workflow tests each archive natively, and as a systemd user service on amd64 (`test-managed-service`). darwin/amd64 is tested by the release runners' smoke tests and harness only.
