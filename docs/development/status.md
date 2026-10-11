@@ -2,6 +2,19 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
+**Maintenance release `v1.0.1` in progress ([#120](https://github.com/ashuangiras/polaroid/issues/120)), as of 2026-10-11.**
+
+- **Merged:**
+  - #117 ([#111](https://github.com/ashuangiras/polaroid/issues/111), ADR-0039): graph, resolution and verification read in read-only snapshot transactions. Verified at `a587fb5` (`polaroid.record-model.change` `01a12ca1-66f9`, full gate `01a12c9f-9247`).
+  - #119 (#118): the ItsDangerous reports as a provenance-labelled [evidence bundle](acceptance/itsdangerous-2026-10-11/README.md).
+- **#111 closed** on demonstrated behaviour:
+  - deterministic tests that fail on `v1.0.0`'s lock mode;
+  - sustained run 3 ([release readiness](release-readiness.md#sustained-use)): 84,438 executions, no unexpected error, coherent reads, integrity ok, and reads answered while another connection held the write lock.
+
+Next action: tag `v1.0.1` on this document's merge after the full gate, verify the published assets, and upgrade the shared service.
+
+The `v1.0.0` handoff below is unchanged.
+
 **First stable release, `v1.0.0`, released and adopted ([#110](https://github.com/ashuangiras/polaroid/issues/110)), as of 2026-10-11.** The supported scope, the 13 criteria and their evidence are in [release-readiness.md](release-readiness.md). Every criterion is met, with the limitations listed there.
 
 - **Merged for it:**
@@ -511,7 +524,7 @@ Repetition was not a cause: terms are sets, so a word repeated in a procedure or
 
 No item is scoped beyond #110 (the `v1.0.0` release). Changes from now on follow ADR-0038: within `v1`, only additions. Hosted CI follows the `hosted-ci` binding (local-only; owner decision, 2026-10-10); the local gates and the release workflow's archive tests are the evidence. Candidates, for the owner to choose and file:
 
-- **Filed: [#111](https://github.com/ashuangiras/polaroid/issues/111).** Multi-statement reads in read transactions, so that they stop queueing for the write lock. A patch release, with no contract change.
+- **Done: [#111](https://github.com/ashuangiras/polaroid/issues/111)** (PR #117): multi-statement reads in read-only snapshot transactions, released in `v1.0.1` ([#120](https://github.com/ashuangiras/polaroid/issues/120)).
 - **Acceptance gaps from #110:** a fresh-agent trial that creates a procedure, and one without the user's persistent Copilot memory ([release readiness](release-readiness.md#acceptance-by-independent-agents)).
 
 The candidates listed before #110 remain open:

@@ -27,7 +27,7 @@ Measured in [#104](https://github.com/ashuangiras/polaroid/issues/104) with real
 
 - **Concurrent revisions and conflicts.** Of concurrent revisions from one base, or creations under one key, exactly one is stored and the others get a `409`. The same holds for binding revisions, invalidations, retirements and toil revisions.
 - **Reads during writes.** Statistics, lists and verification read during concurrent execution recording are consistent and never go back. Every accepted write reads back byte for byte.
-- **Lock contention.** A writer queues for up to 5 seconds. A write that cannot take the lock in time, for example because another program holds a write transaction, is `500 internal`, stores nothing, and can be retried. Reads continue.
+- **Lock contention.** A writer queues for up to 5 seconds. A write that cannot take the lock in time, for example because another program holds a write transaction, is `500 internal`, stores nothing, and can be retried. Reads continue, including graph walks, resolution and verification since `v1.0.1`: they read one snapshot in a read-only transaction and never wait for the write lock ([#111](https://github.com/ashuangiras/polaroid/issues/111), [ADR-0039](../architecture/decisions/0039-read-only-snapshot-transactions.md)).
 - **Shutdown.** A shutdown under load keeps exactly the writes that were answered `201`, and the database passes SQLite's integrity check.
 - **Scale.** Throughput is bounded by one writer at a time. The sustained-use runs ([below](#sustained-use)) give the measured rates.
 
@@ -88,27 +88,41 @@ It is not planned for `v1`.
 
 Two bounded runs on 2026-10-11 against isolated copies of the shared catalog, each restored from a fresh backup and served by its own daemon on another port, with an empty HOME. A script played agents: each loop discovers a task, reads a procedure, resolves a binding, records a leaf and a parent execution with 0.2 to 3 KB of evidence, reads the parent's verification and lists executions. One loop in ten reads the statistics, one in fifty revises a procedure from its latest version, and one in a hundred reports feedback. At the end, every accepted execution was read back and compared byte for byte, and `PRAGMA integrity_check` ran on the stopped catalog.
 
-| | Run 1: saturation | Run 2: agent pace |
-| --- | --- | --- |
-| Build | `24f2446`: the same Go code as `v1.0.0-rc.1` | `v1.0.0-rc.1` release binaries |
-| Load | 30 minutes; 4 workers with no pause between calls | 30 minutes; 8 workers pausing 0 to 2 s (1 s on average) between loops |
-| Executions accepted | 58,780 (about 33 a second) | 27,178 (about 15 a second) |
-| Readback mismatches | 0 | 0 |
-| Errors | 1: a binding resolution got `500 internal` (`database is locked` after the 5 s lock wait) | 0, and no error in the daemon's log |
-| Latency p50 / p99 / max | record 2 / 739 / 5,045 ms; resolve 69 / 1,381 / 5,038 ms; discover 4 / 12 / 63 ms | record 2 / 83 / 444 ms; resolve 26 / 112 / 500 ms; discover 4 / 18 / 108 ms |
-| Catalog | 226 to 59,006 executions; 1.4 MB to 122.5 MB | 236 to 27,414 executions; 1.4 MB to 57.4 MB |
-| Daemon memory (RSS) | about 76 MB at the end | 68 MB at the end, at most 69 MB |
-| `integrity_check` | ok | ok |
+| | Run 1: saturation | Run 2: agent pace | Run 3: saturation, after #111 |
+| --- | --- | --- | --- |
+| Build | `24f2446`: the same Go code as `v1.0.0-rc.1` | `v1.0.0-rc.1` release binaries | `a587fb5`: the code of `v1.0.1` |
+| Load | 30 minutes; 4 workers with no pause between calls | 30 minutes; 8 workers pausing 0 to 2 s (1 s on average) between loops | As run 1 |
+| Executions accepted | 58,780 (about 33 a second) | 27,178 (about 15 a second) | 84,438 (about 47 a second) |
+| Readback mismatches | 0 | 0 | 0 |
+| Errors | 1: a binding resolution got `500 internal` (`database is locked` after the 5 s lock wait) | 0, and no error in the daemon's log | 0, and no error in the daemon's log. 2 revisions got the expected `409 version_conflict` (another worker revised first); every resolution's graph and every parent's verification was coherent |
+| Latency p50 / p99 / max | record 2 / 739 / 5,045 ms; resolve 69 / 1,381 / 5,038 ms; discover 4 / 12 / 63 ms | record 2 / 83 / 444 ms; resolve 26 / 112 / 500 ms; discover 4 / 18 / 108 ms | record 2 / 15 / 148 ms; resolve 110 / 326 / 1,274 ms; discover 4 / 15 / 109 ms |
+| Catalog | 226 to 59,006 executions; 1.4 MB to 122.5 MB | 236 to 27,414 executions; 1.4 MB to 57.4 MB | 253 to 84,691 executions; 1.5 MB to 175.2 MB; write-ahead log at most 57 MB |
+| Daemon memory (RSS) | about 76 MB at the end | 68 MB at the end, at most 69 MB | 86 MB at the end, at most 87 MB |
+| `integrity_check` | ok | ok | ok |
 
-**Finding: reads that take the write lock.** In run 1, one binding resolution failed. Graph walks, resolutions and verification read inside a write transaction, for one consistent snapshot over several statements. So under continuous writing they wait for the write lock like a writer, and past 5 seconds they fail with `500`. No write was lost or altered, and the retry succeeds. At the paced load of run 2, with twice the clients, no call took more than 0.5 s and none failed. Moving these reads to read-only transactions is [#111](https://github.com/ashuangiras/polaroid/issues/111), after `v1.0.0`; it changes no contract.
+**Finding: reads that took the write lock (fixed in `v1.0.1`).** In run 1, one binding resolution failed. Graph walks, resolutions and verification read inside a write transaction, for one consistent snapshot over several statements. So under continuous writing they waited for the write lock like a writer, and past 5 seconds they failed with `500`. No write was lost or altered, and the retry succeeds. At the paced load of run 2, with twice the clients, no call took more than 0.5 s and none failed.
 
-Both runs wrote far faster than the shared catalog's measured rate (about 108 executions a day): run 1 recorded about 540 days of that rate in half an hour.
+[#111](https://github.com/ashuangiras/polaroid/issues/111) moved these reads to read-only snapshot transactions ([ADR-0039](../architecture/decisions/0039-read-only-snapshot-transactions.md)). Deterministic tests show four properties, with a second connection and a barrier inside the open snapshot:
+
+- such a read succeeds while another connection holds an uncommitted write transaction, and does not see it;
+- a commit made during the read is invisible to the whole read;
+- cancelled and failed reads release their connection;
+- conflicts behave as before.
+
+Run 3 repeated run 1's load on that code and had no error. At its end, another connection held the write lock with an uncommitted change. Resolution and verification still answered `200`, in 118 ms and 1 ms, unchanged by the uncommitted row.
+
+- **Latency.** Resolution's median rose from 69 to 110 ms, while its 99th percentile fell from 1,381 to 326 ms. It now runs beside writes instead of between them, over a larger catalog.
+- **The write-ahead log.** Its file stayed at about 57 MB from minute 10 to the end, against about 4 MB in run 1: reads that overlap writes keep checkpoints from restarting it. The file is reused, not grown without bound, and was empty after shutdown.
+
+Every run wrote far faster than the shared catalog's measured rate (about 108 executions a day): run 1 recorded about 540 days of that rate in half an hour.
 
 ## Release criteria
 
 Each criterion must be met for a stable `vX.Y.Z`. Otherwise the release stays a prerelease and the blocker is listed here. The status is updated with the evidence before tagging; criteria 9, 12 and 13 can only be shown by the release itself.
 
 **Outcome: [`v1.0.0`](https://github.com/ashuangiras/polaroid/releases/tag/v1.0.0) was released on 2026-10-11, from `23b2946`, and the shared service runs it.** Every criterion is met, with the limitations below. The tag's notes say the candidate checks passed 27 of 27; the run had 26 checks, and all passed.
+
+**`v1.0.1`** ([#120](https://github.com/ashuangiras/polaroid/issues/120)) is a maintenance release: the #111 fix, with no feature and no API, record or schema change. For its code, criterion 7 was repeated (sustained run 3) and criterion 8 at full scope. Its release, artifact and adoption evidence, criteria 9, 12 and 13, is in [status](status.md) and its release execution. The table below records `v1.0.0`.
 
 | # | Criterion | Measure | Evidence | Status |
 | --- | --- | --- | --- | --- |
@@ -118,7 +132,7 @@ Each criterion must be met for a stable `vX.Y.Z`. Otherwise the release stays a 
 | 4 | Simultaneous local agents are safe | Conflicts are explicit; accepted writes are never lost; reads stay consistent; shutdown under load keeps exactly the acknowledged writes | [#104](https://github.com/ashuangiras/polaroid/issues/104), PR #105 | Met |
 | 5 | Storage failures are safe | A failure mid-write stores nothing; a full disk refuses writes, keeps reads, and recovers after space is freed | #104 tests, and the out-of-space run on a real volume | Met |
 | 6 | Growth is manageable without pruning | Measured rate and policy ([above](#storage-growth)) | This document | Met |
-| 7 | Sustained use | A bounded run of the supported workload has no errors, no lost or altered writes, and a database that passes `integrity_check` | [Sustained use](#sustained-use): run 2, 30 minutes at agent pace, 27,178 executions | Met. Run 1, at saturation, had one failed read ([#111](https://github.com/ashuangiras/polaroid/issues/111), [limitations](#known-limitations)) |
+| 7 | Sustained use | A bounded run of the supported workload has no errors, no lost or altered writes, and a database that passes `integrity_check` | [Sustained use](#sustained-use): run 2, 30 minutes at agent pace, 27,178 executions | Met. Run 1, at saturation, had one failed read ([#111](https://github.com/ashuangiras/polaroid/issues/111), [limitations](#known-limitations)); run 3, the same load on the `v1.0.1` code, had none |
 | 8 | The release target's code is verified | The full gate (`verify-change`) at the release commit's code, and `make lifecycle` against launchd | `verify-change` at `6c98ce3`, verified (`dev.change.verify` `01a12c58-be35`); `make lifecycle` launchd 68/0 (`polaroid.lifecycle.check` `01a12c59-bfe5`). `verify-change` again at the tagged tree, which adds documentation and the release procedure's fixture; cited by the release execution | Met |
 | 9 | The pipeline publishes the release kind correctly | A stable tag becomes a stable release marked latest; every archive is tested natively, without systemd, and as a systemd user service | #108 dry run 38162980089; `v1.0.0-rc.1` run 38163822689 published a prerelease that was not marked latest; `v1.0.0` run [38168355796](https://github.com/ashuangiras/polaroid/actions/runs/38168355796): all nine jobs passed, including the systemd user-service job, and it published a stable release marked latest | Met |
 | 10 | The candidate works as a user receives it | On native platforms, from the published candidate archives: fresh install, MCP and CLI connection, restart and ownership, upgrade from `v0.7.0-verify.1` with history kept, online backup, inspection and restore, rollback to the previous build, and fresh-client tool discovery | `v1.0.0-rc.1` archives downloaded anonymously and checked; an isolated launchd candidate run on darwin/arm64, 26 checks with none failed (repeated with the published `v1.0.0` archive before the upgrade: 26/0); the acceptance chats listed the tools. The other platforms: the release runners' native smoke and harness tests, and the systemd user-service job | Met, natively on darwin/arm64 only |
@@ -203,7 +217,7 @@ The inspected evidence is still the google/uuid trial. The ItsDangerous reports 
 - On macOS, `fsync` does not flush the drive's cache, so a power loss right after a write or backup may lose it.
 - Lexical discovery matches shared words, not meaning, so a task described in other words may not find the right procedure.
 - Concurrent restores of one catalog are not coordinated.
-- **Reads under saturation.** Graph walks, resolutions and verification take the write lock for their snapshot. Under continuous writing from several clients, such a read can wait past the 5-second lock timeout and fail with `500 internal`. It happened once in 29,390 resolutions in sustained run 1, and never at agent pace. Retry. [#111](https://github.com/ashuangiras/polaroid/issues/111) tracks a fix that changes no contract.
+- **Writes under saturation.** Writes take the write lock one at a time. Since `v1.0.1`, reads no longer wait for it ([#111](https://github.com/ashuangiras/polaroid/issues/111)). A write that cannot take the lock within 5 seconds still fails with `500 internal` and stores nothing. This did not happen in the saturation runs; retry if it does. Under continuous reading and writing, the write-ahead log file can stay tens of megabytes (57 MB in run 3) until the load pauses.
 - **Evidence is what agents claim.** Polaroid cannot see a working tree. An execution is accurate only if the agent committed what it ran, as the contract says ([#112](https://github.com/ashuangiras/polaroid/issues/112)). Wrong evidence is withdrawn with `invalidate_execution`.
 - **Acceptance gaps.** No fresh independent agent has been observed creating a procedure: the ItsDangerous procedures were created by an agent with prior Polaroid context. The inspected trials ran with the user's persistent Copilot memory. The ItsDangerous reports cover revision, reuse and self-correction without that memory, but their supporting records were not supplied, and they concern `v0.7.0-verify.1`.
 - **Platform coverage.** Install, upgrade, backup, restore and rollback ran natively only on macOS arm64, on the maintainer's machine. On Linux, the release workflow tests each archive natively, and as a systemd user service on amd64 (`test-managed-service`). darwin/amd64 is tested by the release runners' smoke tests and harness only.

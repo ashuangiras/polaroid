@@ -108,7 +108,9 @@ Second-repository adoption trials are paused while the existing features are pre
    - #106: the contracts state their formats.
    - #108: stable packaging and the readiness document.
    - #112: commit guidance for recorded runs.
-2. **Filed, after 1.0:** [#111](https://github.com/ashuangiras/polaroid/issues/111), multi-statement reads in read transactions (a patch, with no contract change).
+2. [#111](https://github.com/ashuangiras/polaroid/issues/111) Multi-statement reads in read-only snapshot transactions: **done** (PR #117, [ADR-0039](../architecture/decisions/0039-read-only-snapshot-transactions.md)). No contract change.
+3. [#118](https://github.com/ashuangiras/polaroid/issues/118) External ItsDangerous acceptance reports with their provenance: **done** (PR #119).
+4. [#120 Release `v1.0.1` and adopt it](https://github.com/ashuangiras/polaroid/issues/120): the #111 fix as a patch release.
 
 ## Later (unordered, not yet scoped)
 
