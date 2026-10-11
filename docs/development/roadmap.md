@@ -100,6 +100,16 @@ Second-repository adoption trials are paused while the existing features are pre
 6. **Next, proposed, not filed:** record the shared catalog's statistics over time to measure growth before any retention design ([status](status.md#next-work-item)).
 7. **Planned, not scoped:** physical purge, retention, quotas, cleanup, namespaces, promotion between catalogs, separate databases, and a procedure for promoting earlier assessments that `procedure.capability.extract` would reference.
 
+## Stable release
+
+1. [#110 First stable release](https://github.com/ashuangiras/polaroid/issues/110): **done**. `v1.0.0` (tag on `23b2946`) is a stable release for a local, single-user service on loopback, under the compatibility policy of [ADR-0038](../architecture/decisions/0038-stable-releases-and-compatibility.md). The criteria and evidence are in [release readiness](release-readiness.md). The shared managed instance runs it.
+   - #102: the CLI keeps a required argument containing `=`.
+   - #104: concurrency and storage failures are tested.
+   - #106: the contracts state their formats.
+   - #108: stable packaging and the readiness document.
+   - #112: commit guidance for recorded runs.
+2. **Filed, after 1.0:** [#111](https://github.com/ashuangiras/polaroid/issues/111), multi-statement reads in read transactions (a patch, with no contract change).
+
 ## Later (unordered, not yet scoped)
 
 - **The #85 assessment's automation (proposed, not filed):** a committed tool that applies `dev.change.classify` rules mechanically. Its inputs, outputs and acceptance criteria are in the live toil item `polaroid.change-classification.manual` (`candidate`; [#89](https://github.com/ashuangiras/polaroid/issues/89)) ([status](status.md)). Filing it as an issue is a decision for the owner.
