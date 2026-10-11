@@ -506,7 +506,7 @@ Location: /v1/procedures/{id}/lifecycle/events
 
 ### Catalog statistics
 
-`GET /v1/statistics` summarizes the whole catalog ([ADR-0036](decisions/0036-read-only-catalog-statistics.md)). It writes nothing, takes no query parameter (any is `400 invalid_request`), and returns no record content, ID or filesystem path. A real response from the synthetic catalog of the HTTP tests (two repositories, five procedures, nine executions), with eight payload categories left out where marked:
+`GET /v1/statistics` summarizes the whole catalog ([ADR-0036](decisions/0036-read-only-catalog-statistics.md)). It writes nothing, takes no query parameter (any is `400 invalid_request`), and returns no record content, ID or filesystem path. A real response from the synthetic catalog of the HTTP tests (two repositories, five procedures, nine executions), with eight payload categories and the 37 field limits left out where marked:
 
 ```json
 {"statistics_version":1,"generated_at":"2026-10-11T14:50:55.299568Z",
@@ -522,7 +522,8 @@ Location: /v1/procedures/{id}/lifecycle/events
    "execution_evidence":{"count":9,"total_bytes":105,"mean_bytes":11,"max_bytes":25},
    "toil_proposals":{"count":1,"total_bytes":273,"mean_bytes":273,"max_bytes":273}, …},
  "storage":{"schema_version":10,"page_size":4096,"page_count":70,"freelist_count":0,"database_bytes":286720,
-   "files":{"database":{"present":true,"bytes":4096},"wal":{"present":true,"bytes":947632},"shm":{"present":true,"bytes":32768}}}}
+   "files":{"database":{"present":true,"bytes":4096},"wal":{"present":true,"bytes":947632},"shm":{"present":true,"bytes":32768}}},
+ "write_limits":{"policy_version":1,"write_max_bytes":262144,"request_max_bytes":1048576,"fields":[…]}}
 ```
 
 Here every page is still in the WAL, so the database file is one page while `database_bytes` is 70 pages.
@@ -550,7 +551,7 @@ Every persisted, user-controlled text and JSON field has a byte limit, and so ha
 | whole write | 262,144 | the sum of all bounded fields of one request |
 
 - **Measurement:** JSON is measured after the compaction used for storage (whitespace removed, member order and string escapes as sent, so `"\u00e9"` counts 6 bytes and `"é"` 2); text is measured in UTF-8 bytes as stored. Exactly the limit is accepted; one byte more is refused. Absent optional values are not counted; feedback without `context` stores and counts `{}`.
-- **Order:** the 1 MiB body limit applies first, to the raw bytes (`request_too_large`); then the usual validation (`invalid_request`); then the limits. Conflicts, existence and retirement are checked after them.
+- **Order:** the 1 MiB body limit applies first, to the raw bytes (`request_too_large`); then the validation that needs no stored record (`invalid_request`); then the limits. Checks against stored records come after them: conflicts, existence, retirement, and the `invalid_request` checks that compare a write with stored records (an execution's version, binding, scope, decisions and child inputs; a toil revision's status transition and links). A write that fails one of those and is also over a limit gets `value_too_large`.
 - **Error:** `413 value_too_large` lists every value over its limit; field `*` is the whole write. The message names fields and sizes, never content. Nothing is stored.
 
 ```json

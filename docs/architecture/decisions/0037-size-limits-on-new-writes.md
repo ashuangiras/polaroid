@@ -62,12 +62,12 @@ All other measured fields are smaller. The largest whole write was a procedure v
 
 **Order and error.**
 
-- A write is first checked as before. Any other problem is `400 invalid_request`, and sizes are not reported.
+- A write is first checked as before, as far as that needs no stored record. Any problem found there is `400 invalid_request`, and sizes are not reported.
 - A structurally valid write with a field over its limit, or over the whole-write limit, is `413 value_too_large`. Its `limits` list every violation: `{"field","bytes","max_bytes"}`.
-- Field paths are those of other field errors: `version.references[2].inputs`, `revision.sources[0].steps[1]`. MCP drops the `version.` and `revision.` prefixes, as for every field error.
+- Field paths are those of other field errors: `version.references[2].inputs`, `revision.sources[0].steps[1]`. MCP drops the `version.`, `revision.` and `origin.` prefixes, as for every field error.
 - The whole write is reported as field `*`.
 - The message names fields and numbers, never content.
-- Limits are checked before anything is stored, so a refused write creates no identity, version, revision, event or link. Conflicts, existence and retirement are checked afterwards, in the store's transaction, as before.
+- Limits are checked before anything is stored, so a refused write creates no identity, version, revision, event or link. Checks against stored records come afterwards, as before: conflicts, existence and retirement in the store's transaction, and the `invalid_request` checks that compare an execution or a toil revision with stored records. A write that fails one of those and is also over a limit gets `value_too_large`.
 
 **Request bodies.** The transports keep their 1 MiB body limit (`413 request_too_large`), checked first on the raw bytes. A whitespace-heavy body can therefore be refused before compaction even though its fields would fit. Field limits apply after compaction. Queries that store nothing are not bounded by this policy: duplicate checks, graph targets, discovery.
 
@@ -80,6 +80,8 @@ All other measured fields are smaller. The largest whole write was a procedure v
 - The fixture loader compares before it writes, so loading fixtures that match stored records writes nothing and is unaffected.
 
 **Discoverable policy.** The policy is one table in the domain. Validation looks up each limit in it, and the statistics response reports it as an additive member `write_limits`: `policy_version`, `write_max_bytes`, `request_max_bytes` and `fields`, each `{"record","field","kind","max_bytes"}`. There is no separate tool, and the limits are not configurable.
+
+**Within `/v1`.** The API rules ask for a new version prefix when a rule is tightened. This decision stays within `/v1`, as [ADR-0024](0024-child-inputs-follow-the-reference-mapping.md) did: every value stored in the shared catalog is at most a quarter of its new limit, so none of those writes would be refused now, and a second prefix would split clients for no gain. A client that does exceed a limit gets a distinct code, `value_too_large`, never a changed meaning of an accepted write.
 
 **Per-write limits are not growth control.** They bound one write. They do not bound how many writes are made or the catalog's total size. That is retention's question, still unscoped.
 
