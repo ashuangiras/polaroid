@@ -1,6 +1,6 @@
 # HTTP API (v1)
 
-This page is the contract of the API that `polaroidd` serves. It covers only what is implemented: procedure identity and immutable versions with subprocedure references and applicability, lexical procedure discovery and duplicate suggestions, the repository registry, repository bindings with immutable revisions, execution records, feedback reports, toil items with append-only revisions, and the catalog lifecycle: execution-evidence invalidation and procedure retirement. Field rules are defined in [records.md](records.md). The same operations are available to MCP clients at `/mcp`; see [mcp.md](mcp.md).
+This page is the contract of the API that `polaroidd` serves. It covers only what is implemented: procedure identity and immutable versions with subprocedure references and applicability, lexical procedure discovery and duplicate suggestions, the repository registry, repository bindings with immutable revisions, execution records, feedback reports, toil items with append-only revisions, the catalog lifecycle: execution-evidence invalidation and procedure retirement, and read-only catalog statistics. Field rules are defined in [records.md](records.md). The same operations are available to MCP clients at `/mcp`; see [mcp.md](mcp.md).
 
 - **Base URL:** `http://127.0.0.1:7417` by default (`polaroidd -addr`).
 - **Bodies:** every request and response body is UTF-8 JSON. Requests with a body must send `Content-Type: application/json` and stay under 1 MiB.
@@ -51,6 +51,7 @@ This page is the contract of the API that `polaroidd` serves. It covers only wha
 | `GET /v1/toil-items/by-key/{canonical_key}` | `200` toil item history | The same history, looked up by canonical key. |
 | `GET /v1/toil-items/{id}/revisions/{n}` | `200` toil revision | One revision. |
 | `POST /v1/toil-items/{id}/revisions` | `201` toil revision, with a `Location` header | Append a revision derived from `base_revision`. |
+| `GET /v1/statistics` | `200` statistics | [Catalog statistics](#catalog-statistics): counts, payload sizes and storage. Read-only; takes no parameters. |
 
 `HEAD` is accepted wherever `GET` is.
 
@@ -503,6 +504,38 @@ Location: /v1/procedures/{id}/lifecycle/events
 - `GET /v1/procedures/{id}/lifecycle/events` returns the state, `latest_event` and every event, oldest first (`"events":[]` for a procedure never retired). Events are never changed or deleted.
 - **While retired:** the procedure list and discovery leave it out unless `lifecycle` is `retired` or `all`; reads by ID, key and version, graphs, resolution, bindings, executions and verification keep working, and graph nodes of it carry `retirement`. These writes are `409 procedure_retired`, whose message says to reactivate it first: a new version of it; a new version (of any procedure) with a reference to it, pinned or contextual, naming each `version.references[i].procedure_id` in `fields`; a binding of it (`fields`: `procedure_id`); a binding revision of a binding of it. Recording executions, origins, feedback and toil items that cite it is still accepted. Retirement never changes a parent, a reference or a binding, and never cascades.
 
+### Catalog statistics
+
+`GET /v1/statistics` summarizes the whole catalog ([ADR-0036](decisions/0036-read-only-catalog-statistics.md)). It writes nothing, takes no query parameter (any is `400 invalid_request`), and returns no record content, ID or filesystem path. A real response from the synthetic catalog of the HTTP tests (two repositories, five procedures, nine executions), with eight payload categories left out where marked:
+
+```json
+{"statistics_version":1,"generated_at":"2026-10-11T14:50:55.299568Z",
+ "records":{"procedures":5,"procedure_versions":6,"procedure_references":3,"procedure_origins":1,"procedure_lifecycle_events":3,
+   "repositories":2,"repository_aliases":1,"bindings":1,"binding_revisions":2,"executions":9,"execution_children":4,
+   "execution_decisions":2,"execution_invalidations":5,"feedback":1,"toil_items":1,"toil_revisions":2,"toil_revision_sources":2,
+   "toil_revision_executions":2},
+ "procedures":{"by_lifecycle":{"active":4,"retired":1},"by_scope":{"shared":1,"local":1,"unspecified":3}},
+ "executions":{"by_outcome":{"succeeded":8,"failed":1},"by_evidence_status":{"valid":4,"invalidated":5},
+   "invalidated_by_outcome":{"succeeded":4,"failed":1},"valid_with_invalidated_child":1},
+ "toil_items":{"by_status":{"observed":0,"candidate":1,"implemented":0,"validated":0,"retired":0}},
+ "payloads":{"procedure_contracts":{"count":6,"total_bytes":57,"mean_bytes":9,"max_bytes":47},
+   "execution_evidence":{"count":9,"total_bytes":105,"mean_bytes":11,"max_bytes":25},
+   "toil_proposals":{"count":1,"total_bytes":273,"mean_bytes":273,"max_bytes":273}, …},
+ "storage":{"schema_version":10,"page_size":4096,"page_count":70,"freelist_count":0,"database_bytes":286720,
+   "files":{"database":{"present":true,"bytes":4096},"wal":{"present":true,"bytes":947632},"shm":{"present":true,"bytes":32768}}}}
+```
+
+Here every page is still in the WAL, so the database file is one page while `database_bytes` is 70 pages.
+
+- **`records`** counts every stored record kind: identities (`procedures`, `repositories`, `bindings`, `executions`, `feedback`, `toil_items`), their history (`procedure_versions`, `procedure_lifecycle_events`, `binding_revisions`, `toil_revisions`) and relationship records (`procedure_references`, `procedure_origins`, `repository_aliases`, `execution_children`, `execution_decisions`, `execution_invalidations`, `toil_revision_sources`, `toil_revision_executions`).
+- **`procedures`**: `by_lifecycle` from each procedure's latest lifecycle event, `by_scope` from its latest version. Each adds up to `records.procedures`.
+- **`executions`**: `by_outcome` is the recorded outcome of every execution, invalidated ones included; it is not verification. `by_evidence_status` is `valid` or `invalidated`; `invalidated_by_outcome` splits the invalidated ones by outcome. `valid_with_invalidated_child` counts valid executions that directly link at least one invalidated child (they report `child_invalidated`); their ancestors are not counted. Verified executions are not counted: that needs every execution tree walked.
+- **`toil_items`**: `by_status` of each item's latest revision.
+- **`payloads`**: for `procedure_contracts`, `procedure_instructions`, `reference_inputs`, `binding_revision_inputs`, `execution_inputs`, `execution_evidence`, `execution_environment_attributes`, `decision_evidence`, `feedback_contexts`, `toil_assessments` and `toil_proposals`, over every version and revision: `count` of stored values, `total_bytes`, `mean_bytes` (rounded down, 0 without values) and `max_bytes`. A size is the UTF-8 length of the value's stored JSON text (compact, escapes as received); a response writes an escaped character as itself, so it can be shorter. `{}` counts 2 bytes; an absent optional value (`proposal`, a decision's `evidence`) is not counted.
+- **`storage`**: `schema_version`, `page_size`, `page_count`, `freelist_count` and `database_bytes` (page size × page count) describe the database as of the same snapshot. `files` are the sizes of the database file and SQLite's `wal` and `shm` files, each `{"present":true,"bytes":N}` or `{"present":false}`.
+- **Consistency:** everything except `storage.files` comes from one SQL statement, so one committed state; `generated_at` is taken just before it. `files` are read just after it and may disagree: a commit grows the WAL, a checkpoint moves it into the database file, and SQLite deletes `wal` and `shm` when its last connection closes. A file that does not exist is `present: false`; another failure to read a file's size is `500 internal`.
+- Members may be added within `statistics_version` 1; removing one or changing its meaning increments it.
+
 ## Errors
 
 Every error is a JSON object of this form:
@@ -591,6 +624,7 @@ Example `invalid_request` response:
 | `polaroid get-toil-item-by-key KEY` | `GET /v1/toil-items/by-key/{key}` |
 | `polaroid get-toil-revision ID N` | `GET /v1/toil-items/{id}/revisions/{n}` |
 | `polaroid revise-toil-item ID [FILE]` | `POST /v1/toil-items/{id}/revisions` |
+| `polaroid statistics` | `GET /v1/statistics` |
 
 `FILE` defaults to stdin, and so does `-`. Trailing `NAME=VALUE` arguments of the list commands become query parameters, for example `polaroid list repository=github.com/ashuangiras/polaroid scope=shared limit=20`. The server is `-server URL`, else `$POLAROID_URL`, else `http://127.0.0.1:7417`.
 
@@ -652,3 +686,7 @@ Changes for [#91](https://github.com/ashuangiras/polaroid/issues/91) ([ADR-0035]
 - New response fields, always present: `evidence_status` on executions, execution list items and verifications; `lifecycle_status` on procedures, list items, discovery candidates, duplicate suggestions and `key_collision`. Present only when they apply: `invalidation`, `lifecycle_event`, `retirement` on graph nodes, `invalidated_execution_ids` on combination statuses and target verification.
 - Until something is invalidated or retired, every existing response is the same apart from those fields, and every request behaves as before. Afterwards: the procedure list and discovery leave retired procedures out by default (`lifecycle=all` lists everything, as before); `latest_execution_id` is the latest **valid** execution and is omitted when there is none; verification, combination statuses, contextual selection and target verification ignore invalidated executions as evidence.
 - A procedure-list snapshot cursor issued by an earlier build is still accepted, and sees no lifecycle event. A schema-10 catalog cannot be opened by earlier builds, and their `inspect-backup` and `restore` refuse a schema-10 backup.
+
+Changes for [#96](https://github.com/ashuangiras/polaroid/issues/96) ([ADR-0036](decisions/0036-read-only-catalog-statistics.md)), additive; no migration:
+
+- New read-only endpoint `GET /v1/statistics`, MCP tool `get_catalog_statistics` and CLI command `statistics`. No existing endpoint, request, response, record or schema changes, and a schema-10 catalog stays readable by `v0.6.0-verify.1`.

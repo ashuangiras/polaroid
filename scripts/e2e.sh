@@ -591,7 +591,7 @@ check "graph context needs both parameters; resolution needs an environment" equ
 
 ########################################################################
 section "Use Polaroid from an agent over MCP" \
-	"\`polaroidd\` serves MCP at \`/mcp\` (ADR-0014): stateless streamable HTTP, protocols 2026-07-28 and 2025-11-25 (ADR-0016), behind the same loopback and cross-origin checks. 37 tools mirror the HTTP API with flat arguments named after record fields; results are the API's record shapes, errors are tool errors with the API's codes, and three read-only resource templates serve procedures, versions and bindings. Below, raw JSON-RPC over curl shows exactly what an MCP client sends." \
+	"\`polaroidd\` serves MCP at \`/mcp\` (ADR-0014): stateless streamable HTTP, protocols 2026-07-28 and 2025-11-25 (ADR-0016), behind the same loopback and cross-origin checks. 38 tools mirror the HTTP API with flat arguments named after record fields; results are the API's record shapes, errors are tool errors with the API's codes, and three read-only resource templates serve procedures, versions and bindings. Below, raw JSON-RPC over curl shows exactly what an MCP client sends." \
 	"Point an MCP client at \`http://127.0.0.1:7417/mcp\`, e.g. VS Code \`.vscode/mcp.json\`: \`{\"servers\": {\"polaroid\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:7417/mcp\"}}}\`."
 MCP_META='{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/clientInfo":{"name":"manual-test","version":"1"}}'
 rpc() { # rpc METHOD NAME PARAMS [PROTOCOL]: one JSON-RPC request; NAME may be empty
@@ -606,7 +606,7 @@ tool() { rpc tools/call "$1" "$(jq -cn --arg n "$1" --argjson a "$2" '{name: $n,
 show 'rpc server/discover "" "{}" | jq -c "{versions: .result.supportedVersions, capabilities: (.result.capabilities | keys), server: .result._meta[\"io.modelcontextprotocol/serverInfo\"].name}"'
 check "server/discover: protocols 2026-07-28 and 2025-11-25, tools and resources" json_has '.versions == ["2026-07-28","2025-11-25"] and .capabilities == ["resources","tools"] and .server == "polaroid"'
 show 'rpc tools/list "" "{}" | jq -c "{tools: (.result.tools | length), read_only: [.result.tools[] | select(.annotations.readOnlyHint) | .name] | length, names: [.result.tools[].name] | sort}"'
-check "37 tools, 23 of them read-only" json_has '.tools == 37 and .read_only == 23'
+check "38 tools, 24 of them read-only" json_has '.tools == 38 and .read_only == 24'
 show 'tool get_procedure "{\"canonical_key\": \"go.dependency.add\"}" | jq -S .result.structuredContent | shasum -a 256 | cut -c1-16; get /v1/procedures/by-key/go.dependency.add | jq -S . | shasum -a 256 | cut -c1-16'
 check "get_procedure over MCP returns the same document as GET /v1/procedures/by-key" equal "$(sed -n 1p <<<"$LAST")" "$(sed -n 2p <<<"$LAST")"
 show 'tool create_procedure "{\"canonical_key\": \"mcp.created\", \"philosophy\": \"p\", \"method\": \"m\", \"contract\": {\"z\": 1, \"a\": 2}, \"instructions\": {}, \"revision_reason\": \"Created by an agent over MCP.\"}" | jq -r ".result.content[0].text" | jq -c "{id, canonical_key, contract: .versions[0].contract}"'
@@ -836,6 +836,23 @@ RACE_P="$(mk91 e2e.lifecycle.race '[]')"
 show 'race 8 "/v1/procedures/$RACE_P/retirement" "{\"base_event\": 0, \"reason\": \"r\", \"actor\": \"e2e.agent\"}" | sort | uniq -c'
 check "of 8 concurrent retirements from one base, exactly one is stored" count_is 1 201
 check "the other seven get 409" count_is 7 409
+
+########################################################################
+section "Catalog statistics, read-only" \
+	"One request summarizes the whole catalog (ADR-0036): record counts (identities apart from their revisions and relationship records), procedures by lifecycle and scope, executions by recorded outcome and by evidence status, toil items by latest status, logical payload bytes (UTF-8 bytes of the stored JSON text: count, total, mean, max), and database pages and file sizes. Counts and payloads are one snapshot; file sizes are read just after it. It takes no parameters, writes nothing and names no path." \
+	"\`bin/polaroid statistics\`, or \`curl http://127.0.0.1:7417/v1/statistics\`; MCP \`get_catalog_statistics\`."
+show 'bin/polaroid statistics | jq -c "{statistics_version, records: (.records | {procedures, procedure_versions, executions, execution_invalidations}), executions: .executions | {by_outcome, by_evidence_status}, storage: .storage | {schema_version, files: (.files | map_values(.present))}}"'
+check "version 1, schema 10, with the database, WAL and shared-memory files present" json_has '.statistics_version == 1 and .storage.schema_version == 10 and .storage.files == {database: true, wal: true, shm: true}'
+STATS="$(bin/polaroid statistics)"
+check "executions and invalidations match the execution lists" equal "$(jq -c '[.records.executions, .executions.by_evidence_status.invalidated]' <<<"$STATS")" "$(jq -sc '[(.[0].executions | length), (.[1].executions | length)]' <(bin/polaroid executions) <(bin/polaroid executions evidence_status=invalidated))"
+LAST="$STATS"
+check "procedures by lifecycle and by scope each add up to the procedure count" json_has '(.procedures.by_lifecycle | add) == .records.procedures and (.procedures.by_scope | add) == .records.procedures'
+check "outcomes include invalidated executions; evidence statuses add up" json_has '(.executions.by_outcome | add) == .records.executions and (.executions.by_evidence_status | add) == .records.executions and .executions.invalidated_by_outcome.succeeded >= 2'
+check "no value names a filesystem path" json_has '[.. | strings | select(contains("/"))] == []'
+show 'api GET "/v1/statistics?repository=github.com/example/service-a" | tail -n1 | jq -c .error.code; api POST /v1/statistics "{}" | grep -i "^allow:"'
+check "a parameter is 400 invalid_request; POST is not allowed" equal "$LAST" $'"invalid_request"\nAllow: GET, HEAD'
+show 'diff <(jq -c "del(.generated_at, .storage.files)" <<<"$STATS") <(bin/polaroid statistics | jq -c "del(.generated_at, .storage.files)") && echo unchanged'
+check "reading statistics changed nothing they count" out_has unchanged
 
 ########################################################################
 section "The database enforces immutability itself" \
