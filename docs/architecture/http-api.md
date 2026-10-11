@@ -1,6 +1,6 @@
 # HTTP API (v1)
 
-This page is the contract of the API that `polaroidd` serves. It covers only what is implemented: procedure identity and immutable versions with subprocedure references and applicability, lexical procedure discovery and duplicate suggestions, the repository registry, repository bindings with immutable revisions, execution records, feedback reports, and toil items with append-only revisions. Field rules are defined in [records.md](records.md). The same operations are available to MCP clients at `/mcp`; see [mcp.md](mcp.md).
+This page is the contract of the API that `polaroidd` serves. It covers only what is implemented: procedure identity and immutable versions with subprocedure references and applicability, lexical procedure discovery and duplicate suggestions, the repository registry, repository bindings with immutable revisions, execution records, feedback reports, toil items with append-only revisions, and the catalog lifecycle: execution-evidence invalidation and procedure retirement. Field rules are defined in [records.md](records.md). The same operations are available to MCP clients at `/mcp`; see [mcp.md](mcp.md).
 
 - **Base URL:** `http://127.0.0.1:7417` by default (`polaroidd -addr`).
 - **Bodies:** every request and response body is UTF-8 JSON. Requests with a body must send `Content-Type: application/json` and stay under 1 MiB.
@@ -13,12 +13,15 @@ This page is the contract of the API that `polaroidd` serves. It covers only wha
 | --- | --- | --- |
 | `GET /healthz` | `200 {"status":"ok"}` | The daemon and its database are reachable. |
 | `POST /v1/procedures` | `201` history, with a `Location` header | Create a procedure and its version 1, with an optional `origin`. |
-| `GET /v1/procedures[?repository=…][&scope=…][&q=…][&limit=…&after=…][&snapshot=true]` | `200 {"procedures":[...]}` | List procedures, ordered by canonical key, optionally [filtered and paged](#discovery-filters-and-pages). |
-| `GET /v1/procedures/{id}` | `200` history | A procedure and all of its versions, oldest first. |
+| `GET /v1/procedures[?repository=…][&scope=…][&q=…][&lifecycle=…][&limit=…&after=…][&snapshot=true]` | `200 {"procedures":[...]}` | List procedures, ordered by canonical key, optionally [filtered and paged](#discovery-filters-and-pages); retired ones only with `lifecycle`. |
+| `GET /v1/procedures/{id}` | `200` history | A procedure and all of its versions, oldest first, retired or not. |
 | `GET /v1/procedures/by-key/{canonical_key}` | `200` history | The same history, looked up by canonical key. |
-| `GET /v1/procedures/discovery?task=…[&repository=…][&limit=…]` | `200` discovery | Procedures whose latest version shares words with a task, [ranked and explained](#discover-procedures-for-a-task). Read-only. |
-| `POST /v1/procedures/duplicates` | `200` duplicates | [Check a proposed procedure](#check-a-proposal-for-duplicates) for an existing canonical key and overlapping content. Read-only: stores nothing. |
+| `GET /v1/procedures/discovery?task=…[&repository=…][&lifecycle=…][&limit=…]` | `200` discovery | Procedures whose latest version shares words with a task, [ranked and explained](#discover-procedures-for-a-task). Read-only. |
+| `POST /v1/procedures/duplicates` | `200` duplicates | [Check a proposed procedure](#check-a-proposal-for-duplicates) for an existing canonical key and overlapping content, retired procedures included. Read-only: stores nothing. |
 | `POST /v1/procedures/{id}/origin` | `201` history | Record where and why the procedure was first created, once. |
+| `GET /v1/procedures/{id}/lifecycle/events` | `200` lifecycle | The procedure's [lifecycle](#procedure-lifecycle) state and every retirement and reactivation. |
+| `POST /v1/procedures/{id}/retirement` | `201` lifecycle, with a `Location` header | Retire the procedure, against `base_event`. |
+| `POST /v1/procedures/{id}/reactivation` | `201` lifecycle, with a `Location` header | Reactivate a retired procedure, against `base_event`. |
 | `GET /v1/procedures/{id}/versions/{n}` | `200` version | One version. |
 | `GET /v1/procedures/{id}/versions/{n}/graph` | `200` graph node | The version's composition graph, with the exact version each reference selects. |
 | `GET /v1/procedures/{id}/versions/{n}/verifications[?repository=…][&commit=…][&environment=…]` | `200 {"verifications":[...]}` | The version's execution combinations and whether each is verified. Not paginated. |
@@ -29,9 +32,11 @@ This page is the contract of the API that `polaroidd` serves. It covers only wha
 | `GET /v1/bindings/{id}/revisions/{n}` | `200` binding revision | One revision. |
 | `POST /v1/bindings/{id}/revisions` | `201` binding revision, with a `Location` header | Append a revision derived from `base_revision`. |
 | `POST /v1/executions` | `201` execution, with a `Location` header | Record one finished run. |
-| `GET /v1/executions[?procedure_id=…[&version=…]][&repository=…][&commit=…][&limit=…&after=…]` | `200 {"executions":[...]}` | List executions, oldest first, without `inputs` and `evidence`. |
-| `GET /v1/executions/{id}` | `200` execution | One execution, in full. |
+| `GET /v1/executions[?procedure_id=…[&version=…]][&repository=…][&commit=…][&evidence_status=…][&limit=…&after=…]` | `200 {"executions":[...]}` | List executions, oldest first, without `inputs` and `evidence`. |
+| `GET /v1/executions/{id}` | `200` execution | One execution, in full, with its evidence status. |
 | `GET /v1/executions/{id}/verification` | `200` verification | Whether one execution is verified, and its combination. |
+| `POST /v1/executions/{id}/invalidation` | `201` invalidation state, with a `Location` header | [Withdraw the execution as evidence](#execution-evidence-invalidation), permanently. |
+| `GET /v1/executions/{id}/invalidation` | `200` invalidation state | Whether the execution is still valid evidence. |
 | `POST /v1/feedback` | `201` feedback report, with a `Location` header | Report a problem or a suggestion, optionally naming its subject. |
 | `GET /v1/feedback[?kind=…][&subject_type=…[&subject_id=…[&subject_version=…]]][&repository=…][&limit=…&after=…]` | `200 {"feedback":[...]}` | List feedback reports, oldest first, in full. |
 | `GET /v1/feedback/{id}` | `200` feedback report | One feedback report. |
@@ -76,7 +81,7 @@ Location: /v1/procedures/01a11de2-5b69-705a-a457-278000c106be
    "contract":{"inputs":{}},"instructions":{"steps":["a"]},"revision_reason":"Initial version.","created_at":"2026-10-08T23:38:56.233022Z"}]}
 ```
 
-A **history** has the fields `id`, `canonical_key`, `created_at`, `latest_version`, `scope`, `goal`, `applicability` and `origin` (the last three only when present) and `versions`. A list item has the same fields without `versions`. `scope`, `goal` and `applicability` describe version `latest_version` only: `scope` is its applicability, `shared`, `local` or `unspecified` ([ADR-0023](decisions/0023-pagination-guarantees-and-scope-labels.md)). A **version** has the fields `procedure_id`, `version`, `philosophy`, `method`, `scope` (this version's own declaration, always present), `goal` and `applicability` (only when given), `contract`, `instructions`, `references` (only when the version has references), `revision_reason` and `created_at`. `contract` and `instructions` are returned with insignificant whitespace removed. Otherwise they are exactly as submitted.
+A **history** has the fields `id`, `canonical_key`, `created_at`, `latest_version`, `scope`, `lifecycle_status`, `lifecycle_event`, `goal`, `applicability` and `origin` (the last four only when present) and `versions`. A list item has the same fields without `lifecycle_event` and `versions`. `scope`, `goal` and `applicability` describe version `latest_version` only: `scope` is its applicability, `shared`, `local` or `unspecified` ([ADR-0023](decisions/0023-pagination-guarantees-and-scope-labels.md)). `lifecycle_status` is the identity's state, `active` or `retired`, and `lifecycle_event` its latest [lifecycle event](#procedure-lifecycle), omitted when there is none ([ADR-0035](decisions/0035-evidence-invalidation-and-procedure-retirement.md)). A **version** has the fields `procedure_id`, `version`, `philosophy`, `method`, `scope` (this version's own declaration, always present), `goal` and `applicability` (only when given), `contract`, `instructions`, `references` (only when the version has references), `revision_reason` and `created_at`. `contract` and `instructions` are returned with insignificant whitespace removed. Otherwise they are exactly as submitted.
 
 A create request may add `"origin": {"repository_id": …, "reason": …}`, and a version may add `"goal"` and `"applicability": {"shared": {}}` or `{"repository": "<repository id>"}` ([records.md](records.md#applicability-and-origin-implemented)). `POST /v1/procedures/{id}/origin` with `{"repository_id", "reason"}` records an origin later, once: a second one is `409 origin_exists`, and an unregistered repository is `400` naming `origin.repository_id`.
 
@@ -113,7 +118,7 @@ A graph deeper than 32 references or larger than 2048 nodes is rejected with `42
 
 `GET /v1/procedures/{id}/versions/{n}/graph[?repository=…&environment=…[&commit=…&inputs=…[&decisions=…]]]` returns a nested tree.
 
-- Each node has `procedure_id`, `canonical_key`, `version` (the exact version selected), `scope` (that version's own declaration), `applicability` (when declared), `verified_by` and `selection_evidence` (only when the node has evidence in the context), `target_verification` (only with a target) and `references`, which is empty for a leaf.
+- Each node has `procedure_id`, `canonical_key`, `version` (the exact version selected), `scope` (that version's own declaration), `applicability` (when declared), `retirement` (only when the procedure is retired: its latest lifecycle event, `{"event", "status", "reason", "actor", "created_at"}`), `verified_by` and `selection_evidence` (only when the node has evidence in the context), `target_verification` (only with a target) and `references`, which is empty for a leaf. A retired node is selected exactly as before, and keeps its evidence and target verification: retirement says the procedure should not be used for new work, not that its runs did not happen.
 - Each reference has its stored `name` and `version_policy`, `condition` (conditional references only), then `selected_by` (`pin`, `evidence` or `latest`), `skipped_by` (only when the node's evidence recorded the reference as not applicable: that execution's ID, so the child was selected without it), `decision` (only with a target, for conditional references: `applicable`, `not_applicable` or `undecided`), its stored `inputs`, and the selected child `node`. Every reference is listed, conditional ones included, whatever evidence decided.
 - Without `repository` and `environment`, pinned references select the pin and contextual references the target's latest version at the moment of the read.
 - With them, the graph is resolved from evidence in that repository and environment ([records.md](records.md#contextual-resolution-implemented)). They must be given together.
@@ -124,7 +129,7 @@ A graph deeper than 32 references or larger than 2048 nodes is rejected with `42
 
 `selection_evidence` is `{"execution_id", "repository", "repository_id", "commit", "environment": {"name"}}`: the execution that selected the node, which may have run at any commit and with any inputs, with the identifier it was recorded under and, when registered, its repository (`repository_id`, [ADR-0022](decisions/0022-repository-identity-in-evidence.md)). `verified_by` repeats its ID, for compatibility. Neither says anything about another commit.
 
-`target_verification` has the shape of an entry of the [verifications list](#verification): `combination` is the node's exact selected combination at the target (repository, `commit`, environment, the node's effective `inputs` in canonical form, and the selected child-version tree), `verified` is the status of its latest execution there, and `latest_execution_id` and `execution_ids` list those executions. If nothing has run in that combination, `verified` is `false`, `execution_ids` is `[]` and `latest_execution_id` is omitted.
+`target_verification` has the shape of an entry of the [verifications list](#verification): `combination` is the node's exact selected combination at the target (repository, `commit`, environment, the node's effective `inputs` in canonical form, and the selected child-version tree), `verified` is the status of its latest valid execution there, `latest_execution_id` and `execution_ids` list those executions, and `invalidated_execution_ids` (when any) the invalidated ones, which never decide. If no valid execution has run in that combination, `verified` is `false` and `latest_execution_id` is omitted; `execution_ids` is `[]` when nothing ran.
 
 With conditional references, the expected child tree follows the target's `decisions`: a reference decided not applicable is expected as `{"reference": "…", "skipped": true}` and gets no `target_verification` below it; an applicable one is expected executed. A node with a conditional reference below it that `decisions` does not decide reports `"undecided": ["<path>", …]`, `verified: false` and `execution_ids: []`: no execution is looked up, and nothing is inferred from earlier runs ([ADR-0029](decisions/0029-conditional-references-and-applicability-decisions.md)).
 
@@ -227,7 +232,8 @@ The response is `201` with the repository and `Location: /v1/repositories/{id}`:
 
 - `repository`: only procedures whose latest version applies there: shared, unspecified, or local to that repository (by identity);
 - `scope`: `shared`, `local` or `unspecified`;
-- `q`: the canonical key or the latest goal contains this text, ignoring ASCII case.
+- `q`: the canonical key or the latest goal contains this text, ignoring ASCII case;
+- `lifecycle`: `active` (the default: retired procedures are left out), `retired` or `all` ([ADR-0035](decisions/0035-evidence-invalidation-and-procedure-retirement.md)).
 
 The procedure, repository, binding, execution, feedback and toil item lists take **opt-in pagination** ([ADR-0021](decisions/0021-targeted-feedback-and-bounded-lists.md), [ADR-0023](decisions/0023-pagination-guarantees-and-scope-labels.md)):
 
@@ -240,7 +246,7 @@ The procedure, repository, binding, execution, feedback and toil item lists take
   - Filters are evaluated on each page against the state then: a procedure's latest version (for `scope`, `q` and `repository`), a toil item's latest revision (for every toil filter) and the repository registry (for every `repository` filter). A record whose membership changes between pages may be missed, or returned late. Item contents, such as `latest_version`, are as of the page that returned them.
   - To see what a traversal could not return, start again without `after`.
 - **Snapshot traversal** (`snapshot=true`, with `limit`, on `GET /v1/procedures`, `GET /v1/bindings` and `GET /v1/toil-items`): the first page fixes a boundary, carried by its cursors, and every page reads only records committed before it.
-  - **Membership and contents are fixed as of the first page.** For procedures: which exist, each one's latest version (so `latest_version`, `scope`, `goal`, `applicability`), its origin, and repository identity for `repository`. For bindings: which exist, `latest_revision`, and the identity for `repository`. For toil items: which exist, each one's latest revision (so `latest_revision`, `status`, `activity`, `scope`, `applicability`, `updated_at` and the sources `procedure_id` matches), and the identity for `repository`.
+  - **Membership and contents are fixed as of the first page.** For procedures: which exist, each one's latest version (so `latest_version`, `scope`, `goal`, `applicability`), its origin, its lifecycle state, and repository identity for `repository`. For bindings: which exist, `latest_revision`, and the identity for `repository`. For toil items: which exist, each one's latest revision (so `latest_revision`, `status`, `activity`, `scope`, `applicability`, `updated_at` and the sources `procedure_id` matches), and the identity for `repository`.
   - **Every record within the boundary is returned exactly once**, wherever its key sorts. Records committed later are excluded: start a new snapshot to see them.
   - **Nothing else is a snapshot:** reading a record by ID, or any other list, returns current state. `snapshot` must be given on every page; it is `400` without `limit`, with `true` or `false` as its only values, and an unknown parameter on the other lists.
 - A filter given but empty is `400`.
@@ -261,11 +267,11 @@ The procedure, repository, binding, execution, feedback and toil item lists take
 
 - **Terms.** The task is lowercased and split at every character that is not a letter or digit. Words shorter than two characters and common English function words (`a`, `an`, `and`, `are`, `as`, `at`, `be`, `but`, `by`, `can`, `do`, `does`, `for`, `from`, `has`, `have`, `if`, `in`, `into`, `is`, `it`, `its`, `may`, `must`, `no`, `not`, `of`, `on`, `or`, `our`, `should`, `so`, `than`, `that`, `the`, `their`, `then`, `there`, `these`, `this`, `those`, `to`, `was`, `we`, `were`, `when`, `where`, `which`, `while`, `who`, `will`, `with`, `without`, `you`, `your`) are dropped. Each word loses at most one suffix, the first of `ies`/`ied` (→ `y`), `ing`, `ed`, `es`, `s` (not after `s`) and `e` that leaves at least three characters, so `adding` meets `add` and `dependencies` meets `dependency`. `terms` lists the task's distinct terms, each as the first word that produced it; explanations use the same words.
 - **What is searched.** The **latest version** of each procedure, as stored when the request is read: the canonical key (split at its separators), `goal`, `method`, `philosophy`, and every string value in `contract` and `instructions`. Member names, numbers, IDs, timestamps, `revision_reason`, references, origins, bindings and executions are never searched. A procedure that others reference is a candidate like any other.
-- **Candidates.** With `repository` (registered or not), only procedures whose latest version applies there: shared, unspecified, or local to that repository, matched by identity; procedures local to other repositories are left out. Without it, every procedure in the catalog is a candidate, local ones included, each labelled with its `scope` and `applicability`.
+- **Candidates.** With `repository` (registered or not), only procedures whose latest version applies there: shared, unspecified, or local to that repository, matched by identity; procedures local to other repositories are left out. Without it, every procedure in the catalog is a candidate, local ones included, each labelled with its `scope` and `applicability`. `lifecycle` is `active` (the default), `retired` or `all`: retired procedures are candidates only when it asks for them ([ADR-0035](decisions/0035-evidence-invalidation-and-procedure-retirement.md)).
 - **Score and order** ([ADR-0033](decisions/0033-discovery-ranking-rarity-purpose-detail.md)). The corpus is the candidates above, `considered` of them: a repository-scoped request uses only procedures that apply there. Each task term's `rarity` is ln(1 + `considered` ÷ `procedures`), where `procedures` is how many candidates contain it, so words common to the catalog count less. Fields weigh 4 (`canonical_key`, `goal`: the stated purpose), 2 (`method`) or 1 (`philosophy`, `contract`, `instructions`); a `goal`, `method` or `philosophy` longer than that field's average among the candidates weighs less (divided by max(1, 0.25 + 0.75 × its distinct terms ÷ the average)). A matched term earns its rarity times the best such weight among the fields containing it, credited to that field in `contributions`. Terms credited to `contract` or `instructions` add together at most `detail_cap`, twice the task's highest rarity; their uncapped total is `detail_points`. `score` is the other terms' points plus min(`detail_points`, `detail_cap`), rounded to two decimals. Candidates with at least one term are ranked by `score`, then `matched_terms`, both descending, then by `canonical_key`. `matches` lists, per field in the order above, every task term found there. Terms are distinct: repeating a word, in a procedure or in the task, changes nothing. A score ranks the candidates of one task over one corpus; it is not a confidence, and it changes when the catalog changes.
 - **Bounds.** `limit` is 1 to 50 (default 10). `matched` counts every procedure that matched, before the limit. There is no cursor: reword the task to see others.
-- **Each candidate** gives `procedure_id`, `canonical_key`, `version` (the latest version, the one searched), `scope`, `applicability` (omitted when unspecified), `goal` (omitted when absent) and `method`. Fetch the version for its contract and instructions. A candidate is not a recommendation and says nothing about verification: resolution may select another version from evidence, and nothing is verified for your target until you run it.
-- **Errors (`400`):** a missing or blank `task`, one longer than 4096 bytes or without searchable words (only short words or function words), an invalid or empty `repository`, a `limit` outside 1 to 50, a repeated or unknown parameter. A task whose words match nothing returns `200` with `"matched":0,"candidates":[]`.
+- **Each candidate** gives `procedure_id`, `canonical_key`, `version` (the latest version, the one searched), `scope`, `lifecycle_status`, `applicability` (omitted when unspecified), `goal` (omitted when absent) and `method`. Fetch the version for its contract and instructions. A candidate is not a recommendation and says nothing about verification: resolution may select another version from evidence, and nothing is verified for your target until you run it.
+- **Errors (`400`):** a missing or blank `task`, one longer than 4096 bytes or without searchable words (only short words or function words), an invalid or empty `repository`, a `lifecycle` other than `active`, `retired` or `all`, a `limit` outside 1 to 50, a repeated or unknown parameter. A task whose words match nothing returns `200` with `"matched":0,"candidates":[]`.
 
 ### Check a proposal for duplicates
 
@@ -290,7 +296,8 @@ Content-Type: application/json
    "matches":[{"field":"canonical_key","terms":["go","module","build"]},{"field":"goal","terms":[…]}, …]}]}
 ```
 
-- **`key_collision`** (omitted when none) is the procedure that already has the proposed `canonical_key`, in any repository. Creating the proposal would be `409 canonical_key_exists`. When it is the excluded procedure, it is not reported: a revision keeps its key.
+- **`key_collision`** (omitted when none) is the procedure that already has the proposed `canonical_key`, in any repository, with its `lifecycle_status`. Creating the proposal would be `409 canonical_key_exists`, also when that procedure is retired: reactivate and revise it instead. When it is the excluded procedure, it is not reported: a revision keeps its key.
+- **Retired procedures are always compared**, and each suggestion has `lifecycle_status`: retiring knowledge must not invite a second identity for it ([ADR-0035](decisions/0035-evidence-invalidation-and-procedure-retirement.md)).
 - **`suggestions`** are advisory content overlaps. The proposal's terms (as for discovery) from `canonical_key`, `goal`, `method` and `philosophy` are compared with the same fields of each candidate's latest version; contract and instructions are not compared. `similarity` is 2 × `shared_terms` ÷ (`proposal_terms` + the candidate's terms), rounded to two decimals, and a candidate is suggested when it is at least 0.35 (compared exactly). Suggestions are ranked by similarity, then `shared_terms`, then `canonical_key`; `matches` lists, per field of the candidate, the proposal's terms found there. `matched` counts every suggestion before the limit.
 - **Candidates** follow discovery's `repository` rule, so a shared procedure is suggested in any repository as an alternative to a local copy. The excluded procedure is never a candidate.
 - **Errors (`400`):** a blank `method` or `philosophy`, a multi-line or blank `goal`, an invalid `canonical_key` or `repository`, a proposal without searchable words (on `method`), a `limit` outside 1 to 50, an `exclude_procedure_id` that names no procedure, and any unknown member, such as `contract`.
@@ -328,7 +335,7 @@ Content-Type: application/json
 }
 ```
 
-- The response is `201`, with the execution as the body and `Location: /v1/executions/{id}`. The body is the request plus `id` and `created_at`. `binding_id` and `binding_revision` are absent when no binding was given.
+- The response is `201`, with the execution as the body and `Location: /v1/executions/{id}`. The body is the request plus `id`, `created_at` and `evidence_status` (`valid`; after an [invalidation](#execution-evidence-invalidation), `invalidated` with `invalidation`). `binding_id` and `binding_revision` are absent when no binding was given.
 - `GET /v1/executions/{id}` returns the same bytes.
 - An unknown procedure or binding is `404`.
 - These are `400`, each naming its field:
@@ -355,11 +362,11 @@ An execution of a version with conditional references adds `"decisions"`, one pe
 
 ### List executions
 
-`GET /v1/executions` lists executions, oldest first, optionally filtered by `procedure_id`, `version` (which needs `procedure_id`), `repository` (by identity: every identifier of a registered repository) and `commit`, and paged with `limit` and `after`. Without filters it lists every execution; `procedure_id` used to be required, and still works as before.
+`GET /v1/executions` lists executions, oldest first, optionally filtered by `procedure_id`, `version` (which needs `procedure_id`), `repository` (by identity: every identifier of a registered repository), `commit` and `evidence_status` (`valid` or `invalidated`), and paged with `limit` and `after`. Without filters it lists every execution; `procedure_id` used to be required, and still works as before.
 
 - Each parameter may appear once.
 - Any other parameter is rejected with `400`.
-- List items have every execution field except `inputs`, `evidence` and `children`.
+- List items have every execution field except `inputs`, `evidence`, `children`, `decisions` and `invalidation`; `evidence_status` is included.
 
 ### Verification
 
@@ -375,8 +382,8 @@ Verification is derived from stored executions on every read; nothing is stored 
    "children":[{"reference":"latest-child","version":3}]}}
 ```
 
-- `verified` is true when the execution succeeded and every reference of its version has a linked child that ran with the inputs the reference maps and is itself verified, except a conditional reference the execution decided not applicable; every conditional reference needs a decision.
-- `problems` is absent when `verified` is true. Otherwise it lists the direct reasons in this order: `outcome_failed`, then per reference in version order, either `missing_decision` (a conditional reference without a decision, with `reference`), `missing_child` (with `reference`), or `child_inputs_mismatch` and `child_not_verified`, each with `reference` and the child's `execution_id`, when they apply. `child_inputs_mismatch` reports a stored link whose child ran with other inputs than the reference maps; recording one is refused now, but links stored before the rule, or with direct SQL, are served as stored. A child's own problems are read from the child.
+- `verified` is true when the execution is valid evidence (not [invalidated](#execution-evidence-invalidation)), succeeded, and every reference of its version has a linked child that ran with the inputs the reference maps and is itself verified, except a conditional reference the execution decided not applicable; every conditional reference needs a decision. `evidence_status` is the execution's own, `valid` or `invalidated`.
+- `problems` is absent when `verified` is true. Otherwise it lists the direct reasons in this order: `invalidated` (the execution itself; any other problem listed with it is structural, so `invalidated` alone means it satisfied its contract as recorded), `outcome_failed`, then per reference in version order, either `missing_decision` (a conditional reference without a decision, with `reference`), `missing_child` (with `reference`), or `child_inputs_mismatch` and either `child_invalidated` (the child is invalidated) or `child_not_verified`, each with `reference` and the child's `execution_id`, when they apply. `child_inputs_mismatch` reports a stored link whose child ran with other inputs than the reference maps; recording one is refused now, but links stored before the rule, or with direct SQL, are served as stored. A child's own problems are read from the child.
 - `combination` has `repository`, `commit`, `environment.name`, the canonical `inputs`, and `children`. `children` lists each linked child's `reference`, `version` and own `children`, and each conditional reference decided not applicable as `{"reference": "…", "skipped": true}`, in the version's reference order, and is absent when there are none. A rationale's wording is not part of the combination.
 - An unknown execution is `404`.
 
@@ -386,7 +393,7 @@ Verification is derived from stored executions on every read; nothing is stored 
 {"verifications":[{"combination":{…},"verified":true,"latest_execution_id":"…c","execution_ids":["…a","…b","…c"]}]}
 ```
 
-- `verified` is the verification of `latest_execution_id`, the newest execution in the combination. `execution_ids` lists all of them, oldest first.
+- `verified` is the verification of `latest_execution_id`, the newest valid execution in the combination. `execution_ids` lists all of them, oldest first; `invalidated_execution_ids` (omitted when none) lists those that are invalidated, which never decide. When every execution of a combination is invalidated, `verified` is `false` and `latest_execution_id` is omitted.
 - A combination's `repository` is the repository identity: the canonical identifier of a registered repository, with its `repository_id`, or else the unregistered identifier. Executions recorded under any identifier of a registered repository share its combinations ([ADR-0022](decisions/0022-repository-identity-in-evidence.md)).
 - `repository` (matched by identity), `commit` (full hash) and `environment` (name) optionally filter the executions. Each may appear once, must be valid, and any other parameter is rejected with `400`.
 - An unknown procedure or version is `404`. A version without executions gets `{"verifications":[]}`.
@@ -451,6 +458,51 @@ Content-Type: application/json
 - `GET /v1/toil-items` lists summaries. Its filters apply to each item's latest revision: `status`; `repository`, an identifier, for shared items and items local to the repository it belongs to (aliases included; an unregistered identifier sees shared items only); `procedure_id`, items whose sources cite that procedure at any version (an unknown ID matches nothing). With `limit`, `after` and `snapshot` as [above](#discovery-filters-and-pages). An invalid `status` or `repository` is `400`.
 - An unknown item, key or revision is `404`.
 
+### Execution-evidence invalidation
+
+An execution that did not do what its version claims, for example one recorded against the wrong version, is withdrawn as evidence without changing it ([ADR-0035](decisions/0035-evidence-invalidation-and-procedure-retirement.md), [records.md](records.md#execution-evidence-invalidation-implemented)).
+
+```http
+POST /v1/executions/{id}/invalidation
+Content-Type: application/json
+
+{"reason": "Recorded against extract v2, but it only promoted an assessment recorded earlier by v1.", "actor": "copilot.vscode"}
+```
+
+```http
+HTTP/1.1 201 Created
+Location: /v1/executions/{id}/invalidation
+
+{"execution_id":"…","evidence_status":"invalidated","invalidation":{"reason":"Recorded against extract v2, …","actor":"copilot.vscode","created_at":"2026-10-11T13:00:00Z"}}
+```
+
+- `reason` (not blank) and `actor` (canonical-key format, as a feedback `reporter`) are required; each is `400` otherwise. An unknown execution is `404`.
+- It is **irreversible**: a second invalidation, also a concurrent one, is `409 execution_invalidated`, and nothing changes. Replace the evidence by recording a new, genuine execution.
+- `GET /v1/executions/{id}/invalidation` returns the same document, or `{"execution_id","evidence_status":"valid"}` without `invalidation`. The execution itself adds `evidence_status` and `invalidation`; every recorded field reads back unchanged.
+- Effects: the execution is never verified (`invalidated`); a parent linking it reports `child_invalidated` and is not verified, nor are its ancestors, and no other child is substituted; combination statuses and target verification are decided by the latest **valid** execution; contextual selection uses only valid executions, so it falls back to the previous valid run of the version, another version, or no evidence. A parent run linking an invalidated child stays valid and unverified, so it withdraws its version in the context rather than bringing older runs back; invalidate it too to use an older run. Nothing else changes: not the version, not unrelated executions.
+
+### Procedure lifecycle
+
+A procedure identity is `active` until it is retired ([ADR-0035](decisions/0035-evidence-invalidation-and-procedure-retirement.md), [records.md](records.md#procedure-lifecycle-implemented)).
+
+```http
+POST /v1/procedures/{id}/retirement
+Content-Type: application/json
+
+{"base_event": 0, "reason": "Superseded by go.module.add, which covers private modules.", "actor": "copilot.vscode"}
+```
+
+```http
+HTTP/1.1 201 Created
+Location: /v1/procedures/{id}/lifecycle/events
+
+{"procedure_id":"…","status":"retired","latest_event":1,"events":[{"event":1,"status":"retired","reason":"Superseded by …","actor":"copilot.vscode","created_at":"2026-10-11T13:00:00Z"}]}
+```
+
+- `POST /v1/procedures/{id}/reactivation` takes the same body. `base_event` is the latest event you read (`lifecycle_event` of the procedure, `0` without one); a stale one is `409 lifecycle_conflict` with `latest_event`, and of concurrent changes from one base exactly one is stored. Retiring a retired procedure, or reactivating an active one, is `409 lifecycle_unchanged`. A negative `base_event`, a blank `reason` or an invalid `actor` is `400`; an unknown procedure is `404`.
+- `GET /v1/procedures/{id}/lifecycle/events` returns the state, `latest_event` and every event, oldest first (`"events":[]` for a procedure never retired). Events are never changed or deleted.
+- **While retired:** the procedure list and discovery leave it out unless `lifecycle` is `retired` or `all`; reads by ID, key and version, graphs, resolution, bindings, executions and verification keep working, and graph nodes of it carry `retirement`. These writes are `409 procedure_retired`, whose message says to reactivate it first: a new version of it; a new version (of any procedure) with a reference to it, pinned or contextual, naming each `version.references[i].procedure_id` in `fields`; a binding of it (`fields`: `procedure_id`); a binding revision of a binding of it. Recording executions, origins, feedback and toil items that cite it is still accepted. Retirement never changes a parent, a reference or a binding, and never cascades.
+
 ## Errors
 
 Every error is a JSON object of this form:
@@ -459,7 +511,7 @@ Every error is a JSON object of this form:
 {"error": {"code": "…", "message": "…", "fields": [{"field": "…", "message": "…"}], "latest_version": 2, "latest_revision": 2}}
 ```
 
-`fields` appears only with `invalid_request` errors that come from field validation. `latest_version` appears only with `version_conflict`, `latest_revision` only with `revision_conflict`, and `cycle` only with `reference_cycle`. Messages are for humans and may change; branch on `code`.
+`fields` appears only with `invalid_request` errors that come from field validation, and with `procedure_retired`. `latest_version` appears only with `version_conflict`, `latest_revision` only with `revision_conflict`, `latest_event` only with `lifecycle_conflict`, and `cycle` only with `reference_cycle`. Messages are for humans and may change; branch on `code`.
 
 | Status | `code` | When |
 | --- | --- | --- |
@@ -474,6 +526,10 @@ Every error is a JSON object of this form:
 | 409 | `origin_exists` | The procedure's origin is already recorded. |
 | 409 | `revision_conflict` | `base_revision` is not the latest revision of the binding or toil item. `latest_revision` is included. |
 | 409 | `reference_cycle` | The version's references would form a cycle, or a stored graph contains one. `cycle` is included. |
+| 409 | `execution_invalidated` | The execution is already invalidated; invalidation is irreversible. |
+| 409 | `lifecycle_conflict` | `base_event` is not the procedure's latest lifecycle event. `latest_event` is included. |
+| 409 | `lifecycle_unchanged` | Retiring a retired procedure, or reactivating an active one. |
+| 409 | `procedure_retired` | A new version of a retired procedure, a new version referencing one (`fields` names each reference), or a new binding or binding revision of one. Reactivate it first. |
 | 413 | `request_too_large` | The body exceeds 1 MiB. |
 | 415 | `unsupported_media_type` | A request with a body that is not `application/json`. |
 | 422 | `graph_too_large` | A composition graph, written or read, is deeper than 32 references or has more than 2048 nodes. |
@@ -503,6 +559,9 @@ Example `invalid_request` response:
 | `polaroid duplicates [FILE]` | `POST /v1/procedures/duplicates` |
 | `polaroid origin ID [FILE]` | `POST /v1/procedures/{id}/origin` |
 | `polaroid get-version ID N` | `GET /v1/procedures/{id}/versions/{n}` |
+| `polaroid get-procedure-lifecycle ID` | `GET /v1/procedures/{id}/lifecycle/events` |
+| `polaroid retire-procedure ID [FILE]` | `POST /v1/procedures/{id}/retirement` |
+| `polaroid reactivate-procedure ID [FILE]` | `POST /v1/procedures/{id}/reactivation` |
 | `polaroid graph ID N [REPO ENV [COMMIT INPUTS [DECISIONS]]]` | `GET /v1/procedures/{id}/versions/{n}/graph[?repository=…&environment=…[&commit=…&inputs=…[&decisions=…]]]` |
 | `polaroid revise ID [FILE]` | `POST /v1/procedures/{id}/versions` |
 | `polaroid bindings REPOSITORY [NAME=VALUE...]` | `GET /v1/bindings?repository={repository}[&…]` |
@@ -515,6 +574,8 @@ Example `invalid_request` response:
 | `polaroid get-execution ID` | `GET /v1/executions/{id}` |
 | `polaroid executions [PROCEDURE_ID [REPOSITORY]] [NAME=VALUE...]` | `GET /v1/executions[?procedure_id={id}][&repository={repository}][&…]` |
 | `polaroid verification ID` | `GET /v1/executions/{id}/verification` |
+| `polaroid invalidate-execution ID [FILE]` | `POST /v1/executions/{id}/invalidation` |
+| `polaroid get-execution-invalidation ID` | `GET /v1/executions/{id}/invalidation` |
 | `polaroid verifications ID N [REPO [COMMIT [ENV]]]` | `GET /v1/procedures/{id}/versions/{n}/verifications[?repository=…][&commit=…][&environment=…]` |
 | `polaroid feedback [FILE]` | `POST /v1/feedback` |
 | `polaroid feedbacks [KIND] [NAME=VALUE...]` | `GET /v1/feedback[?kind={kind}][&…]` |
@@ -584,3 +645,10 @@ Changes for [#87](https://github.com/ashuangiras/polaroid/issues/87) ([ADR-0034]
 - New endpoints under `/v1/toil-items`, the error cases above for them, and `snapshot` on their list. `canonical_key_exists` and `revision_conflict` can now come from toil items too, with the same shape.
 - No existing endpoint, request, response or record changes: procedures, bindings, executions, verification, resolution, discovery and feedback read and behave as before, and toil items never affect them. The message of a `snapshot` refused on another list now names the toil item list among those that offer it.
 - A schema-9 catalog cannot be opened by earlier builds, and their `inspect-backup` and `restore` refuse a schema-9 backup.
+
+Changes for [#91](https://github.com/ashuangiras/polaroid/issues/91) ([ADR-0035](decisions/0035-evidence-invalidation-and-procedure-retirement.md)); migration 10:
+
+- New endpoints: `POST`/`GET /v1/executions/{id}/invalidation`, `GET /v1/procedures/{id}/lifecycle/events`, `POST /v1/procedures/{id}/retirement` and `/reactivation`. New query parameters: `lifecycle` on the procedure list and discovery, `evidence_status` on the execution list. New error codes: `execution_invalidated`, `lifecycle_conflict` (with `latest_event`), `lifecycle_unchanged`, `procedure_retired`. New problem codes: `invalidated`, `child_invalidated`.
+- New response fields, always present: `evidence_status` on executions, execution list items and verifications; `lifecycle_status` on procedures, list items, discovery candidates, duplicate suggestions and `key_collision`. Present only when they apply: `invalidation`, `lifecycle_event`, `retirement` on graph nodes, `invalidated_execution_ids` on combination statuses and target verification.
+- Until something is invalidated or retired, every existing response is the same apart from those fields, and every request behaves as before. Afterwards: the procedure list and discovery leave retired procedures out by default (`lifecycle=all` lists everything, as before); `latest_execution_id` is the latest **valid** execution and is omitted when there is none; verification, combination statuses, contextual selection and target verification ignore invalidated executions as evidence.
+- A procedure-list snapshot cursor issued by an earlier build is still accepted, and sees no lifecycle event. A schema-10 catalog cannot be opened by earlier builds, and their `inspect-backup` and `restore` refuse a schema-10 backup.

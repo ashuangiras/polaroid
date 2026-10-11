@@ -169,7 +169,7 @@ check "usage mentions -addr and -db" out_has "-db"
 
 ########################################################################
 section "Start the daemon and check health" \
-	"\`polaroidd\` listens on loopback (\`127.0.0.1:7417\` by default; this test uses port 0 to pick a free port). Configuration comes from flags or the \`POLAROID_ADDR\` / \`POLAROID_DB\` environment variables; without either, the database is \`~/.polaroid/data/polaroid.db\` (section 33). \`GET /healthz\` reports whether the database is reachable." \
+	"\`polaroidd\` listens on loopback (\`127.0.0.1:7417\` by default; this test uses port 0 to pick a free port). Configuration comes from flags or the \`POLAROID_ADDR\` / \`POLAROID_DB\` environment variables; without either, the database is \`~/.polaroid/data/polaroid.db\` (section 36). \`GET /healthz\` reports whether the database is reachable." \
 	"\`bin/polaroidd -db polaroid.db &\` then \`bin/polaroid health\` (or \`curl -i http://127.0.0.1:7417/healthz\`)."
 start_daemon "$DB" env
 check "daemon took its database path from POLAROID_DB" grep -q "db=$DB" "$LOG"
