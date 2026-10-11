@@ -178,7 +178,8 @@ func TestToolsAndResourcesAreAdvertised(t *testing.T) {
 	if v := h.session.InitializeResult().ProtocolVersion; v != mcptransport.ProtocolVersion {
 		t.Fatalf("negotiated protocol %q, want %q", v, mcptransport.ProtocolVersion)
 	}
-	if instr := h.session.InitializeResult().Instructions; !strings.Contains(instr, "record_execution") || !strings.Contains(instr, "report_feedback") {
+	if instr := h.session.InitializeResult().Instructions; !strings.Contains(instr, "record_execution") || !strings.Contains(instr, "report_feedback") ||
+		!strings.Contains(instr, "discover_procedures") || !strings.Contains(instr, "get_version") || !strings.Contains(instr, "suggest_duplicates") {
 		t.Fatalf("instructions do not describe the loop: %q", instr)
 	}
 

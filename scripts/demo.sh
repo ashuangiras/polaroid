@@ -731,7 +731,7 @@ echo "  at ${docs50:0:7}, integration applicable:     $code_at_docs"
 echo "  at ${code50:0:7}, integration applicable:     verified by task A's run; the later run without its integration child is another combination"
 dev_before="$(dev_snapshot)"
 
-step "24. Lexical discovery and duplicate suggestions over the development procedures (#79, ADR-0032; scripted regression evidence)"
+step "24. Lexical discovery and duplicate suggestions over the development procedures (#79, #81, ADR-0032, ADR-0033; scripted regression evidence)"
 top79() { bin/polaroid discover "$1" ${2:+"repository=$2"} limit=3 | jq -r '[.candidates[] | "\(.canonical_key)@\(.version)=\(.score)"] | join(" ")'; }
 docs79="$(top79 "check that a documentation-only change keeps its links and anchors working" "$dev_repo")"
 [[ "$docs79" == polaroid.change.docs@* ]] || fail "a documentation task does not find polaroid.change.docs first: $docs79"

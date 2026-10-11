@@ -168,7 +168,8 @@ func (t *tools) register(s *sdk.Server) {
 		})
 	add(s, t, "discover_procedures", "Find procedures for a task described in your own words, by lexical matching (shared words, not meaning). "+
 		"Searches each procedure's latest version: canonical key, goal, method, philosophy, and the text of contract and instructions. "+
-		"Candidates are ranked by score: each of the task's terms adds the weight of the best field it occurs in (3 canonical key or goal, 2 method, 1 philosophy, contract or instructions); then by matched_terms. matches lists the terms found per field. "+
+		"Candidates are ranked by score (ADR-0033): each matched term adds its rarity among the candidates times the weight of the best field holding it (4 canonical key or goal, 2 method, 1 philosophy, contract or instructions; long prose weighs less), and contract and instruction matches together are capped. "+
+		"contributions and matches explain each candidate. The score ranks, it is not a confidence. "+
 		"Subprocedures are found like any procedure. A candidate is not a recommendation and not verified for you: read its version, judge it, and resolve it before reuse.", read,
 		func(ctx context.Context, in discoverArgs) (any, error) {
 			d, err := t.svc.DiscoverProcedures(ctx, memory.DiscoveryRequest{Task: in.Task, Repository: in.Repository, Limit: in.Limit})

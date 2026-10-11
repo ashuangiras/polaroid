@@ -43,15 +43,25 @@ type LatestVersion struct {
 }
 
 // The searched fields, in explanation order, and their weights in a
-// discovery score. Duplicate suggestions compare the first four.
+// discovery score (ADR-0033). Duplicate suggestions compare the first four.
 var searchedFields = []struct {
 	name   string
-	weight int
+	weight float64
 }{
-	{"canonical_key", 3}, {"goal", 3}, {"method", 2}, {"philosophy", 1}, {"contract", 1}, {"instructions", 1},
+	{"canonical_key", 4}, {"goal", 4}, {"method", 2}, {"philosophy", 1}, {"contract", 1}, {"instructions", 1},
 }
 
-const summaryFields = 4
+const (
+	summaryFields = 4
+	// Goal, method and philosophy are prose, normalized by length.
+	firstProse, lastProse = 1, 3
+	// Contract and instructions are detail: their points together are capped.
+	firstDetail = 4
+	// lengthB is BM25's length-normalization strength.
+	lengthB = 0.75
+	// detailCapWeight times the task's highest rarity caps the detail points.
+	detailCapWeight = 2
+)
 
 // stopWords are common English function words, never searched.
 var stopWords = map[string]bool{}
@@ -220,20 +230,43 @@ type DiscoveryRequest struct {
 }
 
 // Candidate is a procedure that matched a task. MatchedTerms counts the
-// task's distinct terms found anywhere in it; Score adds, for each, the
-// highest weight among the fields containing it.
+// task's distinct terms found anywhere in it; Score is the ranking value of
+// ADR-0033, and Contributions explain it per term.
 type Candidate struct {
 	CandidateVersion
-	MatchedTerms int
-	Score        int
-	Matches      []FieldMatch
+	MatchedTerms  int
+	Score         float64
+	DetailPoints  float64
+	Contributions []Contribution
+	Matches       []FieldMatch
 }
 
-// Discovery is the ranked result of a task: its words, how many procedures
-// matched at least one, and the best of them.
+// Contribution is what one task term added to a candidate's score: its
+// rarity times the best weight among the fields containing it. Points of
+// contract and instruction terms count only up to the discovery's DetailCap.
+type Contribution struct {
+	Term   string
+	Field  string
+	Points float64
+}
+
+// TermRarity is how common a task term is among the candidates: Procedures
+// contain it, and its Rarity is ln(1 + candidates / Procedures).
+type TermRarity struct {
+	Term       string
+	Procedures int
+	Rarity     float64
+}
+
+// Discovery is the ranked result of a task: its words, the corpus its
+// rarities come from (Considered candidates), how many matched at least one
+// term, and the best of them.
 type Discovery struct {
 	Terms      []string
 	Repository string
+	Considered int
+	Rarity     []TermRarity
+	DetailCap  float64
 	Matched    int
 	Candidates []Candidate
 }
@@ -265,23 +298,73 @@ func (s *Service) DiscoverProcedures(ctx context.Context, r DiscoveryRequest) (D
 	if err != nil {
 		return Discovery{}, fmt.Errorf("read latest versions: %w", err)
 	}
-	found := []Candidate{}
-	for _, v := range latest {
-		d := newDocument(v)
-		c := Candidate{CandidateVersion: candidateVersion(v)}
-		for _, t := range q.terms {
-			best := 0
-			for i, f := range searchedFields {
-				if d[i][t] {
-					best = max(best, f.weight)
-				}
-			}
-			if best > 0 {
-				c.MatchedTerms++
-				c.Score += best
+	docs := make([]document, len(latest))
+	for i, v := range latest {
+		docs[i] = newDocument(v)
+	}
+	out := Discovery{Terms: q.wordList(), Repository: r.Repository, Considered: len(latest)}
+
+	// The corpus is exactly these candidates, so a repository's ranking never
+	// depends on procedures that do not apply there.
+	rarity := make([]float64, len(q.terms))
+	for i, t := range q.terms {
+		n := 0
+		for _, d := range docs {
+			if d.contains(t) {
+				n++
 			}
 		}
+		if n > 0 {
+			rarity[i] = math.Log(1 + float64(len(docs))/float64(n))
+		}
+		out.Rarity = append(out.Rarity, TermRarity{Term: q.words[t], Procedures: n, Rarity: round2(rarity[i])})
+		out.DetailCap = max(out.DetailCap, detailCapWeight*rarity[i])
+	}
+	var avg [firstDetail]float64
+	for f := firstProse; f <= lastProse; f++ {
+		total, n := 0, 0
+		for _, d := range docs {
+			if len(d[f]) > 0 {
+				total, n = total+len(d[f]), n+1
+			}
+		}
+		if n > 0 {
+			avg[f] = float64(total) / float64(n)
+		}
+	}
+
+	found := []Candidate{}
+	for ci, d := range docs {
+		c := Candidate{CandidateVersion: candidateVersion(latest[ci])}
+		main := 0.0
+		for i, t := range q.terms {
+			best, field := 0.0, -1
+			for f, sf := range searchedFields {
+				if !d[f][t] {
+					continue
+				}
+				w := sf.weight
+				if f >= firstProse && f <= lastProse && avg[f] > 0 {
+					w /= max(1, 1-lengthB+lengthB*float64(len(d[f]))/avg[f])
+				}
+				if w > best {
+					best, field = w, f
+				}
+			}
+			if field < 0 {
+				continue
+			}
+			c.MatchedTerms++
+			points := rarity[i] * best
+			if field >= firstDetail {
+				c.DetailPoints += points
+			} else {
+				main += points
+			}
+			c.Contributions = append(c.Contributions, Contribution{Term: q.words[t], Field: searchedFields[field].name, Points: round2(points)})
+		}
 		if c.MatchedTerms > 0 {
+			c.Score = main + min(c.DetailPoints, out.DetailCap)
 			c.Matches = d.matches(q, len(searchedFields))
 			found = append(found, c)
 		}
@@ -290,7 +373,25 @@ func (s *Service) DiscoverProcedures(ctx context.Context, r DiscoveryRequest) (D
 		return cmp.Or(cmp.Compare(b.Score, a.Score), cmp.Compare(b.MatchedTerms, a.MatchedTerms),
 			strings.Compare(a.CanonicalKey, b.CanonicalKey))
 	})
-	return Discovery{Terms: q.wordList(), Repository: r.Repository, Matched: len(found), Candidates: found[:min(limit, len(found))]}, nil
+	out.Matched, out.DetailCap = len(found), round2(out.DetailCap)
+	out.Candidates = found[:min(limit, len(found))]
+	for i := range out.Candidates {
+		c := &out.Candidates[i]
+		c.Score, c.DetailPoints = round2(c.Score), round2(c.DetailPoints)
+	}
+	return out, nil
+}
+
+// round2 is how scores are shown; ranking compares the unrounded values.
+func round2(x float64) float64 { return math.Round(x*100) / 100 }
+
+func (d document) contains(term string) bool {
+	for _, f := range d {
+		if f[term] {
+			return true
+		}
+	}
+	return false
 }
 
 // discoveryScope checks the optional repository and limit, and returns the
