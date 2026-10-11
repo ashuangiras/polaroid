@@ -91,10 +91,14 @@ Second-repository adoption trials are paused while the existing features are pre
    - The shared managed instance is upgraded to it, at schema 10.
    - The misclassified promotion execution `01a12ac5-7fc7` is invalidated on the live catalog, through the new shared procedure `execution.evidence.invalidate`.
    - A fresh Copilot session used the new tools on the live service.
-3. [#96 Read-only catalog statistics](https://github.com/ashuangiras/polaroid/issues/96): **done** (PR #97), not released ([ADR-0036](../architecture/decisions/0036-read-only-catalog-statistics.md)). One read-only summary on HTTP, MCP and the CLI: record counts, procedures by lifecycle and scope, executions by outcome and evidence status, toil items by status, logical payload bytes and storage sizes. Visibility only; no schema change.
-4. [#98 Size limits on new writes](https://github.com/ashuangiras/polaroid/issues/98): **done**, not released ([ADR-0037](../architecture/decisions/0037-size-limits-on-new-writes.md)). Byte limits on 37 persisted fields and on each whole write, enforced in the domain for every transport (`413 value_too_large`), reported by the statistics; stored records are never re-checked. Per-write protection only: catalog growth is not bounded.
-5. **Next, proposed, not filed:** release and adopt #96 and #98, then record the shared catalog's statistics over time to measure growth before any retention design ([status](status.md#next-work-item)).
-6. **Planned, not scoped:** physical purge, retention, quotas, cleanup, namespaces, promotion between catalogs, separate databases, and a procedure for promoting earlier assessments that `procedure.capability.extract` would reference.
+3. [#96 Read-only catalog statistics](https://github.com/ashuangiras/polaroid/issues/96): **done** (PR #97), released in `v0.7.0-verify.1` (#100) ([ADR-0036](../architecture/decisions/0036-read-only-catalog-statistics.md)). One read-only summary on HTTP, MCP and the CLI: record counts, procedures by lifecycle and scope, executions by outcome and evidence status, toil items by status, logical payload bytes and storage sizes. Visibility only; no schema change.
+4. [#98 Size limits on new writes](https://github.com/ashuangiras/polaroid/issues/98): **done** (PR #99), released in `v0.7.0-verify.1` (#100) ([ADR-0037](../architecture/decisions/0037-size-limits-on-new-writes.md)). Byte limits on 37 persisted fields and on each whole write, enforced in the domain for every transport (`413 value_too_large`), reported by the statistics; stored records are never re-checked. Per-write protection only: catalog growth is not bounded.
+5. [#100 Release and adopt catalog statistics and write limits](https://github.com/ashuangiras/polaroid/issues/100): **done**.
+   - Published as `v0.7.0-verify.1` (tag on `7f4ab44`, the merge of PR #99).
+   - The shared managed instance is upgraded to it; the schema stays 10.
+   - A fresh Copilot session called `get_catalog_statistics` on the live service.
+6. **Next, proposed, not filed:** record the shared catalog's statistics over time to measure growth before any retention design ([status](status.md#next-work-item)).
+7. **Planned, not scoped:** physical purge, retention, quotas, cleanup, namespaces, promotion between catalogs, separate databases, and a procedure for promoting earlier assessments that `procedure.capability.extract` would reference.
 
 ## Later (unordered, not yet scoped)
 
