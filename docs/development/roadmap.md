@@ -4,7 +4,7 @@ Increments are ordered. Issue-ready items are filed as [GitHub issues](https://g
 
 > **Work-item authority.** GitHub Issues are the source of truth for scope and acceptance criteria. This roadmap keeps only order and links for filed items, never a second copy. Items not yet issue-ready stay here until they are refined and filed.
 
-Increments 1 to 6, the items from agent feedback, the production-readiness items, #79 and #81 are implemented. Nothing in "Later" is.
+Increments 1 to 6, the items from agent feedback, the production-readiness items, #79, #81 and the first increment of capability extraction (#85) are implemented. Nothing in "Later" is.
 
 ## Increment 1 — Procedure identity and immutable versions (done)
 
@@ -73,7 +73,14 @@ Second-repository adoption trials are paused while the existing features are pre
 1. [#79 Procedure discovery by task and duplicate suggestions (lexical, first increment)](https://github.com/ashuangiras/polaroid/issues/79) — **done** ([ADR-0032](../architecture/decisions/0032-lexical-discovery-and-duplicate-suggestions.md)), published as `v0.4.0-verify.1`
 2. [#81 Discovery relevance: rarity, purpose priority and capped instruction matches; release and upgrade; agent guidance](https://github.com/ashuangiras/polaroid/issues/81) — **done** ([ADR-0033](../architecture/decisions/0033-discovery-ranking-rarity-purpose-detail.md)), published as `v0.4.0-verify.1` and installed on the shared instance
 
+## Capability extraction and toil identification
+
+1. [#85 Capability extraction and toil assessment, first increment](https://github.com/ashuangiras/polaroid/issues/85): **done**, records only. It covers the method (`procedure.capability.extract`), one demonstrated capability (`dev.change.classify`, extracted from `polaroid.change.records` v3 and referenced by its v4) and one toil assessment, kept in the extraction execution's evidence ([status](status.md)). No code, schema or API changed.
+
 ## Later (unordered, not yet scoped)
+
+- **Dedicated toil records (planned, not implemented):** a record for toil assessments with a lifecycle (for example proposed, accepted, rejected or implemented), API and MCP tools, starting from the assessment format that `procedure.capability.extract` defines. This needs an ADR. Until then, assessments live only in extraction execution evidence.
+- **The #85 assessment's automation (proposed, not filed):** a committed tool that applies `dev.change.classify` rules mechanically. Its inputs, outputs and acceptance criteria are in the extraction execution's evidence ([status](status.md)). Filing it as an issue is a decision for the owner.
 
 - Onboard a second real repository: register it, bind the shared development procedures with its own commands, and verify one of its commits through them. It can rely on the identity, pagination and discovery contracts of #37.
 - Discovery beyond #81: reporting where a candidate is used as a subprocedure, search terms declared in records, and semantic matching (needs an ADR and likely a dependency).

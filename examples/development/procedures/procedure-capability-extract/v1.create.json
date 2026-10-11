@@ -1,0 +1,137 @@
+{
+  "canonical_key": "procedure.capability.extract",
+  "version": {
+    "philosophy": "Extraction preserves knowledge that has proved useful and gives it a contract others can rely on; it is not mechanical splitting. A boundary earns its place when the capability has its own purpose, inputs, outputs and verification and a second, different task needs it; trivial steps and tightly coupled activities stay in their parent. Repetition shows where work recurs, not that automating it is safe or worthwhile: an assessment keeps what was observed apart from what is assumed, and keeps judgment with an agent or a person.",
+    "method": "Read the exact source version and its successful and failed executions; list candidate capabilities with purpose, inputs, outputs, independent verification and why the boundary helps beyond the source; keep trivial or coupled activities in the parent; discover existing procedures and check duplicates, then reuse, revise or create; run the capability on its own and record it; append a parent version that references it with exact input mappings and a version policy; run and verify the revised parent; run the capability in a second, different task; and record the selection, rejected alternatives and a structured toil assessment in this execution's evidence.",
+    "goal": "Review an established procedure version and its execution evidence, extract one independently useful capability as an ordinary procedure that a new parent version references, and record an evidence-backed toil assessment of the mechanical work observed.",
+    "applicability": {
+      "shared": {}
+    },
+    "contract": {
+      "inputs": {
+        "source_procedure": "The canonical key of the established procedure to review.",
+        "source_version": "The exact version reviewed. A later version appended during the run does not change it.",
+        "repository": "The repository identifier whose executions are reviewed and in which the revised parent is verified."
+      },
+      "preconditions": [
+        "The source version has recorded executions in the repository; a version nobody has followed has no established knowledge to extract.",
+        "The agent can call discover_procedures, suggest_duplicates, create_procedure, revise_procedure and record_execution on the catalog, and can run the source's own commands.",
+        "Changes to procedure records go through the repository's own records procedure and fixtures, not only the live catalog."
+      ],
+      "capability_candidate": {
+        "purpose": "What the capability achieves, in one sentence, without naming the source procedure.",
+        "inputs": "What a caller must supply, and which source inputs or constants map to them.",
+        "outputs": "What a caller receives and can cite.",
+        "verification": "How a run is checked without the parent: an expected answer, a negative control, a determinism check.",
+        "boundary_value": "Why the boundary helps beyond the source: other procedures or tasks that need the same capability, cited by key, step or execution ID.",
+        "evidence": "The source steps, and the execution IDs where the activity happened, succeeded or failed.",
+        "decision": "`extract`, `keep in parent` (trivial, or coupled to the parent's other steps) or `covered by <canonical key>`, with the reason."
+      },
+      "toil_assessment": {
+        "label": "Every assessment is recorded in this execution's evidence as an object with `kind: \"toil-assessment\"` and `record: \"assessment in extraction evidence; not a toil item, has no lifecycle state\"`.",
+        "fields": {
+          "source": "`{procedure_id, canonical_key, version, steps}`: the reviewed version and the step identifiers where the activity occurs.",
+          "supporting_executions": "Execution IDs, each with what it shows (an occurrence, a failure, a recovery). Only recorded executions and feedback; never a reconstruction from memory.",
+          "activity": "The observed activity, described as it was done, not as it might be automated.",
+          "observed_burden": "`{repetition, burden, uncertainty}`: each claim marked `established` (with its evidence) or `hypothesis` (with what would establish it). No measurement is invented: durations, frequencies and error rates are given only where a recorded run measured them.",
+          "proposed_automation": "`{summary, inputs, outputs}`: what a tool would do, with exact inputs and outputs.",
+          "remaining_judgment": "What must stay with an agent or a person, and why.",
+          "failure_and_recovery": "How the automation can fail or mislead, and how a caller detects and recovers from it.",
+          "replacement_tool": "`{form, location, callers}`: the proposed tool (for example a script, a command or a Make target), where it would live, and which procedures and steps would call it instead of doing the work by hand.",
+          "acceptance_criteria": "Numbered, observable statements an implementation issue can adopt."
+        },
+        "rules": [
+          "Separate the observed activity, the evidence of repetition or burden, the proposed automation and the judgment that remains.",
+          "Repetition alone does not establish that automation is safe or worthwhile: say what it does not establish.",
+          "An assessment proposes; it does not build the tool, file a toil item or change any procedure."
+        ]
+      },
+      "expected_outcome": "One capability is extracted (or none, with the reason): an ordinary procedure, created or revised after discovery and the duplicate check, with its own contract and verification; it has its own verified execution; a new parent version references it with input mappings that reproduce what the parent did and a stated version policy; a run of that parent version with the capability as a linked child is verified; the capability has run in a second, different task; and this execution's evidence records the review, the candidates, the decision, every execution ID and at least one toil assessment.",
+      "verification": [
+        "The evidence names the source key, ID and version, and the executions reviewed, including failed ones when there are any.",
+        "Each candidate has every capability_candidate member; the rejected ones say why.",
+        "discover_procedures and suggest_duplicates were called for the capability before creating or revising it, and their results are in the evidence.",
+        "The capability's own execution is verified, and its evidence states what it checked.",
+        "The new parent version's execution, with the capability linked as a child, is verified at its commit, and resolution reports it verified there.",
+        "A second execution of the capability serves a different task (other rules, inputs or purpose); a repeat of the first task does not count.",
+        "Every toil assessment has every field of toil_assessment.fields, and each burden claim is marked established or hypothesis."
+      ],
+      "boundaries": [
+        "An extracted capability is an ordinary procedure: no new kind of record, and no member of contract or instructions that Polaroid must interpret.",
+        "Existing executions of the source are evidence about the source version only. They are never relabelled or re-recorded as evidence for the extracted capability or the new parent version, which need their own runs.",
+        "Does not split for its own sake: one step that is a single command, or an activity that only makes sense with the parent's other steps, stays in the parent.",
+        "Does not force an extraction: when an existing procedure or composition already covers the capability, reuse it, or record that no extraction was made and why.",
+        "Appends versions and never rewrites one. A shared procedure is revised only for what serves all its callers; repository-specific values go into bindings or reference mappings.",
+        "Does not build the proposed automation, invent measurements or create toil records; a later increment turns an assessment into a dedicated record and an implementation issue."
+      ],
+      "escalation": [
+        "The source has no recorded executions, or its executions contradict its instructions in a way that needs a corrected source version first.",
+        "The capability cannot be verified without its parent: it is coupled; keep it in the parent.",
+        "Running the revised parent would need an action the task forbids (a release, a change to a shared service): choose another source, or stop and ask."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "source",
+          "action": "Read the exact source version (get_version) in full, and the procedures it references. Note each step identifier.",
+          "done_when": "The source key, ID and version, and its step identifiers, are noted."
+        },
+        {
+          "id": "evidence",
+          "action": "List the source version's executions in the repository (list_executions with the procedure, version and repository) and read the relevant successful and failed ones in full (get_execution), with any feedback about them. Then look for the same activity elsewhere: steps of other procedures that restate it, and executions whose evidence shows it.",
+          "done_when": "Each activity considered has the execution IDs that show it, or is marked as seen in instructions only."
+        },
+        {
+          "id": "candidates",
+          "action": "List candidate capabilities in the capability_candidate form. Keep in the parent: a single command, an activity whose inputs are the parent's intermediate state, and anything whose verification needs the parent. Prefer the candidate with the clearest contract, the strongest evidence of use beyond the source, and a verification that runs on its own.",
+          "escalate_when": "Every candidate is trivial, coupled or covered: record that no extraction was made, with the reasons."
+        },
+        {
+          "id": "discover",
+          "action": "Describe the selected capability's task to discover_procedures, with the repository, and read each plausible candidate in full. Then call suggest_duplicates with the proposed canonical key, goal, method and philosophy (and exclude_procedure_id when revising).",
+          "done_when": "The calls and their results are noted for the evidence."
+        },
+        {
+          "id": "decide",
+          "action": "Reuse an existing procedure that already has the capability's contract; revise one whose contract almost fits, when the revision serves all its callers; create a new procedure only when nothing covers it. State the choice and its reason."
+        },
+        {
+          "id": "capability",
+          "action": "Write the capability as an ordinary procedure through the repository's records fixtures: its own goal, philosophy, method, applicability, contract (inputs, outputs, verification, boundaries) and instructions, and a revision_reason that names the source version and the evidence. Record its origin when it is created.",
+          "required_by": "The repository's rule that task knowledge lives in records and fixtures, not only in a live catalog."
+        },
+        {
+          "id": "independent-run",
+          "action": "Run the capability on its own, with inputs a parent would not supply, for a case whose answer is known independently (for example a past range or a run recorded in earlier evidence), and a negative or contrasting case. Record each run as an execution of the capability. Its outcome reflects the capability run, not the verdict it produced.",
+          "done_when": "At least one execution of the capability is verified, and its evidence compares the result with the known answer."
+        },
+        {
+          "id": "parent",
+          "action": "Append a parent version with base_version set to the source version: replace the extracted activity by a reference to the capability, with input mappings that reproduce what the parent did (`{\"input\": ...}` for parent inputs, `{\"value\": ...}` for constants such as rules), a version policy (a pin when the mapping depends on the capability version's input contract; contextual otherwise), and every other step unchanged in meaning. If a binding must select the new version, append its revision in the binding fixture.",
+          "done_when": "The new version and any binding revision are in the fixtures and pass the repository's records checks."
+        },
+        {
+          "id": "parent-run",
+          "action": "Run the new parent version through the repository's own verification at the exact commit, with the capability as a linked child whose inputs equal the reference mapping. A new version without evidence is chosen explicitly (get_graph for that version, or a binding revision that pins it), and the evidence says so.",
+          "done_when": "The parent execution is verified, and resolution at that commit and those inputs reports it verified."
+        },
+        {
+          "id": "second-task",
+          "action": "Use the capability in a second task that differs from the first in purpose and in inputs (for example other rules, another base, another caller's decision), and record it as an execution with that task named in its evidence.",
+          "done_when": "The second execution is verified and its task differs from the independent run's."
+        },
+        {
+          "id": "toil",
+          "action": "From the activities reviewed, write at least one toil assessment in the toil_assessment form. Cite executions for every observed claim; mark repetition, burden and uncertainty as established or hypothesis; leave out anything no record supports.",
+          "done_when": "Every field is filled, and no claim lacks its evidence or its hypothesis label."
+        },
+        {
+          "id": "record",
+          "action": "Record this execution with inputs {source_procedure, source_version, repository} and evidence: the source and the executions reviewed, the candidates and the decision, the discovery and duplicate results, the capability and parent versions written, the IDs of the independent, parent and second-task executions with their verification, and the toil assessments."
+        }
+      ]
+    },
+    "revision_reason": "Created during #85, the first increment of capability extraction and toil identification. It establishes the method with existing records and tools only: the capability is an ordinary procedure and the toil assessment is a structured object in this procedure's execution evidence. Dedicated toil records with their own lifecycle are a later increment."
+  }
+}
