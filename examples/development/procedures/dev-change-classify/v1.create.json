@@ -1,0 +1,79 @@
+{
+  "canonical_key": "dev.change.classify",
+  "version": {
+    "philosophy": "A decision based on what a change touches is only as good as its file list and the rule applied to each file. The range must be exact, the list complete, every file classified by an explicit rule, and anything no rule covers escalated rather than guessed. Path rules say where a file is; whether its content stays within a scope remains the caller's judgment.",
+    "method": "Resolve the base and head to full commits; list the changed files with their change type, renames as a deletion and an addition; give each file the first rule whose glob pathspecs and change types match; report the files per class, the unmatched ones, the verdict (escalate when a file is excluded or unmatched, review when one needs a content check, otherwise in-scope) and a one-sentence rationale naming the range and the counts; classifying the same range twice gives the same result.",
+    "goal": "Classify every file a change touches between two exact commits against a caller's ordered path rules, and report a verdict and a rationale that a scope or applicability decision can cite.",
+    "applicability": {
+      "shared": {}
+    },
+    "contract": {
+      "inputs": {
+        "base": "Where the range starts: a full commit, or a rule that names one, for example `git merge-base HEAD origin/main, after git fetch origin` or `the revision the installed service reports`. The run resolves it to a full commit and records both.",
+        "rules": "The caller's classification: an ordered array of rules. Each rule is an object with `class` (a name), `paths` (git glob pathspecs, as in `git diff -- ':(glob)PATTERN'`: `*` stays within one directory, `**/` spans any number of them, including none), optional `changes` (a subset of `A`, `M`, `D`; all three when absent), `verdict` (`in-scope`, `review` or `excluded`) and optional `note` (why, or what a review checks). The first rule whose paths and change types match a file classifies it."
+      },
+      "head": "The execution's commit: the range ends there. Uncommitted changes are outside the range; a run in a dirty working tree lists them and escalates.",
+      "outputs": {
+        "range": "`{base_rule, base, head}`: the base as given, and both full commits.",
+        "files": "Every changed path exactly once, sorted bytewise, with `change` (`A`, `M` or `D`; renames and copies appear as `D` and `A` because of `--no-renames`), `class` and `verdict`; `class` and `verdict` are null when no rule matched.",
+        "unmatched": "The paths no rule matched.",
+        "counts": "The number of files per class, and the total.",
+        "verdict": "`escalate` when any file is excluded or unmatched, or the working tree is dirty; otherwise `review` when any file's verdict is `review`; otherwise `in-scope`. An empty range is `in-scope` with zero files, and the rationale says so.",
+        "rationale": "One sentence a decision can cite: the range (both short commits and the base as given), the total, the counts by class, and the files that decided the verdict."
+      },
+      "preconditions": [
+        "A clone in which both commits exist; the base rule may need `git fetch` first, which the run does explicitly and reports.",
+        "Rules written by the caller, each with a class, at least one path and a verdict."
+      ],
+      "expected_outcome": "Every changed file between the two commits is listed once with its change type and the class of the first rule that matches it; unmatched files are listed separately; the verdict and rationale follow from them; the same range and rules give the same result again.",
+      "verification": [
+        "The paths in `files` are exactly the lines of `git diff --no-renames --name-only BASE HEAD`, each once.",
+        "Each file's class is the first rule that matches it; an unmatched file is listed in `unmatched`, never assigned a class by analogy.",
+        "A second classification of the same range with the same rules gives identical `files`, `unmatched`, `counts` and `verdict` (compared as canonical JSON).",
+        "When the caller gives an expected answer for a known range (for example one recorded in an earlier execution's evidence), the result equals it, or the difference is reported."
+      ],
+      "boundaries": [
+        "Classifies by path and change type only, and never reads file contents. Whether a matched file stays within the caller's scope (for example that a modified binding fixture only appends later_revisions) is the caller's check, which a `review` verdict hands back.",
+        "The caller owns the rules and the decision. A verdict is not a scope or applicability decision; the caller cites it in one.",
+        "A verdict of `escalate` or `review` is a successful classification. The outcome is `failed` only when the range or the rules cannot be applied: an unknown commit, a rule without paths or verdict, or a pathspec git refuses.",
+        "Never fetches implicitly and never changes the repository's files or refs.",
+        "Each run classifies one range with one set of rules. An earlier classification of another range, or with other rules, is not reused."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "range",
+          "action": "Resolve `base` to a full commit with `git rev-parse` (fetch first if the rule needs it, and say so), take the head from `git rev-parse HEAD`, and record `git status --porcelain`.",
+          "done_when": "Both commits are full hashes and the working-tree state is recorded.",
+          "escalate_when": "The base cannot be resolved without guessing, for example a merge base after the branch was rebased or merged."
+        },
+        {
+          "id": "list",
+          "action": "List the changes with `git diff --no-renames --name-status BASE HEAD`. This list is the complete set of files the run must classify.",
+          "done_when": "Every line is a change type (A, M or D) and a path."
+        },
+        {
+          "id": "match",
+          "action": "For each rule in order, list the files it matches: `git diff --no-renames --name-status --diff-filter=CHANGES BASE HEAD -- ':(glob)P1' ':(glob)P2' ...`, where CHANGES is the rule's change types (omit the filter when it has none). A file takes the class and verdict of the first rule that lists it; later rules do not reclassify it. Files no rule lists are unmatched.",
+          "done_when": "Every listed file has a class or is in `unmatched`."
+        },
+        {
+          "id": "aggregate",
+          "action": "Count the files per class, derive the verdict (escalate, review, in-scope; a dirty working tree escalates) and write the rationale."
+        },
+        {
+          "id": "check",
+          "action": "Check that the classified paths equal `git diff --no-renames --name-only BASE HEAD`, then classify the same range again and compare the two results as canonical JSON (for example `jq -S -c`).",
+          "done_when": "Both checks hold.",
+          "escalate_when": "The two results differ: the classification is not deterministic, so neither result is reported."
+        },
+        {
+          "id": "record",
+          "action": "Record the execution at the head commit, with inputs `{base, rules}` exactly as given (a caller that links this run as a child gets these inputs from its reference mapping), and with the outputs, the commands and the two checks as evidence. When the caller gave an expected answer, record the comparison."
+        }
+      ]
+    },
+    "revision_reason": "Extracted during #85 by procedure.capability.extract v1 from polaroid.change.records v3, step `files` (\"List the changed files against the merge base with main and classify each\"). The same activity is restated, with different ranges (merge base with main, main...HEAD, the running build's revision) and with rules given only as prose, in polaroid.change.docs, polaroid.change.focused, polaroid.operations.change, polaroid.packaging.change, polaroid.record-model.change and the task-aware change.verify.scoped. In recorded executions it decided scopes and applicability, for example 01a127fd (records), 01a127dc (docs), 01a126c8 (the lifecycle reference) and 01a126fc (the upgrade reference). This version gives it a contract of its own: exact range, explicit ordered rules, change types, unmatched files escalated, and a determinism check."
+  }
+}

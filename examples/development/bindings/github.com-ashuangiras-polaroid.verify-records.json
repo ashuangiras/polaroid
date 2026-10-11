@@ -60,6 +60,26 @@
         },
         "revision_reason": "#77: pins polaroid.change.records version 3, whose load step appends later binding revisions from the fixtures instead of live-only revise-binding calls. Contextual resolution would keep version 2, which has evidence."
       }
+    },
+    {
+      "base_revision": 3,
+      "revision": {
+        "inputs": {
+          "scope": "records",
+          "build_command": "make build",
+          "artifacts": [
+            "bin/polaroidd",
+            "bin/polaroid"
+          ],
+          "gate_commands": [
+            "make demo"
+          ]
+        },
+        "version_policy": {
+          "pin": 4
+        },
+        "revision_reason": "#85: pins polaroid.change.records version 4, which classifies the changed files through its classify reference (dev.change.classify v1, extracted from version 3 by procedure.capability.extract). Inputs unchanged. Contextual resolution would keep version 3, which has evidence."
+      }
     }
   ]
 }
