@@ -75,7 +75,7 @@ Or run the scripted version, which also binds the procedure in two repositories,
 Each archive, `polaroid_<tag>_<os>_<arch>.tar.gz`, holds both binaries, `smoke-test.sh`, and a guide to installation, MCP and CLI use, backups and upgrades. The script needs only a POSIX shell and `curl`; it installs nothing and never touches `~/.polaroid`. Each release also has `SHA256SUMS` and `build-manifest.json` (commit, version, Go toolchain, assets).
 
 ```sh
-tag=v0.7.0-verify.1    # see the release page for the current one
+tag=v1.0.0    # the current stable release; see the release page for later ones
 base=https://github.com/ashuangiras/polaroid/releases/download/$tag
 curl -fsSLO "$base/polaroid_${tag}_linux_amd64.tar.gz" -O "$base/SHA256SUMS"
 sha256sum -c --ignore-missing SHA256SUMS

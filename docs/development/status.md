@@ -2,26 +2,48 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
-**First stable release in progress ([#110](https://github.com/ashuangiras/polaroid/issues/110)), as of 2026-10-11.** The scope, the criteria and their evidence are in [release-readiness.md](release-readiness.md).
+**First stable release, `v1.0.0`, released and adopted ([#110](https://github.com/ashuangiras/polaroid/issues/110)), as of 2026-10-11.** The supported scope, the 13 criteria and their evidence are in [release-readiness.md](release-readiness.md). Every criterion is met, with the limitations listed there.
 
 - **Merged for it:**
   - #103, the CLI `=` fix (#102);
   - #105, concurrency and storage failures (#104);
   - #107, contract review (#106);
   - #109, ADR-0038, stable packaging and the readiness document (#108);
-  - #113, commit guidance for recorded runs (#112).
-- **Code verified** at `6c98ce3`, merged as `57bfb74` with the same tree:
-  - `verify-change` `01a12c58-be35` (verified);
-  - `make lifecycle` launchd 68/0, `01a12c59-bfe5`.
-- **Candidate** `v1.0.0-rc.1` is published as a prerelease.
-  - Its archives were checked anonymously.
-  - The isolated launchd candidate run passed 27/0.
-  - Two 30-minute sustained runs were made.
-  - Three fresh-agent sessions ran on google/uuid.
-- **Criteria 1 to 8, 10 and 11 are met, with the limitations listed there.** Criteria 9, 12 and 13 wait for the release run, the artifact check and the shared-service upgrade.
-- **Filed for after 1.0:** [#111](https://github.com/ashuangiras/polaroid/issues/111), reads that take the write lock.
+  - #113, commit guidance for recorded runs (#112);
+  - #114, readiness evidence;
+  - #115, `polaroid.release.publish` v3, for stable tags.
+- **Verified:** the release tree `43bd20e` (merged as `23b2946`, same tree), at full scope:
+  - `verify-change`: `dev.change.verify` `01a12c70-9a67` (verified);
+  - `make lifecycle` launchd 68/0 at `6c98ce3`, the same code: `polaroid.lifecycle.check` `01a12c59-bfe5`.
+- **Released:** [`v1.0.0`](https://github.com/ashuangiras/polaroid/releases/tag/v1.0.0) is a tag on `23b2946`, published by run [38168355796](https://github.com/ashuangiras/polaroid/actions/runs/38168355796).
+  - All nine jobs passed, including the systemd user-service job and the published-asset test.
+  - It is a stable release, and the repository's latest.
+  - The 10 earlier releases, including the candidate `v1.0.0-rc.1`, are unchanged: their publish times and asset digests compared equal.
+- **Artifacts verified** without credentials:
+  - checksums, the manifest's hashes, `source.commit` and `prerelease: false` all match;
+  - no database, private path or credential in any archive;
+  - native darwin/arm64 harness 22/0 (`polaroid.archive.check` `01a12c77-93ce`).
+- **Rehearsed** before the upgrade, with the published archive in isolated launchd services: 26 checks, none failed. They covered a fresh install, and an upgrade from `v0.7.0-verify.1` on a copy of the shared catalog with 651 reads identical, rollback, and fix forward.
+- **Installed** on the shared managed instance: launchd `io.github.ashuangiras.polaroid`, pid 66355, `http://127.0.0.1:7417`, `~/.polaroid/data/polaroid.db`, schema 10.
+  - The start-up line names `v1.0.0` and `23b2946`.
+  - 651 reads have the same digest before and after (`255b72604873e1ac`). Target resolutions are identical, MCP equals HTTP, and there are 38 tools.
+  - Backups: `~/.polaroid/backups/polaroid-20261011T193953Z` before the upgrade, `…T194147Z` after it. Both are valid.
+  - Rollback: `polaroid install -from ~/.local/state/polaroid/previous` (`v0.7.0-verify.1`, rehearsed on the same catalog).
+- **Client-verified:**
+  - VS Code's MCP log reports `Discovered 38 tools` after the restart.
+  - A new Copilot chat (`f12f2f56`) made six read calls: statistics, discovery, `get_procedure`, `list_bindings`, `resolve_binding` and `get_verification`. It saw the new commit guidance. Its values match HTTP.
+- **Executions:**
+  - `polaroid.release.publish` v3 `01a12c80-30e8` (verified);
+  - its children: `polaroid.archive.check` `01a12c77-93ce` and `polaroid.service.manage` v5 `01a12c7f-edee`.
+- **Invalidated evidence:**
+  - `01a12c35-aaca` (packaging, #108): it gave a wrong file count;
+  - `01a12c59-41d9` (lifecycle, #112): it claimed a status check before the run that was not made.
 
-Next action: tag `v1.0.0` on this document's merge, verify the published artifacts, and upgrade the shared service.
+  In the trial catalog only, the two acceptance executions that recorded a dirty tree as the base commit were also invalidated.
+- **Correction:** the `v1.0.0` tag's notes say the candidate checks passed 27 of 27. The run had 26 checks, and all passed. Tags are not rewritten.
+- **Filed for after 1.0:** [#111](https://github.com/ashuangiras/polaroid/issues/111), reads that take the write lock and can time out under saturated writing.
+
+Next action: none for #110. Candidates are listed under [Next work item](#next-work-item).
 
 **Catalog statistics and write limits released and adopted ([#100](https://github.com/ashuangiras/polaroid/issues/100)), as of 2026-10-11.** Each state below has its own evidence.
 
@@ -487,7 +509,12 @@ Repetition was not a cause: terms are sets, so a word repeated in a procedure or
 
 ## Next work item
 
-No item is scoped beyond #100 (release and adoption of #96 and #98). Second-repository adoption trials are paused; the independent external-repository adoption trial is a separate task. Hosted CI follows the `hosted-ci` binding (local-only; owner decision, 2026-10-10); the local gates and the release workflow's archive tests are the evidence. Candidates, for the owner to choose and file:
+No item is scoped beyond #110 (the `v1.0.0` release). Changes from now on follow ADR-0038: within `v1`, only additions. Hosted CI follows the `hosted-ci` binding (local-only; owner decision, 2026-10-10); the local gates and the release workflow's archive tests are the evidence. Candidates, for the owner to choose and file:
+
+- **Filed: [#111](https://github.com/ashuangiras/polaroid/issues/111).** Multi-statement reads in read transactions, so that they stop queueing for the write lock. A patch release, with no contract change.
+- **Acceptance gaps from #110:** a fresh-agent trial that creates a procedure, and one without the user's persistent Copilot memory ([release readiness](release-readiness.md#acceptance-by-independent-agents)).
+
+The candidates listed before #110 remain open:
 
 - **Recommended next: measure growth, before any retention design.** Record the statistics of the shared catalog at each release or week, so that retention, if ever needed, is decided from a measured rate. Baseline on the live service just after the #100 upgrade (`2026-10-11T16:36:08Z`): 19 procedures, 43 versions, 212 executions, `database_bytes` 1,355,776 (331 pages, WAL empty). The write limits bound each write, not the catalog's total size.
   - **Not part of it:** purge, retention, quotas, namespaces, separate databases and automation.
