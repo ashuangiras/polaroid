@@ -201,6 +201,62 @@ func executionIDs(t *testing.T, body []byte) []string {
 	return ids
 }
 
+// TestReadsProceedWhileAnotherProgramHoldsTheWriteLock (#111): graph walks,
+// binding resolution and verification read one snapshot without taking the
+// write lock, so they answer at once while another connection holds it with
+// an uncommitted change, and do not see that change.
+func TestReadsProceedWhileAnotherProgramHoldsTheWriteLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "polaroid.db")
+	s := newTestServerAt(t, path)
+	p := idOf(t, s.mustPost(t, "/v1/procedures", procedureBody("c.read", "")))
+	b := idOf(t, s.mustPost(t, "/v1/bindings", bindRequest("github.com/o/a", "verify", p, `{"contextual":{}}`)))
+	e := idOf(t, s.mustPost(t, "/v1/executions", runBody(p, 1, "github.com/o/a", "")))
+	reads := []string{
+		"/v1/procedures/" + p + "/versions/1/graph?repository=github.com/o/a&environment=ci",
+		"/v1/bindings/" + b + "/resolution?environment=ci",
+		"/v1/executions/" + e + "/verification",
+		"/v1/procedures/" + p + "/versions/1/verifications",
+	}
+	before := make([]string, len(reads))
+	for i, path := range reads {
+		got := s.call(t, http.MethodGet, path, "")
+		expect(t, got, http.StatusOK, "")
+		before[i] = string(got.body)
+	}
+
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", path+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(ctx, `INSERT INTO execution_invalidations (execution_id, reason, actor, created_at)
+		VALUES (?, 'uncommitted', 'test.writer', '2026-10-11T00:00:00.000000000Z')`, e); err != nil {
+		t.Fatal(err)
+	}
+	for i, path := range reads {
+		got := s.call(t, http.MethodGet, path, "")
+		expect(t, got, http.StatusOK, "")
+		if string(got.body) != before[i] {
+			t.Fatalf("GET %s saw the uncommitted invalidation:\n%s\nwant %s", path, got.body, before[i])
+		}
+	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.call(t, http.MethodGet, "/v1/executions/"+e+"/verification", ""); string(got.body) == before[2] {
+		t.Fatalf("the committed invalidation is not visible: %s", got.body)
+	}
+}
+
 // TestWriteLockTimeoutStoresNothing: while another connection holds the
 // database's write lock longer than the busy timeout, reads still answer, and
 // a write fails with the generic internal error, stores nothing, and succeeds

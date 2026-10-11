@@ -204,10 +204,10 @@ func (s *Store) ListExecutions(ctx context.Context, f memory.ExecutionFilter) ([
 }
 
 // ExecutionVerification implements memory.Store. Verification takes several
-// queries, so it runs in one transaction to read a single snapshot.
+// queries, so it runs in one read transaction to read a single snapshot.
 func (s *Store) ExecutionVerification(ctx context.Context, id string) (memory.Verification, error) {
 	var v memory.Verification
-	err := s.write(ctx, func(tx *sql.Tx) error {
+	err := s.read(ctx, func(tx *sql.Tx) error {
 		var err error
 		v, err = memory.VerifyExecution(ctx, txRuns{tx}, id)
 		return err
@@ -215,11 +215,11 @@ func (s *Store) ExecutionVerification(ctx context.Context, id string) (memory.Ve
 	return v, err
 }
 
-// Verifications implements memory.Store, in one transaction like
+// Verifications implements memory.Store, in one read transaction like
 // ExecutionVerification.
 func (s *Store) Verifications(ctx context.Context, f memory.VerificationFilter) ([]memory.CombinationStatus, error) {
 	var statuses []memory.CombinationStatus
-	err := s.write(ctx, func(tx *sql.Tx) error {
+	err := s.read(ctx, func(tx *sql.Tx) error {
 		var err error
 		statuses, err = memory.ListCombinations(ctx, txRuns{tx}, f)
 		return err
