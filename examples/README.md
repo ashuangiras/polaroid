@@ -61,6 +61,14 @@ The executions (the extraction, the capability's independent runs, the revised p
 
 [#87](https://github.com/ashuangiras/polaroid/issues/87) makes toil assessments records ([ADR-0034](../docs/architecture/decisions/0034-toil-items.md)). Version 2 of `procedure.capability.extract` explains promotion: its contract's `toil_item` says how an assessment becomes a toil item revision (repetition and burden claims as `observed`, `hypothesis` or `unknown`; `observed` or `candidate`, never `implemented` or `validated` from an assessment alone), and a new step, `toil-items`, looks for an existing item by procedure and repository, revises it or creates one, citing the extraction as provenance, and records the item's key, ID, revision and status in evidence. Where a catalog does not offer toil items yet, the assessment stays in the evidence, as in version 1, and is promoted later.
 
+[#93](https://github.com/ashuangiras/polaroid/issues/93) adds `execution.evidence.invalidate` (shared), the procedure for correcting recorded evidence with [ADR-0035](../docs/architecture/decisions/0035-evidence-invalidation-and-procedure-retirement.md)'s invalidation:
+- it withdraws one execution that does not show what its procedure version claims, once, with the mismatch as the reason;
+- it captures and rechecks the combinations, the target verification, selection and every linked record;
+- it never records a replacement or denies that the work happened;
+- its run is never recorded as one of the procedure whose evidence it withdraws.
+
+Its first use withdrew the promotion-only run `01a12ac5-7fc7`, which had been recorded against `procedure.capability.extract` v2.
+
 ## Toil items
 
 [toil/polaroid-change-classification/](toil/polaroid-change-classification) is the #85 assessment of hand classification of changed files, promoted to a toil item local to Polaroid: `v1.create.json` is revision 1 (`candidate`: the #85 proposal awaits the owner's decision; burden and error rate stay hypotheses, worth unknown), and `v2.revise.json` adds a later observation of the same activity without changing the status. Neither is `implemented` or `validated`: no replacement exists.
