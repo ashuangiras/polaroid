@@ -18,15 +18,19 @@ import (
 // Procedure is the stable identity of a reusable procedure. Its ID and
 // canonical key never change after creation and are independent of any
 // repository. Goal and Applicability are those of the latest version;
-// Origin is nil until recorded (ADR-0020).
+// Origin is nil until recorded (ADR-0020). Lifecycle is the identity's
+// lifecycle state and LifecycleEvent its latest event, 0 for none
+// (ADR-0035).
 type Procedure struct {
-	ID            string
-	CanonicalKey  string
-	CreatedAt     time.Time
-	LatestVersion int
-	Goal          string
-	Applicability Applicability
-	Origin        *Origin
+	ID             string
+	CanonicalKey   string
+	CreatedAt      time.Time
+	LatestVersion  int
+	Goal           string
+	Applicability  Applicability
+	Origin         *Origin
+	Lifecycle      LifecycleStatus
+	LifecycleEvent int
 }
 
 // Definition is the author-supplied content of one procedure version.

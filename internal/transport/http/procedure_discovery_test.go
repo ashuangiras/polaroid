@@ -20,17 +20,18 @@ type matchJSON struct {
 }
 
 type candidateJSON struct {
-	ProcedureID   string         `json:"procedure_id"`
-	CanonicalKey  string         `json:"canonical_key"`
-	Version       int            `json:"version"`
-	Scope         string         `json:"scope"`
-	Applicability jsontext.Value `json:"applicability"`
-	Goal          string         `json:"goal"`
-	Method        string         `json:"method"`
-	MatchedTerms  int            `json:"matched_terms"`
-	Score         float64        `json:"score"`
-	DetailPoints  float64        `json:"detail_points"`
-	Contributions []struct {
+	ProcedureID     string         `json:"procedure_id"`
+	CanonicalKey    string         `json:"canonical_key"`
+	Version         int            `json:"version"`
+	Scope           string         `json:"scope"`
+	LifecycleStatus string         `json:"lifecycle_status"`
+	Applicability   jsontext.Value `json:"applicability"`
+	Goal            string         `json:"goal"`
+	Method          string         `json:"method"`
+	MatchedTerms    int            `json:"matched_terms"`
+	Score           float64        `json:"score"`
+	DetailPoints    float64        `json:"detail_points"`
+	Contributions   []struct {
 		Term   string  `json:"term"`
 		Field  string  `json:"field"`
 		Points float64 `json:"points"`
@@ -53,25 +54,27 @@ type discoveryJSON struct {
 }
 
 type suggestionJSON struct {
-	ProcedureID   string         `json:"procedure_id"`
-	CanonicalKey  string         `json:"canonical_key"`
-	Version       int            `json:"version"`
-	Scope         string         `json:"scope"`
-	Applicability jsontext.Value `json:"applicability"`
-	Goal          string         `json:"goal"`
-	Method        string         `json:"method"`
-	Similarity    float64        `json:"similarity"`
-	SharedTerms   int            `json:"shared_terms"`
-	Matches       []matchJSON    `json:"matches"`
+	ProcedureID     string         `json:"procedure_id"`
+	CanonicalKey    string         `json:"canonical_key"`
+	Version         int            `json:"version"`
+	Scope           string         `json:"scope"`
+	LifecycleStatus string         `json:"lifecycle_status"`
+	Applicability   jsontext.Value `json:"applicability"`
+	Goal            string         `json:"goal"`
+	Method          string         `json:"method"`
+	Similarity      float64        `json:"similarity"`
+	SharedTerms     int            `json:"shared_terms"`
+	Matches         []matchJSON    `json:"matches"`
 }
 
 type duplicatesJSON struct {
 	ProposalTerms int    `json:"proposal_terms"`
 	Repository    string `json:"repository"`
 	KeyCollision  *struct {
-		ProcedureID   string `json:"procedure_id"`
-		CanonicalKey  string `json:"canonical_key"`
-		LatestVersion int    `json:"latest_version"`
+		ProcedureID     string `json:"procedure_id"`
+		CanonicalKey    string `json:"canonical_key"`
+		LatestVersion   int    `json:"latest_version"`
+		LifecycleStatus string `json:"lifecycle_status"`
 	} `json:"key_collision"`
 	Matched     int              `json:"matched"`
 	Suggestions []suggestionJSON `json:"suggestions"`

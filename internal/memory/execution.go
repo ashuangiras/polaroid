@@ -76,27 +76,32 @@ func (e *LinkedChildError) Error() string {
 }
 
 // Execution is an immutable record of one finished run (ADR-0010). Identity
-// is derived when it is read, never stored (ADR-0022).
+// is derived when it is read, never stored (ADR-0022). Invalidation, read
+// from separate lifecycle metadata, is nil while it is valid evidence
+// (ADR-0035).
 type Execution struct {
-	ID        string
-	CreatedAt time.Time
-	Identity  RepositoryIdentity
+	ID           string
+	CreatedAt    time.Time
+	Identity     RepositoryIdentity
+	Invalidation *Invalidation
 	ExecutionRecord
 }
 
 // ExecutionFilter selects executions (ADR-0021): optionally of one
 // procedure, of one version of it (Version > 0), in one repository (by
 // identity: every identifier of the repository Repository is registered
-// to), and at one commit. Repositories and After are set by the service for
-// the store; nil Repositories selects every repository.
+// to), at one commit, and with one evidence status (ADR-0035). Repositories
+// and After are set by the service for the store; nil Repositories selects
+// every repository.
 type ExecutionFilter struct {
-	ProcedureID  string
-	Version      int
-	Repository   string
-	Commit       string
-	Page         Page
-	Repositories []string
-	After        *Position
+	ProcedureID    string
+	Version        int
+	Repository     string
+	Commit         string
+	EvidenceStatus EvidenceStatus
+	Page           Page
+	Repositories   []string
+	After          *Position
 }
 
 // A full SHA-1 or SHA-256 commit hash.
@@ -385,7 +390,15 @@ func (s *Service) ListExecutions(ctx context.Context, f ExecutionFilter) ([]Exec
 	if f.Commit != "" && !commitPattern.MatchString(f.Commit) {
 		p.add("commit", "must be a full commit hash: 40 or 64 lowercase hex characters")
 	}
-	g := newPager("executions", true, f.Page, f.ProcedureID, strconv.Itoa(f.Version), f.Repository, f.Commit)
+	params := []string{f.ProcedureID, strconv.Itoa(f.Version), f.Repository, f.Commit}
+	switch f.EvidenceStatus {
+	case "":
+	case EvidenceValid, EvidenceInvalidated:
+		params = append(params, "evidence_status="+string(f.EvidenceStatus))
+	default:
+		p.add("evidence_status", `must be "valid" or "invalidated"`)
+	}
+	g := newPager("executions", true, f.Page, params...)
 	f.After = g.start(&p)
 	if err := p.err(); err != nil {
 		return nil, "", err

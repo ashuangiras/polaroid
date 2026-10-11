@@ -112,9 +112,12 @@ func (s *Service) CreateBinding(ctx context.Context, in NewBinding) (BindingHist
 	b := Binding{ID: uuid.NewV7().String(), Repository: in.Repository, Name: in.Name, ProcedureID: in.ProcedureID, CreatedAt: now, LatestRevision: 1}
 	r := BindingRevision{BindingID: b.ID, Number: 1, CreatedAt: now, BindingConfig: cfg}
 	if err := s.store.CreateBinding(ctx, b, r); err != nil {
+		var retired *RetiredProcedureError
 		switch {
 		case errors.Is(err, ErrNotFound):
 			return BindingHistory{}, fmt.Errorf("procedure %q: %w", in.ProcedureID, ErrNotFound)
+		case errors.As(err, &retired):
+			return BindingHistory{}, retiredWrite(retired, "procedure_id", nil)
 		case errors.Is(err, ErrBindingExists):
 			return BindingHistory{}, fmt.Errorf("binding %q in repository %q: %w", in.Name, in.Repository, ErrBindingExists)
 		case errors.Is(err, ErrPinnedVersionNotFound):
@@ -143,9 +146,12 @@ func (s *Service) ReviseBinding(ctx context.Context, bindingID string, in Bindin
 	r := BindingRevision{BindingID: bindingID, Number: in.BaseRevision + 1, CreatedAt: timestamp(), BindingConfig: cfg}
 	if err := s.store.AppendBindingRevision(ctx, in.BaseRevision, r); err != nil {
 		var conflict *RevisionConflictError
+		var retired *RetiredProcedureError
 		switch {
 		case errors.Is(err, ErrNotFound):
 			return BindingRevision{}, fmt.Errorf("binding %q: %w", bindingID, ErrNotFound)
+		case errors.As(err, &retired):
+			return BindingRevision{}, retiredWrite(retired, "", nil)
 		case errors.As(err, &conflict):
 			return BindingRevision{}, conflict
 		case errors.Is(err, ErrPinnedVersionNotFound):

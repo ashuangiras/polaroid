@@ -278,7 +278,7 @@ func TestOpenMigratesSchemaVersion6(t *testing.T) {
 
 	stamp, _ := time.Parse(time.RFC3339Nano, at)
 	wantRoot := memory.History{
-		Procedure: memory.Procedure{ID: "root", CanonicalKey: "dev.change.verify", CreatedAt: stamp, LatestVersion: 1},
+		Procedure: memory.Procedure{ID: "root", CanonicalKey: "dev.change.verify", CreatedAt: stamp, LatestVersion: 1, Lifecycle: memory.LifecycleActive},
 		Versions: []memory.Version{{ProcedureID: "root", Number: 1, CreatedAt: stamp, Definition: memory.Definition{
 			Philosophy: "p", Method: "m", Contract: jsontext.Value(`{}`), Instructions: jsontext.Value(`{"steps":["verify"]}`), RevisionReason: "r",
 			References: []memory.Reference{{Name: "build", ProcedureID: "leaf", VersionPolicy: memory.VersionPolicy{Kind: memory.PolicyContextual}, Inputs: jsontext.Value(`{"cmd":{"input":"cmd"}}`)}},

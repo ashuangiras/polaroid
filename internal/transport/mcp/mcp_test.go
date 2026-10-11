@@ -89,6 +89,7 @@ type errorJSON struct {
 	Code          string `json:"code"`
 	Message       string `json:"message"`
 	LatestVersion int    `json:"latest_version"`
+	LatestEvent   int    `json:"latest_event"`
 	Fields        []struct {
 		Field   string `json:"field"`
 		Message string `json:"message"`
@@ -166,10 +167,11 @@ func (b *syncBuffer) String() string {
 }
 
 var (
-	readTools = []string{"discover_procedures", "get_binding", "get_binding_revision", "get_execution", "get_feedback", "get_graph", "get_procedure", "get_repository", "get_toil_item", "get_toil_revision", "get_verification", "get_version",
+	readTools = []string{"discover_procedures", "get_binding", "get_binding_revision", "get_execution", "get_execution_invalidation", "get_feedback", "get_graph", "get_procedure",
+		"get_procedure_lifecycle", "get_repository", "get_toil_item", "get_toil_revision", "get_verification", "get_version",
 		"list_bindings", "list_executions", "list_feedback", "list_procedures", "list_repositories", "list_toil_items", "list_verifications", "resolve_binding", "suggest_duplicates"}
-	writeTools = []string{"add_repository_alias", "create_binding", "create_procedure", "create_toil_item", "record_execution", "record_procedure_origin", "register_repository",
-		"report_feedback", "revise_binding", "revise_procedure", "revise_toil_item"}
+	writeTools = []string{"add_repository_alias", "create_binding", "create_procedure", "create_toil_item", "invalidate_execution", "reactivate_procedure",
+		"record_execution", "record_procedure_origin", "register_repository", "report_feedback", "retire_procedure", "revise_binding", "revise_procedure", "revise_toil_item"}
 )
 
 func TestToolsAndResourcesAreAdvertised(t *testing.T) {
@@ -345,7 +347,7 @@ func TestChildInputsThroughTools(t *testing.T) {
 	}
 	h.ok(t, "get_execution", `{"id":"historical"}`)
 	if v := h.ok(t, "get_verification", `{"execution_id":"historical"}`); !strings.Contains(v,
-		`"verified":false,"problems":[{"code":"child_inputs_mismatch","reference":"leaf","execution_id":"`+wrong+`"}]`) {
+		`"verified":false,"evidence_status":"valid","problems":[{"code":"child_inputs_mismatch","reference":"leaf","execution_id":"`+wrong+`"}]`) {
 		t.Fatalf("historical verification: %s", v)
 	}
 }
@@ -441,7 +443,7 @@ func TestRepositoriesScopesAndPagesThroughTools(t *testing.T) {
 	local := h.ok(t, "create_procedure", `{"canonical_key":"a.release","origin":{"repository_id":"`+a+`","reason":"Written for A."},`+
 		`"philosophy":"p","method":"m","applicability":{"repository":"`+a+`"},"contract":{},"instructions":{},`+
 		`"references":[{"name":"build","procedure_id":"`+shared+`","version_policy":{"contextual":{}},"inputs":{}}],"revision_reason":"r"}`)
-	if !strings.Contains(local, `"scope":"local","applicability":{"repository":"`+a+`"},"origin":{"repository_id":"`+a+`","reason":"Written for A."`) {
+	if !strings.Contains(local, `"scope":"local","lifecycle_status":"active","applicability":{"repository":"`+a+`"},"origin":{"repository_id":"`+a+`","reason":"Written for A."`) {
 		t.Fatalf("create_procedure local = %s", local)
 	}
 	if e := h.fail(t, "create_procedure", `{"canonical_key":"x.y","philosophy":"p","method":"m","applicability":{"shared":{}},"contract":{},"instructions":{},`+

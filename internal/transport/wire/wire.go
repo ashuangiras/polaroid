@@ -240,22 +240,24 @@ func (c BindingConfig) Domain() memory.BindingConfig {
 // Procedure is a list item. scope, goal and applicability describe version
 // latest_version only (ADR-0023); resolution may select another version,
 // whose own scope its graph node reports. goal, applicability and origin
-// are omitted when absent.
+// are omitted when absent. lifecycle_status is the identity's lifecycle
+// state, active or retired (ADR-0035).
 type Procedure struct {
-	ID            string         `json:"id"`
-	CanonicalKey  string         `json:"canonical_key"`
-	CreatedAt     time.Time      `json:"created_at"`
-	LatestVersion int            `json:"latest_version"`
-	Scope         string         `json:"scope"`
-	Goal          string         `json:"goal,omitzero"`
-	Applicability *Applicability `json:"applicability,omitzero"`
-	Origin        *Origin        `json:"origin,omitzero"`
+	ID              string         `json:"id"`
+	CanonicalKey    string         `json:"canonical_key"`
+	CreatedAt       time.Time      `json:"created_at"`
+	LatestVersion   int            `json:"latest_version"`
+	Scope           string         `json:"scope"`
+	LifecycleStatus string         `json:"lifecycle_status"`
+	Goal            string         `json:"goal,omitzero"`
+	Applicability   *Applicability `json:"applicability,omitzero"`
+	Origin          *Origin        `json:"origin,omitzero"`
 }
 
 func NewProcedure(p memory.Procedure) Procedure {
 	return Procedure{
 		ID: p.ID, CanonicalKey: p.CanonicalKey, CreatedAt: p.CreatedAt, LatestVersion: p.LatestVersion,
-		Scope: p.Applicability.Name(), Goal: p.Goal, Applicability: NewApplicability(p.Applicability), Origin: newOrigin(p.Origin),
+		Scope: p.Applicability.Name(), LifecycleStatus: string(p.Lifecycle), Goal: p.Goal, Applicability: NewApplicability(p.Applicability), Origin: newOrigin(p.Origin),
 	}
 }
 
@@ -313,20 +315,22 @@ func NewDiscovery(d memory.Discovery) Discovery {
 }
 
 // CandidateVersion names the version a candidate was found in, its
-// procedure's latest version, with its goal and method as its description.
+// procedure's latest version, with its goal and method as its description,
+// and its procedure's lifecycle_status (ADR-0035).
 type CandidateVersion struct {
-	ProcedureID   string         `json:"procedure_id"`
-	CanonicalKey  string         `json:"canonical_key"`
-	Version       int            `json:"version"`
-	Scope         string         `json:"scope"`
-	Applicability *Applicability `json:"applicability,omitzero"`
-	Goal          string         `json:"goal,omitzero"`
-	Method        string         `json:"method"`
+	ProcedureID     string         `json:"procedure_id"`
+	CanonicalKey    string         `json:"canonical_key"`
+	Version         int            `json:"version"`
+	Scope           string         `json:"scope"`
+	LifecycleStatus string         `json:"lifecycle_status"`
+	Applicability   *Applicability `json:"applicability,omitzero"`
+	Goal            string         `json:"goal,omitzero"`
+	Method          string         `json:"method"`
 }
 
 func newCandidateVersion(v memory.CandidateVersion) CandidateVersion {
 	return CandidateVersion{ProcedureID: v.ProcedureID, CanonicalKey: v.CanonicalKey, Version: v.Version,
-		Scope: v.Applicability.Name(), Applicability: NewApplicability(v.Applicability), Goal: v.Goal, Method: v.Method}
+		Scope: v.Applicability.Name(), LifecycleStatus: string(v.Lifecycle), Applicability: NewApplicability(v.Applicability), Goal: v.Goal, Method: v.Method}
 }
 
 // Candidate is a discovered procedure with its ranking value and its
@@ -387,11 +391,13 @@ type Duplicates struct {
 	Suggestions   []Suggestion  `json:"suggestions"`
 }
 
-// KeyCollision is the existing procedure with the proposed canonical key.
+// KeyCollision is the existing procedure with the proposed canonical key,
+// retired or not.
 type KeyCollision struct {
-	ProcedureID   string `json:"procedure_id"`
-	CanonicalKey  string `json:"canonical_key"`
-	LatestVersion int    `json:"latest_version"`
+	ProcedureID     string `json:"procedure_id"`
+	CanonicalKey    string `json:"canonical_key"`
+	LatestVersion   int    `json:"latest_version"`
+	LifecycleStatus string `json:"lifecycle_status"`
 }
 
 // Suggestion is an existing procedure whose summary overlaps the proposal.
@@ -405,7 +411,7 @@ type Suggestion struct {
 func NewDuplicates(d memory.Duplicates) Duplicates {
 	body := Duplicates{ProposalTerms: d.ProposalTerms, Repository: d.Repository, Matched: d.Matched, Suggestions: make([]Suggestion, len(d.Suggestions))}
 	if k := d.KeyCollision; k != nil {
-		body.KeyCollision = &KeyCollision{ProcedureID: k.ProcedureID, CanonicalKey: k.CanonicalKey, LatestVersion: k.LatestVersion}
+		body.KeyCollision = &KeyCollision{ProcedureID: k.ProcedureID, CanonicalKey: k.CanonicalKey, LatestVersion: k.LatestVersion, LifecycleStatus: string(k.Lifecycle)}
 	}
 	for i, s := range d.Suggestions {
 		body.Suggestions[i] = Suggestion{CandidateVersion: newCandidateVersion(s.CandidateVersion),
@@ -450,30 +456,36 @@ func NewVersion(v memory.Version) Version {
 	}
 }
 
+// History is a procedure with all of its versions. lifecycle_event is the
+// latest lifecycle event, omitted when there is none (ADR-0035).
 type History struct {
-	ID            string         `json:"id"`
-	CanonicalKey  string         `json:"canonical_key"`
-	CreatedAt     time.Time      `json:"created_at"`
-	LatestVersion int            `json:"latest_version"`
-	Scope         string         `json:"scope"`
-	Goal          string         `json:"goal,omitzero"`
-	Applicability *Applicability `json:"applicability,omitzero"`
-	Origin        *Origin        `json:"origin,omitzero"`
-	Versions      []Version      `json:"versions"`
+	ID              string         `json:"id"`
+	CanonicalKey    string         `json:"canonical_key"`
+	CreatedAt       time.Time      `json:"created_at"`
+	LatestVersion   int            `json:"latest_version"`
+	Scope           string         `json:"scope"`
+	LifecycleStatus string         `json:"lifecycle_status"`
+	LifecycleEvent  int            `json:"lifecycle_event,omitzero"`
+	Goal            string         `json:"goal,omitzero"`
+	Applicability   *Applicability `json:"applicability,omitzero"`
+	Origin          *Origin        `json:"origin,omitzero"`
+	Versions        []Version      `json:"versions"`
 }
 
 func NewHistory(h memory.History) History {
 	p := NewProcedure(h.Procedure)
 	body := History{
-		ID:            p.ID,
-		CanonicalKey:  p.CanonicalKey,
-		CreatedAt:     p.CreatedAt,
-		LatestVersion: p.LatestVersion,
-		Scope:         p.Scope,
-		Goal:          p.Goal,
-		Applicability: p.Applicability,
-		Origin:        p.Origin,
-		Versions:      make([]Version, len(h.Versions)),
+		ID:              p.ID,
+		CanonicalKey:    p.CanonicalKey,
+		CreatedAt:       p.CreatedAt,
+		LatestVersion:   p.LatestVersion,
+		Scope:           p.Scope,
+		LifecycleStatus: p.LifecycleStatus,
+		LifecycleEvent:  h.Procedure.LifecycleEvent,
+		Goal:            p.Goal,
+		Applicability:   p.Applicability,
+		Origin:          p.Origin,
+		Versions:        make([]Version, len(h.Versions)),
 	}
 	for i, v := range h.Versions {
 		body.Versions[i] = NewVersion(v)
@@ -562,14 +574,16 @@ func NewBindingHistory(h memory.BindingHistory) BindingHistory {
 
 // GraphNode is one node of a composition graph. References is always
 // present, empty for a leaf. verified_by and selection_evidence are omitted
-// without evidence, target_verification without a target (ADR-0018), and
-// applicability when the version declares none (ADR-0020).
+// without evidence, target_verification without a target (ADR-0018),
+// applicability when the version declares none (ADR-0020), and retirement
+// unless the procedure is retired (ADR-0035).
 type GraphNode struct {
 	ProcedureID        string              `json:"procedure_id"`
 	CanonicalKey       string              `json:"canonical_key"`
 	Version            int                 `json:"version"`
 	Scope              string              `json:"scope"`
 	Applicability      *Applicability      `json:"applicability,omitzero"`
+	Retirement         *LifecycleEvent     `json:"retirement,omitzero"`
 	VerifiedBy         string              `json:"verified_by,omitzero"`
 	SelectionEvidence  *SelectionEvidence  `json:"selection_evidence,omitzero"`
 	TargetVerification *TargetVerification `json:"target_verification,omitzero"`
@@ -588,13 +602,16 @@ type SelectionEvidence struct {
 
 // TargetVerification is a verification-list entry for the node's selected
 // combination at the target. latest_execution_id is omitted, and
-// execution_ids empty, when nothing has run there.
+// execution_ids empty, when nothing has run there; invalidated executions
+// are listed again in invalidated_execution_ids and never decide
+// (ADR-0035).
 type TargetVerification struct {
-	Combination       Combination `json:"combination"`
-	Verified          bool        `json:"verified"`
-	LatestExecutionID string      `json:"latest_execution_id,omitzero"`
-	ExecutionIDs      []string    `json:"execution_ids"`
-	Undecided         []string    `json:"undecided,omitzero"`
+	Combination             Combination `json:"combination"`
+	Verified                bool        `json:"verified"`
+	LatestExecutionID       string      `json:"latest_execution_id,omitzero"`
+	ExecutionIDs            []string    `json:"execution_ids"`
+	InvalidatedExecutionIDs []string    `json:"invalidated_execution_ids,omitzero"`
+	Undecided               []string    `json:"undecided,omitzero"`
 }
 
 // GraphEdge is a reference with the node it selected. condition is omitted
@@ -621,17 +638,19 @@ func NewGraphNode(n memory.GraphNode) GraphNode {
 		Applicability: NewApplicability(n.Applicability),
 		VerifiedBy:    n.VerifiedBy,
 		References:    make([]GraphEdge, len(n.Edges)),
+		Retirement:    newLifecycleEvent(n.Retirement),
 	}
 	if e := n.Evidence; e != nil {
 		body.SelectionEvidence = &SelectionEvidence{ExecutionID: e.ExecutionID, Repository: e.Repository, RepositoryID: e.RepositoryID, Commit: e.Commit, Environment: EnvironmentName{Name: e.Environment}}
 	}
 	if s := n.Target; s != nil {
 		body.TargetVerification = &TargetVerification{
-			Combination:       newCombination(s.Combination),
-			Verified:          s.Verified,
-			LatestExecutionID: s.LatestExecutionID,
-			ExecutionIDs:      s.ExecutionIDs,
-			Undecided:         s.Undecided,
+			Combination:             newCombination(s.Combination),
+			Verified:                s.Verified,
+			LatestExecutionID:       s.LatestExecutionID,
+			ExecutionIDs:            s.ExecutionIDs,
+			InvalidatedExecutionIDs: s.InvalidatedExecutionIDs,
+			Undecided:               s.Undecided,
 		}
 	}
 	for i, e := range n.Edges {
@@ -756,7 +775,8 @@ func (r ExecutionRecord) Domain() memory.ExecutionRecord {
 // listed. binding_id and binding_revision are omitted when no binding was used.
 // repository is the identifier submitted with the execution; repository_id,
 // derived when read, is the repository it is registered to, omitted if it
-// is not registered (ADR-0022).
+// is not registered (ADR-0022). evidence_status is valid or invalidated
+// (ADR-0035).
 type ExecutionSummary struct {
 	ID              string      `json:"id"`
 	ProcedureID     string      `json:"procedure_id"`
@@ -768,6 +788,7 @@ type ExecutionSummary struct {
 	Commit          string      `json:"commit"`
 	Environment     Environment `json:"environment"`
 	Outcome         string      `json:"outcome"`
+	EvidenceStatus  string      `json:"evidence_status"`
 	CreatedAt       time.Time   `json:"created_at"`
 }
 
@@ -783,6 +804,7 @@ func NewExecutionSummary(e memory.Execution) ExecutionSummary {
 		Commit:          e.Commit,
 		Environment:     Environment{Name: e.Environment.Name, Attributes: e.Environment.Attributes},
 		Outcome:         string(e.Outcome),
+		EvidenceStatus:  string(e.EvidenceStatus()),
 		CreatedAt:       e.CreatedAt,
 	}
 }
@@ -818,6 +840,10 @@ type Execution struct {
 	Children  []Child    `json:"children,omitzero"`
 	Decisions []Decision `json:"decisions,omitzero"`
 	CreatedAt time.Time  `json:"created_at"`
+	// EvidenceStatus and Invalidation are lifecycle metadata, stored apart
+	// from the record (ADR-0035); invalidation is omitted while it is valid.
+	EvidenceStatus string        `json:"evidence_status"`
+	Invalidation   *Invalidation `json:"invalidation,omitzero"`
 }
 
 func NewExecution(e memory.Execution) Execution {
@@ -842,6 +868,8 @@ func NewExecution(e memory.Execution) Execution {
 		Children:        children,
 		Decisions:       newDecisions(e.Decisions),
 		CreatedAt:       s.CreatedAt,
+		EvidenceStatus:  s.EvidenceStatus,
+		Invalidation:    newInvalidation(e.Invalidation),
 	}
 }
 
@@ -888,14 +916,15 @@ func newChildVersions(children []memory.ChildVersion) []ChildVersion {
 }
 
 // Verification judges one execution. problems is omitted when it is
-// verified.
+// verified. evidence_status is the execution's own (ADR-0035).
 type Verification struct {
-	ExecutionID string      `json:"execution_id"`
-	ProcedureID string      `json:"procedure_id"`
-	Version     int         `json:"version"`
-	Verified    bool        `json:"verified"`
-	Problems    []Problem   `json:"problems,omitzero"`
-	Combination Combination `json:"combination"`
+	ExecutionID    string      `json:"execution_id"`
+	ProcedureID    string      `json:"procedure_id"`
+	Version        int         `json:"version"`
+	Verified       bool        `json:"verified"`
+	EvidenceStatus string      `json:"evidence_status"`
+	Problems       []Problem   `json:"problems,omitzero"`
+	Combination    Combination `json:"combination"`
 }
 
 type Problem struct {
@@ -906,11 +935,12 @@ type Problem struct {
 
 func NewVerification(v memory.Verification) Verification {
 	body := Verification{
-		ExecutionID: v.ExecutionID,
-		ProcedureID: v.ProcedureID,
-		Version:     v.Version,
-		Verified:    v.Verified,
-		Combination: newCombination(v.Combination),
+		ExecutionID:    v.ExecutionID,
+		ProcedureID:    v.ProcedureID,
+		Version:        v.Version,
+		Verified:       v.Verified,
+		EvidenceStatus: string(v.EvidenceStatus),
+		Combination:    newCombination(v.Combination),
 	}
 	for _, p := range v.Problems {
 		body.Problems = append(body.Problems, Problem{Code: string(p.Code), Reference: p.Reference, ExecutionID: p.ExecutionID})
@@ -918,11 +948,15 @@ func NewVerification(v memory.Verification) Verification {
 	return body
 }
 
+// CombinationStatus is a verification-list entry. latest_execution_id is
+// the latest valid execution, omitted when every execution is invalidated;
+// invalidated_execution_ids is omitted when none is (ADR-0035).
 type CombinationStatus struct {
-	Combination       Combination `json:"combination"`
-	Verified          bool        `json:"verified"`
-	LatestExecutionID string      `json:"latest_execution_id"`
-	ExecutionIDs      []string    `json:"execution_ids"`
+	Combination             Combination `json:"combination"`
+	Verified                bool        `json:"verified"`
+	LatestExecutionID       string      `json:"latest_execution_id,omitzero"`
+	ExecutionIDs            []string    `json:"execution_ids"`
+	InvalidatedExecutionIDs []string    `json:"invalidated_execution_ids,omitzero"`
 }
 
 type VerificationList struct {
@@ -933,10 +967,11 @@ func NewVerificationList(statuses []memory.CombinationStatus) VerificationList {
 	body := VerificationList{Verifications: make([]CombinationStatus, len(statuses))}
 	for i, s := range statuses {
 		body.Verifications[i] = CombinationStatus{
-			Combination:       newCombination(s.Combination),
-			Verified:          s.Verified,
-			LatestExecutionID: s.LatestExecutionID,
-			ExecutionIDs:      s.ExecutionIDs,
+			Combination:             newCombination(s.Combination),
+			Verified:                s.Verified,
+			LatestExecutionID:       s.LatestExecutionID,
+			ExecutionIDs:            s.ExecutionIDs,
+			InvalidatedExecutionIDs: s.InvalidatedExecutionIDs,
 		}
 	}
 	return body
@@ -1106,7 +1141,8 @@ type ErrorBody struct {
 type ErrorDetail struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
-	// Fields lists invalid input fields for invalid_request errors.
+	// Fields lists invalid input fields for invalid_request errors, and the
+	// fields naming retired procedures for procedure_retired errors.
 	Fields []FieldProblem `json:"fields,omitzero"`
 	// LatestVersion is the procedure's latest version for version_conflict
 	// errors, so the client can re-read it and revise again.
@@ -1114,6 +1150,9 @@ type ErrorDetail struct {
 	// LatestRevision is the binding's latest revision for revision_conflict
 	// errors.
 	LatestRevision int `json:"latest_revision,omitzero"`
+	// LatestEvent is the procedure's latest lifecycle event for
+	// lifecycle_conflict errors.
+	LatestEvent int `json:"latest_event,omitzero"`
 	// Cycle is the path of a reference_cycle error.
 	Cycle []CycleStep `json:"cycle,omitzero"`
 }
@@ -1151,6 +1190,8 @@ func Classify(err error) (status int, detail ErrorDetail, ok bool) {
 	var revisionConflict *memory.RevisionConflictError
 	var cycle *memory.ReferenceCycleError
 	var limit *memory.GraphLimitError
+	var lifecycleConflict *memory.LifecycleConflictError
+	var retired *memory.RetiredProcedureError
 	switch {
 	case errors.As(err, &invalid):
 		detail = ErrorDetail{Code: "invalid_request", Message: invalid.Error()}
@@ -1158,6 +1199,18 @@ func Classify(err error) (status int, detail ErrorDetail, ok bool) {
 			detail.Fields = append(detail.Fields, FieldProblem(p))
 		}
 		return http.StatusBadRequest, detail, true
+	case errors.As(err, &retired):
+		detail = ErrorDetail{Code: "procedure_retired", Message: retired.Error()}
+		for _, p := range retired.Fields {
+			detail.Fields = append(detail.Fields, FieldProblem(p))
+		}
+		return http.StatusConflict, detail, true
+	case errors.As(err, &lifecycleConflict):
+		return http.StatusConflict, ErrorDetail{Code: "lifecycle_conflict", Message: lifecycleConflict.Error(), LatestEvent: lifecycleConflict.LatestEvent}, true
+	case errors.Is(err, memory.ErrLifecycleUnchanged):
+		return http.StatusConflict, ErrorDetail{Code: "lifecycle_unchanged", Message: err.Error()}, true
+	case errors.Is(err, memory.ErrExecutionInvalidated):
+		return http.StatusConflict, ErrorDetail{Code: "execution_invalidated", Message: err.Error()}, true
 	case errors.As(err, &conflict):
 		return http.StatusConflict, ErrorDetail{Code: "version_conflict", Message: conflict.Error(), LatestVersion: conflict.LatestVersion}, true
 	case errors.As(err, &revisionConflict):

@@ -22,7 +22,7 @@ func TestDiscoveryAndDuplicatesThroughTools(t *testing.T) {
 	d := h.ok(t, "discover_procedures", `{"task":"building a Go module","limit":1}`)
 	for _, want := range []string{`{"terms":["building","go","module"],"considered":2,"rarity":[{"term":"building","procedures":2,`,
 		`"matched":2,"candidates":[{"procedure_id":"` + build + `","canonical_key":"go.module.build","version":1,` +
-			`"scope":"shared","applicability":{"shared":{}},"goal":"Build every package of a Go module.","method":"Run the repository's build command from the module root.",` +
+			`"scope":"shared","lifecycle_status":"active","applicability":{"shared":{}},"goal":"Build every package of a Go module.","method":"Run the repository's build command from the module root.",` +
 			`"matched_terms":3,"score":`,
 		`"contributions":[{"term":"building","field":"canonical_key",`,
 		`"matches":[{"field":"canonical_key","terms":["building","go","module"]},{"field":"goal","terms":["building","go","module"]},` +
@@ -41,7 +41,7 @@ func TestDiscoveryAndDuplicatesThroughTools(t *testing.T) {
 
 	dup := h.ok(t, "suggest_duplicates", `{"canonical_key":"go.module.build","goal":"Build every package of a Go module.",`+
 		`"method":"Run the build command from the module root.","philosophy":"Evidence only with the declared toolchain."}`)
-	if !strings.HasPrefix(dup, `{"proposal_terms":`) || !strings.Contains(dup, `"key_collision":{"procedure_id":"`+build+`","canonical_key":"go.module.build","latest_version":1}`) ||
+	if !strings.HasPrefix(dup, `{"proposal_terms":`) || !strings.Contains(dup, `"key_collision":{"procedure_id":"`+build+`","canonical_key":"go.module.build","latest_version":1,"lifecycle_status":"active"}`) ||
 		!strings.Contains(dup, `"suggestions":[{"procedure_id":"`+build+`"`) {
 		t.Fatalf("suggest_duplicates = %s", dup)
 	}

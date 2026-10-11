@@ -117,10 +117,11 @@ func executionBody(procedureID string, extra string) string {
 }
 
 // fixture writes one of every record kind, including a run that skips a
-// conditional reference with a decision, and returns the API reads that
+// conditional reference with a decision, an invalidated execution and a
+// retired-then-reactivated procedure, and returns the API reads that
 // describe them.
 type fixture struct {
-	leaf, parent, binding, run, feedback, toil string
+	leaf, parent, binding, run, feedback, toil, stale string
 }
 
 func populate(a *api) fixture {
@@ -144,6 +145,10 @@ func populate(a *api) fixture {
 	f.toil = a.post("/v1/toil-items", `{"canonical_key": "recovery.toil", "revision": {"status": "observed", `+toil+`}}`)
 	a.post("/v1/toil-items/"+f.toil+"/revisions", `{"base_revision": 1, "revision": {"status": "candidate", "proposal": {"inputs": 1, "outputs": 2,
 		"remaining_judgment": 3, "failure_and_recovery": 4, "acceptance_criteria": ["c"]}, `+toil+`}}`)
+	f.stale = a.post("/v1/executions", executionBody(f.leaf, ""))
+	a.post("/v1/executions/"+f.stale+"/invalidation", `{"reason": "Recorded against the wrong version.", "actor": "recovery.test"}`)
+	a.post("/v1/procedures/"+f.leaf+"/retirement", `{"base_event": 0, "reason": "Superseded.", "actor": "recovery.test"}`)
+	a.post("/v1/procedures/"+f.leaf+"/reactivation", `{"base_event": 1, "reason": "Needed again.", "actor": "recovery.test"}`)
 	return f
 }
 
@@ -158,6 +163,8 @@ func (f fixture) reads(a *api) map[string]string {
 		"/v1/executions/" + f.run, "/v1/executions/" + f.run + "/verification",
 		"/v1/procedures/" + f.parent + "/versions/1/graph?" + target.Encode(),
 		"/v1/feedback/" + f.feedback, "/v1/repositories", "/v1/toil-items/" + f.toil, "/v1/toil-items",
+		"/v1/executions/" + f.stale, "/v1/executions/" + f.stale + "/invalidation", "/v1/procedures/" + f.leaf + "/lifecycle/events",
+		"/v1/procedures/" + f.leaf + "/versions/1/verifications",
 	} {
 		out[p] = string(a.get(p))
 	}
@@ -176,8 +183,14 @@ func checkReads(t *testing.T, got, want map[string]string) {
 		if strings.HasSuffix(p, "/verification") && !strings.Contains(w, `"verified":true`) {
 			t.Errorf("fixture run is not verified: %s", w)
 		}
-		if strings.Contains(p, "/executions/") && !strings.Contains(p, "verification") && !strings.Contains(w, `"applicable":false`) {
+		if strings.Contains(p, "/executions/") && !strings.Contains(p, "verification") && !strings.Contains(w, `"invalidated"`) && !strings.Contains(w, `"applicable":false`) {
 			t.Errorf("fixture run has no decision: %s", w)
+		}
+		if strings.Contains(p, "/executions/") && strings.Contains(w, `"evidence_status":"invalidated"`) != strings.Contains(w, `"Recorded against the wrong version."`) {
+			t.Errorf("the invalidation was not kept: %s", w)
+		}
+		if strings.HasSuffix(p, "/lifecycle/events") && !strings.Contains(w, `"status":"active","latest_event":2`) {
+			t.Errorf("the lifecycle was not kept: %s", w)
 		}
 	}
 }

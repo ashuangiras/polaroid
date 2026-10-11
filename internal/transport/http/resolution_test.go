@@ -7,16 +7,24 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // graphNodeJSON and bindingResolutionJSON restate the documented shapes.
 type graphNodeJSON struct {
-	ProcedureID       string         `json:"procedure_id"`
-	CanonicalKey      string         `json:"canonical_key"`
-	Version           int            `json:"version"`
-	Scope             string         `json:"scope"`
-	Applicability     jsontext.Value `json:"applicability"`
-	VerifiedBy        string         `json:"verified_by"`
+	ProcedureID   string         `json:"procedure_id"`
+	CanonicalKey  string         `json:"canonical_key"`
+	Version       int            `json:"version"`
+	Scope         string         `json:"scope"`
+	Applicability jsontext.Value `json:"applicability"`
+	Retirement    *struct {
+		Event     int       `json:"event"`
+		Status    string    `json:"status"`
+		Reason    string    `json:"reason"`
+		Actor     string    `json:"actor"`
+		CreatedAt time.Time `json:"created_at"`
+	} `json:"retirement"`
+	VerifiedBy        string `json:"verified_by"`
 	SelectionEvidence *struct {
 		ExecutionID  string `json:"execution_id"`
 		Repository   string `json:"repository"`
@@ -40,11 +48,12 @@ type graphNodeJSON struct {
 }
 
 type targetVerificationJSON struct {
-	Combination       combinationJSON `json:"combination"`
-	Verified          bool            `json:"verified"`
-	LatestExecutionID string          `json:"latest_execution_id"`
-	ExecutionIDs      []string        `json:"execution_ids"`
-	Undecided         []string        `json:"undecided"`
+	Combination             combinationJSON `json:"combination"`
+	Verified                bool            `json:"verified"`
+	LatestExecutionID       string          `json:"latest_execution_id"`
+	ExecutionIDs            []string        `json:"execution_ids"`
+	InvalidatedExecutionIDs []string        `json:"invalidated_execution_ids"`
+	Undecided               []string        `json:"undecided"`
 }
 
 type bindingResolutionJSON struct {

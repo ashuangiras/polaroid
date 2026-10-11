@@ -22,6 +22,9 @@ func (s *Store) CreateBinding(ctx context.Context, b memory.Binding, first memor
 		if !exists {
 			return memory.ErrNotFound
 		}
+		if err := checkNotRetired(ctx, tx, b.ProcedureID); err != nil {
+			return err
+		}
 		if err := checkPin(ctx, tx, b.ProcedureID, first.VersionPolicy); err != nil {
 			return err
 		}
@@ -69,6 +72,9 @@ func (s *Store) AppendBindingRevision(ctx context.Context, baseRevision int, nex
 		}
 		if !latest.Valid {
 			return memory.ErrNotFound
+		}
+		if err := checkNotRetired(ctx, tx, procedureID.String); err != nil {
+			return err
 		}
 		if int(latest.Int64) != baseRevision {
 			return &memory.RevisionConflictError{BaseRevision: baseRevision, LatestRevision: int(latest.Int64)}

@@ -35,7 +35,7 @@ func openStore(t *testing.T, path string) *sqlite.Store {
 }
 
 func procedure(id, key string) memory.Procedure {
-	return memory.Procedure{ID: id, CanonicalKey: key, CreatedAt: created, LatestVersion: 1}
+	return memory.Procedure{ID: id, CanonicalKey: key, CreatedAt: created, LatestVersion: 1, Lifecycle: memory.LifecycleActive}
 }
 
 func version(procedureID string, n int, instructions string) memory.Version {

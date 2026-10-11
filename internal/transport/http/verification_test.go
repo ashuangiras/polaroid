@@ -31,11 +31,12 @@ type combinationJSON struct {
 }
 
 type verificationJSON struct {
-	ExecutionID string `json:"execution_id"`
-	ProcedureID string `json:"procedure_id"`
-	Version     int    `json:"version"`
-	Verified    bool   `json:"verified"`
-	Problems    []struct {
+	ExecutionID    string `json:"execution_id"`
+	ProcedureID    string `json:"procedure_id"`
+	Version        int    `json:"version"`
+	Verified       bool   `json:"verified"`
+	EvidenceStatus string `json:"evidence_status"`
+	Problems       []struct {
 		Code        string `json:"code"`
 		Reference   string `json:"reference"`
 		ExecutionID string `json:"execution_id"`
@@ -45,10 +46,11 @@ type verificationJSON struct {
 
 type verificationListJSON struct {
 	Verifications []struct {
-		Combination       combinationJSON `json:"combination"`
-		Verified          bool            `json:"verified"`
-		LatestExecutionID string          `json:"latest_execution_id"`
-		ExecutionIDs      []string        `json:"execution_ids"`
+		Combination             combinationJSON `json:"combination"`
+		Verified                bool            `json:"verified"`
+		LatestExecutionID       string          `json:"latest_execution_id"`
+		ExecutionIDs            []string        `json:"execution_ids"`
+		InvalidatedExecutionIDs []string        `json:"invalidated_execution_ids"`
 	} `json:"verifications"`
 }
 

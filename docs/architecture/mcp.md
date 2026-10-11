@@ -20,9 +20,9 @@ Arguments are flat JSON objects, named after the record fields in [records.md](r
 
 | Tool | Read-only | Arguments | Result |
 | --- | --- | --- | --- |
-| `list_procedures` | yes | `repository`, `scope`, `q`, `limit`, `after` and `snapshot`, all optional | `{"procedures":[…]}`, with `next` when more remain |
-| `discover_procedures` | yes | `task`; `repository` and `limit` optional | [discovery](http-api.md#discover-procedures-for-a-task): ranked candidates with `score`, `matched_terms`, per-term `contributions` and per-field `matches`, with the corpus `considered`, each term's `rarity` and the `detail_cap` |
-| `suggest_duplicates` | yes | `method`, `philosophy`; `goal`, `canonical_key`, `repository`, `exclude_procedure_id` and `limit` optional | [duplicates](http-api.md#check-a-proposal-for-duplicates): `key_collision` when the key exists, and advisory `suggestions` with `similarity` |
+| `list_procedures` | yes | `repository`, `scope`, `q`, `lifecycle` (`active` by default, `retired` or `all`), `limit`, `after` and `snapshot`, all optional | `{"procedures":[…]}`, with `next` when more remain |
+| `discover_procedures` | yes | `task`; `repository`, `lifecycle` and `limit` optional | [discovery](http-api.md#discover-procedures-for-a-task): ranked candidates with `score`, `matched_terms`, per-term `contributions` and per-field `matches`, with the corpus `considered`, each term's `rarity` and the `detail_cap` |
+| `suggest_duplicates` | yes | `method`, `philosophy`; `goal`, `canonical_key`, `repository`, `exclude_procedure_id` and `limit` optional | [duplicates](http-api.md#check-a-proposal-for-duplicates): `key_collision` when the key exists, and advisory `suggestions` with `similarity`, retired procedures included |
 | `get_procedure` | yes | `id` or `canonical_key` (exactly one) | procedure history |
 | `get_version` | yes | `procedure_id`, `version` | version |
 | `get_graph` | yes | `procedure_id`, `version`; `repository` and `environment` together, optional; `commit` and `inputs` together, optional, with a context; `decisions`, optional, with a target | graph node, [resolved from evidence](records.md#contextual-resolution-implemented) when given a context, with [target verification](records.md#selection-evidence-and-target-verification-implemented) when given a target |
@@ -41,7 +41,7 @@ Arguments are flat JSON objects, named after the record fields in [records.md](r
 | `revise_binding` | no | `binding_id`, `base_revision`, `inputs`, `version_policy`, `revision_reason` | binding revision |
 | `record_execution` | no | the execution fields: `procedure_id`, `version`, `binding_id` and `binding_revision` (optional), `repository`, `commit`, `environment`, `inputs`, `outcome`, `evidence`, `children` (optional), `decisions` (optional) | execution |
 | `get_execution` | yes | `id` | execution |
-| `list_executions` | yes | `procedure_id`, `version` (with `procedure_id`), `repository`, `commit`, `limit` and `after`, all optional | `{"executions":[…]}`, with `next` when more remain |
+| `list_executions` | yes | `procedure_id`, `version` (with `procedure_id`), `repository`, `commit`, `evidence_status` (`valid` or `invalidated`), `limit` and `after`, all optional | `{"executions":[…]}`, with `next` when more remain |
 | `get_verification` | yes | `execution_id` | verification |
 | `list_verifications` | yes | `procedure_id`, `version`; `repository`, `commit` and `environment` optional | `{"verifications":[…]}` |
 | `report_feedback` | no | `kind`, `summary`, `details`, `reporter`; `context`, `subject`, `repository` and `execution_id` optional | feedback report |
@@ -52,8 +52,13 @@ Arguments are flat JSON objects, named after the record fields in [records.md](r
 | `get_toil_revision` | yes | `toil_item_id`, `revision` | toil revision |
 | `create_toil_item` | no | `canonical_key`, then the revision fields: `activity`, `applicability`, `sources`, `observations` (optional), `assessment`, `proposal` (optional), `status`, `status_rationale`, `replacement` and `validation` (optional), `revision_reason`, `author` | toil item history |
 | `revise_toil_item` | no | `toil_item_id`, `base_revision`, then the same revision fields | toil revision |
+| `invalidate_execution` | no | `execution_id`, `reason`, `actor` | [invalidation state](http-api.md#execution-evidence-invalidation) |
+| `get_execution_invalidation` | yes | `execution_id` | invalidation state |
+| `get_procedure_lifecycle` | yes | `procedure_id` | [lifecycle](http-api.md#procedure-lifecycle) |
+| `retire_procedure` | no | `procedure_id`, `base_event`, `reason`, `actor` | lifecycle |
+| `reactivate_procedure` | no | `procedure_id`, `base_event`, `reason`, `actor` | lifecycle |
 
-There are 32 tools: 21 read-only, and 11 that only append. The repository, scope and paging rules are those of the HTTP API ([ADR-0019](decisions/0019-repository-registry.md), [ADR-0020](decisions/0020-procedure-origin-and-applicability.md), [ADR-0021](decisions/0021-targeted-feedback-and-bounded-lists.md)); discovery and duplicate suggestions are lexical and store nothing ([ADR-0032](decisions/0032-lexical-discovery-and-duplicate-suggestions.md)); toil items follow [the HTTP rules](http-api.md#toil-items) ([ADR-0034](decisions/0034-toil-items.md)).
+There are 37 tools: 23 read-only, and 14 that only append. The repository, scope and paging rules are those of the HTTP API ([ADR-0019](decisions/0019-repository-registry.md), [ADR-0020](decisions/0020-procedure-origin-and-applicability.md), [ADR-0021](decisions/0021-targeted-feedback-and-bounded-lists.md)); discovery and duplicate suggestions are lexical and store nothing ([ADR-0032](decisions/0032-lexical-discovery-and-duplicate-suggestions.md)); toil items follow [the HTTP rules](http-api.md#toil-items) ([ADR-0034](decisions/0034-toil-items.md)); invalidation and retirement follow [ADR-0035](decisions/0035-evidence-invalidation-and-procedure-retirement.md): an invalidation is permanent and changes no record, and a retirement is reversed only by a reactivation.
 
 ### Results
 
@@ -64,9 +69,9 @@ A successful result carries the record exactly as the HTTP API returns it ([http
 
 ### Errors
 
-A failed call is a tool error (`isError: true`). It carries the HTTP API's error body, `{"error":{"code","message",…}}`, as text and as structured content, with the same codes: `invalid_request`, `not_found`, `version_conflict` (with `latest_version`), `revision_conflict`, `canonical_key_exists`, `binding_exists`, `repository_identifier_exists`, `origin_exists`, `reference_cycle`, `graph_too_large` and `internal`.
+A failed call is a tool error (`isError: true`). It carries the HTTP API's error body, `{"error":{"code","message",…}}`, as text and as structured content, with the same codes: `invalid_request`, `not_found`, `version_conflict` (with `latest_version`), `revision_conflict`, `canonical_key_exists`, `binding_exists`, `repository_identifier_exists`, `origin_exists`, `reference_cycle`, `graph_too_large`, `execution_invalidated`, `lifecycle_conflict` (with `latest_event`), `lifecycle_unchanged`, `procedure_retired` and `internal`.
 
-Field names in `fields` are the flat argument names. For example, a missing `philosophy` is reported as `philosophy`, not `version.philosophy`. A reference is still reported as `references[i]…`. An unexpected failure is logged, and only `internal` is returned.
+Field names in `fields` are the flat argument names. For example, a missing `philosophy` is reported as `philosophy`, not `version.philosophy`, and a reference to a retired procedure as `references[0].procedure_id`. A reference is still reported as `references[i]…`. An unexpected failure is logged, and only `internal` is returned.
 
 ## Resources
 

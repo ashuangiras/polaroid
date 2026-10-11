@@ -130,26 +130,29 @@ type versionJSON struct {
 }
 
 type procedureJSON struct {
-	ID            string         `json:"id"`
-	CanonicalKey  string         `json:"canonical_key"`
-	CreatedAt     time.Time      `json:"created_at"`
-	LatestVersion int            `json:"latest_version"`
-	Scope         string         `json:"scope"`
-	Goal          string         `json:"goal"`
-	Applicability jsontext.Value `json:"applicability"`
-	Origin        jsontext.Value `json:"origin"`
+	ID              string         `json:"id"`
+	CanonicalKey    string         `json:"canonical_key"`
+	CreatedAt       time.Time      `json:"created_at"`
+	LatestVersion   int            `json:"latest_version"`
+	Scope           string         `json:"scope"`
+	LifecycleStatus string         `json:"lifecycle_status"`
+	Goal            string         `json:"goal"`
+	Applicability   jsontext.Value `json:"applicability"`
+	Origin          jsontext.Value `json:"origin"`
 }
 
 type historyJSON struct {
-	ID            string           `json:"id"`
-	CanonicalKey  string           `json:"canonical_key"`
-	CreatedAt     time.Time        `json:"created_at"`
-	LatestVersion int              `json:"latest_version"`
-	Scope         string           `json:"scope"`
-	Goal          string           `json:"goal"`
-	Applicability jsontext.Value   `json:"applicability"`
-	Origin        jsontext.Value   `json:"origin"`
-	Versions      []jsontext.Value `json:"versions"`
+	ID              string           `json:"id"`
+	CanonicalKey    string           `json:"canonical_key"`
+	CreatedAt       time.Time        `json:"created_at"`
+	LatestVersion   int              `json:"latest_version"`
+	Scope           string           `json:"scope"`
+	LifecycleStatus string           `json:"lifecycle_status"`
+	LifecycleEvent  int              `json:"lifecycle_event"`
+	Goal            string           `json:"goal"`
+	Applicability   jsontext.Value   `json:"applicability"`
+	Origin          jsontext.Value   `json:"origin"`
+	Versions        []jsontext.Value `json:"versions"`
 }
 
 type errorJSON struct {
@@ -161,6 +164,7 @@ type errorJSON struct {
 	} `json:"fields"`
 	LatestVersion  int `json:"latest_version"`
 	LatestRevision int `json:"latest_revision"`
+	LatestEvent    int `json:"latest_event"`
 	Cycle          []struct {
 		ProcedureID string `json:"procedure_id"`
 		Version     int    `json:"version"`

@@ -7,6 +7,7 @@
 package http
 
 import (
+	"context"
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
@@ -46,6 +47,10 @@ func NewHandler(svc *memory.Service, logger *slog.Logger) http.Handler {
 	a.mux.HandleFunc("GET /v1/procedures/{id}", a.getProcedure)
 	a.mux.HandleFunc("POST /v1/procedures/{id}/versions", a.reviseProcedure)
 	a.mux.HandleFunc("POST /v1/procedures/{id}/origin", a.recordOrigin)
+	// Three segments after /v1/procedures/ would overlap by-key/{key}.
+	a.mux.HandleFunc("GET /v1/procedures/{id}/lifecycle/events", a.getLifecycle)
+	a.mux.HandleFunc("POST /v1/procedures/{id}/retirement", a.retireProcedure)
+	a.mux.HandleFunc("POST /v1/procedures/{id}/reactivation", a.reactivateProcedure)
 	a.mux.HandleFunc("GET /v1/procedures/{id}/versions/{version}", a.getVersion)
 	a.mux.HandleFunc("GET /v1/procedures/{id}/versions/{version}/graph", a.getGraph)
 	a.mux.HandleFunc("GET /v1/procedures/{id}/versions/{version}/verifications", a.listVerifications)
@@ -59,6 +64,8 @@ func NewHandler(svc *memory.Service, logger *slog.Logger) http.Handler {
 	a.mux.HandleFunc("GET /v1/executions", a.listExecutions)
 	a.mux.HandleFunc("GET /v1/executions/{id}", a.getExecution)
 	a.mux.HandleFunc("GET /v1/executions/{id}/verification", a.getVerification)
+	a.mux.HandleFunc("POST /v1/executions/{id}/invalidation", a.invalidateExecution)
+	a.mux.HandleFunc("GET /v1/executions/{id}/invalidation", a.getInvalidation)
 	a.mux.HandleFunc("POST /v1/feedback", a.reportFeedback)
 	a.mux.HandleFunc("GET /v1/feedback", a.listFeedback)
 	a.mux.HandleFunc("GET /v1/feedback/{id}", a.getFeedback)
@@ -156,7 +163,7 @@ func (a *api) recordOrigin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) listProcedures(w http.ResponseWriter, r *http.Request) {
-	query, ok := strictQuery(w, r, "repository", "scope", "q", "limit", "after", "snapshot")
+	query, ok := strictQuery(w, r, "repository", "scope", "q", "lifecycle", "limit", "after", "snapshot")
 	if !ok {
 		return
 	}
@@ -164,11 +171,11 @@ func (a *api) listProcedures(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !nonEmpty(w, query, "repository", "scope", "q") {
+	if !nonEmpty(w, query, "repository", "scope", "q", "lifecycle") {
 		return
 	}
 	procedures, next, err := a.svc.ListProcedures(r.Context(), memory.ProcedureFilter{
-		Repository: query.Get("repository"), Scope: query.Get("scope"), Query: query.Get("q"), Page: page,
+		Repository: query.Get("repository"), Scope: query.Get("scope"), Query: query.Get("q"), Lifecycle: query.Get("lifecycle"), Page: page,
 	})
 	if err != nil {
 		a.fail(w, r, err)
@@ -177,9 +184,41 @@ func (a *api) listProcedures(w http.ResponseWriter, r *http.Request) {
 	a.respond(w, r, http.StatusOK, wire.NewProcedureList(procedures, next))
 }
 
+func (a *api) getLifecycle(w http.ResponseWriter, r *http.Request) {
+	l, err := a.svc.ProcedureLifecycle(r.Context(), r.PathValue("id"))
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	a.respond(w, r, http.StatusOK, wire.NewLifecycle(l))
+}
+
+func (a *api) retireProcedure(w http.ResponseWriter, r *http.Request) {
+	a.changeLifecycle(w, r, a.svc.RetireProcedure)
+}
+
+func (a *api) reactivateProcedure(w http.ResponseWriter, r *http.Request) {
+	a.changeLifecycle(w, r, a.svc.ReactivateProcedure)
+}
+
+func (a *api) changeLifecycle(w http.ResponseWriter, r *http.Request,
+	change func(context.Context, string, memory.LifecycleChange) (memory.Lifecycle, error)) {
+	var body wire.LifecycleChange
+	if !decode(w, r, &body) {
+		return
+	}
+	l, err := change(r.Context(), r.PathValue("id"), body.Domain())
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	w.Header().Set("Location", procedurePath(l.ProcedureID)+"/lifecycle/events")
+	a.respond(w, r, http.StatusCreated, wire.NewLifecycle(l))
+}
+
 func (a *api) discoverProcedures(w http.ResponseWriter, r *http.Request) {
-	query, ok := strictQuery(w, r, "task", "repository", "limit")
-	if !ok || !nonEmpty(w, query, "repository") {
+	query, ok := strictQuery(w, r, "task", "repository", "lifecycle", "limit")
+	if !ok || !nonEmpty(w, query, "repository", "lifecycle") {
 		return
 	}
 	limit := 0
@@ -192,7 +231,8 @@ func (a *api) discoverProcedures(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
-	d, err := a.svc.DiscoverProcedures(r.Context(), memory.DiscoveryRequest{Task: query.Get("task"), Repository: query.Get("repository"), Limit: limit})
+	d, err := a.svc.DiscoverProcedures(r.Context(), memory.DiscoveryRequest{Task: query.Get("task"), Repository: query.Get("repository"),
+		Lifecycle: query.Get("lifecycle"), Limit: limit})
 	if err != nil {
 		a.fail(w, r, err)
 		return

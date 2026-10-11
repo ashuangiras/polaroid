@@ -83,6 +83,11 @@ Second-repository adoption trials are paused while the existing features are pre
    - The #85 assessment is promoted into the live catalog as `polaroid.change-classification.manual`, status `candidate`.
    - A fresh Copilot session used the toil tools on the live service.
 
+## Catalog lifecycle
+
+1. [#91 Execution-evidence invalidation and procedure retirement](https://github.com/ashuangiras/polaroid/issues/91): **done** ([ADR-0035](../architecture/decisions/0035-evidence-invalidation-and-procedure-retirement.md)), not released. Append-only lifecycle metadata: an execution is withdrawn as evidence, irreversibly, and stops supporting verification and selection; a procedure is retired and reactivated, leaving lists and discovery and refusing new references while everything that exists keeps resolving. Schema 10. The live correction of the promotion record `01a12ac5-7fc7` waits for a release ([status](status.md)).
+2. **Planned, not scoped:** physical purge, retention, usage statistics, payload limits, namespaces, promotion between catalogs, separate databases, and a procedure for promoting earlier assessments that `procedure.capability.extract` would reference.
+
 ## Later (unordered, not yet scoped)
 
 - **The #85 assessment's automation (proposed, not filed):** a committed tool that applies `dev.change.classify` rules mechanically. Its inputs, outputs and acceptance criteria are in the live toil item `polaroid.change-classification.manual` (`candidate`; [#89](https://github.com/ashuangiras/polaroid/issues/89)) ([status](status.md)). Filing it as an issue is a decision for the owner.

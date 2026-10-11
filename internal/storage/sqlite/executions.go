@@ -77,13 +77,17 @@ func (s *Store) CreateExecution(ctx context.Context, e *memory.Execution) error 
 
 // executionColumns end with the registered repository of the execution's
 // identifier and its canonical identifier, NULL if it is not registered
-// (ADR-0022). Queries using them read FROM executions without an alias.
+// (ADR-0022), and the execution's invalidation, NULL if it has none
+// (ADR-0035). Queries using them read FROM executions without an alias.
 const executionColumns = `id, procedure_id, version, binding_id, binding_revision, repository, commit_hash,
 	environment_name, environment_attributes, outcome, created_at,
 	(SELECT ri.repository_id FROM repository_identifiers AS ri WHERE ri.identifier = executions.repository),
 	(SELECT rc.identifier FROM repository_identifiers AS ri
 	 JOIN repository_identifiers AS rc ON rc.repository_id = ri.repository_id AND rc.canonical = 1
-	 WHERE ri.identifier = executions.repository)`
+	 WHERE ri.identifier = executions.repository),
+	(SELECT inv.reason FROM execution_invalidations AS inv WHERE inv.execution_id = executions.id),
+	(SELECT inv.actor FROM execution_invalidations AS inv WHERE inv.execution_id = executions.id),
+	(SELECT inv.created_at FROM execution_invalidations AS inv WHERE inv.execution_id = executions.id)`
 
 // sameIdentity is a condition on the column repository: it names the
 // identifier given twice as arguments, or another identifier of the
@@ -173,11 +177,13 @@ func (s *Store) ListExecutions(ctx context.Context, f memory.ExecutionFilter) ([
 		WHERE (? = '' OR procedure_id = ?) AND (? = 0 OR version = ?)
 		  AND (? IS NULL OR repository IN (SELECT value FROM json_each(?)))
 		  AND (? = '' OR commit_hash = ?)
+		  AND (? = '' OR (? = 'invalidated') = EXISTS (
+		       SELECT 1 FROM execution_invalidations AS inv WHERE inv.execution_id = executions.id))
 		  AND (? = '' OR created_at > ? OR (created_at = ? AND id > ?))
 		ORDER BY created_at, id
 		LIMIT ?`,
 		f.ProcedureID, f.ProcedureID, f.Version, f.Version, repositories, repositories,
-		f.Commit, f.Commit, at, at, at, id, fetchLimit(f.Page.Limit))
+		f.Commit, f.Commit, string(f.EvidenceStatus), string(f.EvidenceStatus), at, at, at, id, fetchLimit(f.Page.Limit))
 	if err != nil {
 		return nil, fmt.Errorf("query executions: %w", err)
 	}
@@ -263,6 +269,7 @@ func (r txRuns) ReferenceMappings(ctx context.Context, procedureID string, versi
 func (r txRuns) LatestRuns(ctx context.Context, procedureID string, c memory.ResolutionContext) ([]memory.VersionRun, error) {
 	rows, err := r.tx.QueryContext(ctx, `SELECT version, id FROM executions
 		WHERE procedure_id = ? AND `+sameIdentity+` AND environment_name = ?
+		  AND NOT EXISTS (SELECT 1 FROM execution_invalidations AS inv WHERE inv.execution_id = executions.id)
 		ORDER BY version DESC, created_at DESC, id DESC`, procedureID, c.Repository, c.Repository, c.Environment)
 	if err != nil {
 		return nil, fmt.Errorf("query latest runs: %w", err)
@@ -321,12 +328,12 @@ func queryStrings(ctx context.Context, q querier, query string, args ...any) ([]
 // scanExecution reads executionColumns, followed by any extra destinations.
 func scanExecution(row interface{ Scan(...any) error }, extra ...any) (memory.Execution, error) {
 	var e memory.Execution
-	var bindingID, repositoryID, canonical sql.NullString
+	var bindingID, repositoryID, canonical, invReason, invActor, invCreated sql.NullString
 	var bindingRevision sql.NullInt64
 	var attributes []byte
 	var outcome, created string
 	dest := append([]any{&e.ID, &e.ProcedureID, &e.Version, &bindingID, &bindingRevision, &e.Repository, &e.Commit,
-		&e.Environment.Name, &attributes, &outcome, &created, &repositoryID, &canonical}, extra...)
+		&e.Environment.Name, &attributes, &outcome, &created, &repositoryID, &canonical, &invReason, &invActor, &invCreated}, extra...)
 	if err := row.Scan(dest...); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return memory.Execution{}, err
@@ -341,5 +348,35 @@ func scanExecution(row interface{ Scan(...any) error }, extra ...any) (memory.Ex
 	if e.CreatedAt, err = parseTime(created); err != nil {
 		return memory.Execution{}, err
 	}
+	if invReason.Valid {
+		inv := &memory.Invalidation{ExecutionID: e.ID, Reason: invReason.String, Actor: invActor.String}
+		if inv.CreatedAt, err = parseTime(invCreated.String); err != nil {
+			return memory.Execution{}, err
+		}
+		e.Invalidation = inv
+	}
 	return e, nil
+}
+
+// InvalidateExecution implements memory.Store.
+func (s *Store) InvalidateExecution(ctx context.Context, inv memory.Invalidation) error {
+	return s.write(ctx, func(tx *sql.Tx) error {
+		var exists, invalidated bool
+		err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM executions WHERE id = ?),
+			EXISTS (SELECT 1 FROM execution_invalidations WHERE execution_id = ?)`, inv.ExecutionID, inv.ExecutionID).Scan(&exists, &invalidated)
+		switch {
+		case err != nil:
+			return fmt.Errorf("read execution: %w", err)
+		case !exists:
+			return memory.ErrNotFound
+		case invalidated:
+			return memory.ErrExecutionInvalidated
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO execution_invalidations (execution_id, reason, actor, created_at) VALUES (?, ?, ?, ?)`,
+			inv.ExecutionID, inv.Reason, inv.Actor, formatTime(inv.CreatedAt))
+		if err != nil {
+			return fmt.Errorf("insert invalidation: %w", err)
+		}
+		return nil
+	})
 }
