@@ -1,6 +1,6 @@
 # 0009. Reference graphs are acyclic per procedure, bounded, and resolve contextual references to the latest version
 
-**Status:** Accepted
+**Status:** Accepted. **Amended:** 2026-10-11 by [ADR-0039](0039-read-only-snapshot-transactions.md): graph reads use a read-only snapshot transaction and no longer take the write lock.
 **Date:** 2026-10-09
 
 ## Context
@@ -23,4 +23,4 @@ Since [#2](https://github.com/ashuangiras/polaroid/issues/2), versions reference
 - Every stored version written after this change has an acyclic graph at the moment it is written.
 - A later revision of a contextually referenced target can grow another version's graph beyond the limits. A read then returns `422` for that root. Such a revision is not rejected, because the check runs only from the version being written.
 - Versions stored under [#2](https://github.com/ashuangiras/polaroid/issues/2) before this check may contain cycles, including self-references. Reading their graph returns `409 reference_cycle`. They are never rewritten.
-- Graph reads take the write lock for their snapshot (`_txlock=immediate`), so they briefly queue with writers.
+- Graph reads take the write lock for their snapshot (`_txlock=immediate`), so they briefly queue with writers. (Superseded by ADR-0039.)

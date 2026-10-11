@@ -1,6 +1,6 @@
 # 0003. SQLite through the pure-Go `modernc.org/sqlite` driver
 
-**Status:** Accepted
+**Status:** Accepted. **Amended:** 2026-10-11 by [ADR-0039](0039-read-only-snapshot-transactions.md): multi-statement reads begin read-only transactions, which do not take the write lock.
 **Date:** 2026-10-09
 
 ## Context
