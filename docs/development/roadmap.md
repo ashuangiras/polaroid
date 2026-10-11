@@ -4,7 +4,7 @@ Increments are ordered. Issue-ready items are filed as [GitHub issues](https://g
 
 > **Work-item authority.** GitHub Issues are the source of truth for scope and acceptance criteria. This roadmap keeps only order and links for filed items, never a second copy. Items not yet issue-ready stay here until they are refined and filed.
 
-Increments 1 to 6, the items from agent feedback, the production-readiness items, #79, #81 and the first increment of capability extraction (#85) and catalog statistics (#96) are implemented. Nothing in "Later" is.
+Increments 1 to 6, the items from agent feedback, the production-readiness items, #79, #81 and the first increment of capability extraction (#85) and catalog statistics (#96) and write limits (#98) are implemented. Nothing in "Later" is.
 
 ## Increment 1 — Procedure identity and immutable versions (done)
 
@@ -91,9 +91,10 @@ Second-repository adoption trials are paused while the existing features are pre
    - The shared managed instance is upgraded to it, at schema 10.
    - The misclassified promotion execution `01a12ac5-7fc7` is invalidated on the live catalog, through the new shared procedure `execution.evidence.invalidate`.
    - A fresh Copilot session used the new tools on the live service.
-3. [#96 Read-only catalog statistics](https://github.com/ashuangiras/polaroid/issues/96): **done**, not released ([ADR-0036](../architecture/decisions/0036-read-only-catalog-statistics.md)). One read-only summary on HTTP, MCP and the CLI: record counts, procedures by lifecycle and scope, executions by outcome and evidence status, toil items by status, logical payload bytes and storage sizes. Visibility only; no schema change.
-4. **Next, proposed, not filed:** per-field payload limits for new writes, in an ADR with an explicit error code, decided from the #96 measurements ([status](status.md#next-work-item)). Not implemented.
-5. **Planned, not scoped:** physical purge, retention, cleanup, namespaces, promotion between catalogs, separate databases, and a procedure for promoting earlier assessments that `procedure.capability.extract` would reference.
+3. [#96 Read-only catalog statistics](https://github.com/ashuangiras/polaroid/issues/96): **done** (PR #97), not released ([ADR-0036](../architecture/decisions/0036-read-only-catalog-statistics.md)). One read-only summary on HTTP, MCP and the CLI: record counts, procedures by lifecycle and scope, executions by outcome and evidence status, toil items by status, logical payload bytes and storage sizes. Visibility only; no schema change.
+4. [#98 Size limits on new writes](https://github.com/ashuangiras/polaroid/issues/98): **done**, not released ([ADR-0037](../architecture/decisions/0037-size-limits-on-new-writes.md)). Byte limits on 37 persisted fields and on each whole write, enforced in the domain for every transport (`413 value_too_large`), reported by the statistics; stored records are never re-checked. Per-write protection only: catalog growth is not bounded.
+5. **Next, proposed, not filed:** release and adopt #96 and #98, then record the shared catalog's statistics over time to measure growth before any retention design ([status](status.md#next-work-item)).
+6. **Planned, not scoped:** physical purge, retention, quotas, cleanup, namespaces, promotion between catalogs, separate databases, and a procedure for promoting earlier assessments that `procedure.capability.extract` would reference.
 
 ## Later (unordered, not yet scoped)
 
