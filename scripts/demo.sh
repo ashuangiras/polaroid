@@ -29,6 +29,8 @@
 # parameters, and resolution reporting the selected version's own scope.
 # A scripted toil item (#87) is created, refused an incomplete or illegal
 # revision and a stale base, revised to candidate, and listed by filter.
+# Isolated example procedures with a pinned and a contextual reference show
+# evidence invalidation and procedure retirement and reactivation (#91).
 # Finally it restarts the daemon and confirms every record is unchanged, and
 # upgrades a database written at schema version 6.
 #
@@ -810,7 +812,69 @@ toil_keys() { bin/polaroid toil-items "$@" | jq -c '[.toil_items[].canonical_key
 [[ "$(dev_snapshot)" == "$dev_before" ]] || fail "a toil item changed a procedure, execution, verification or binding"
 echo "4. filters use the latest revision: candidate, local to $dev_repo (not $fixture_repo), citing polaroid.change.records (not the run's dev.change.classify); MCP returns the same document; no other record changed"
 
-step "26. Restart polaroidd and confirm every record persisted"
+step "26. Evidence invalidation and procedure retirement, with isolated example procedures (#91, ADR-0035; scripted regression evidence)"
+lc_repo=example.com/demo/lifecycle lc_commit=4444444444444444444444444444444444444444
+lc_dev() { bin/polaroid get "$verify_id"; bin/polaroid get "$checks_id"; bin/polaroid verifications "$verify_id" 1; bin/polaroid get-binding "$dev_binding"; }
+lc_dev_before="$(lc_dev)"
+# lc_create KEY REFS: a demonstration procedure whose version 1 has REFS.
+lc_create() {
+	jq -n --arg k "$1" --argjson refs "$2" --arg s "$scripted" '{canonical_key: $k, version: {philosophy: "Scripted.", method: ("Demonstrate " + $k + "."),
+		contract: {}, instructions: {}, references: $refs, revision_reason: $s}}' | bin/polaroid create | jq -r .id
+}
+# lc_record PROCEDURE VERSION [CHILDREN]: a scripted succeeded run in the demo context.
+lc_record() {
+	jq -n --arg p "$1" --argjson v "$2" --argjson c "${3:-[]}" --arg r "$lc_repo" --arg commit "$lc_commit" '{procedure_id: $p, version: $v, repository: $r,
+		commit: $commit, environment: {name: "demo.ci", attributes: {}}, inputs: {}, outcome: "succeeded", evidence: {scripted: true}, children: $c}' |
+		bin/polaroid record | jq -r .id
+}
+lc_child="$(lc_create demo.lifecycle.child '[]')"
+jq -n --arg s "$scripted" '{base_version: 1, version: {philosophy: "Scripted.", method: "Demonstrate demo.lifecycle.child.", contract: {}, instructions: {}, revision_reason: $s}}' |
+	bin/polaroid revise "$lc_child" >/dev/null
+lc_parent="$(lc_create demo.lifecycle.parent "$(jq -nc --arg c "$lc_child" '[{name: "pinned", procedure_id: $c, version_policy: {pin: 1}, inputs: {}},
+	{name: "latest", procedure_id: $c, version_policy: {contextual: {}}, inputs: {}}]')")"
+lc_c1="$(lc_record "$lc_child" 1)" lc_c2="$(lc_record "$lc_child" 2)" lc_c1b="$(lc_record "$lc_child" 1)"
+lc_run="$(lc_record "$lc_parent" 1 "$(jq -nc --arg a "$lc_c1" --arg b "$lc_c2" '[{reference: "pinned", execution_id: $a}, {reference: "latest", execution_id: $b}]')")"
+lc_graph() { bin/polaroid graph "$lc_parent" 1 "$lc_repo" demo.ci "$lc_commit" '{}' | jq -c '{parent: .verified_by, target: .target_verification.verified,
+	edges: [.references[] | {name, version: .node.version, selected_by, by: .node.verified_by, retired: (.node.retirement.event // false)}]}'; }
+lc_before="$(bin/polaroid get-execution "$lc_c2")"
+[[ "$(lc_graph)" == "{\"parent\":\"$lc_run\",\"target\":true,\"edges\":[{\"name\":\"pinned\",\"version\":1,\"selected_by\":\"pin\",\"by\":\"$lc_c1\",\"retired\":false},{\"name\":\"latest\",\"version\":2,\"selected_by\":\"evidence\",\"by\":\"$lc_c2\",\"retired\":false}]}" ]] ||
+	fail "the parent run does not select and verify its tree: $(lc_graph)"
+echo "1. the parent run ${lc_run: -12} selects child v2 by ${lc_c2: -12} and verifies the target"
+invalidated="$(jq -n '{reason: "Scripted: this run did not do what child v2 claims.", actor: "scripts.demo"}' | bin/polaroid invalidate-execution "$lc_c2")"
+jq -e '.evidence_status == "invalidated" and .invalidation.actor == "scripts.demo"' <<<"$invalidated" >/dev/null || fail "unexpected invalidation: $invalidated"
+if refused91="$(jq -n '{reason: "again", actor: "scripts.demo"}' | bin/polaroid invalidate-execution "$lc_c2" 2>/dev/null)"; then fail "a second invalidation was accepted"; fi
+jq -e '.error.code == "execution_invalidated"' <<<"$refused91" >/dev/null || fail "unexpected refusal of a second invalidation: $refused91"
+[[ "$(bin/polaroid get-execution "$lc_c2" | jq -c 'del(.evidence_status, .invalidation)')" == "$(jq -c 'del(.evidence_status)' <<<"$lc_before")" ]] || fail "invalidation changed the execution"
+jq -e --arg c "$lc_c2" '.verified == false and .problems == [{code: "child_invalidated", reference: "latest", execution_id: $c}]' <<<"$(bin/polaroid verification "$lc_run")" >/dev/null ||
+	fail "the parent run still verifies through an invalidated child"
+[[ "$(lc_graph)" == "{\"parent\":null,\"target\":false,\"edges\":[{\"name\":\"pinned\",\"version\":1,\"selected_by\":\"pin\",\"by\":\"$lc_c1b\",\"retired\":false},{\"name\":\"latest\",\"version\":1,\"selected_by\":\"evidence\",\"by\":\"$lc_c1b\",\"retired\":false}]}" ]] ||
+	fail "selection did not fall back to valid evidence: $(lc_graph)"
+echo "2. ${lc_c2: -12} invalidated (once; a second request is execution_invalidated); its record is unchanged, the parent run reports child_invalidated, the target is unverified, and 'latest' falls back to v1 by the valid ${lc_c1b: -12}"
+lc_lifecycle() { jq -n --argjson b "$1" --arg r "$2" '{base_event: $b, reason: $r, actor: "scripts.demo"}'; }
+lc_life="$(lc_lifecycle 0 "Scripted: superseded." | bin/polaroid retire-procedure "$lc_child")"
+jq -e '.status == "retired" and .latest_event == 1' <<<"$lc_life" >/dev/null || fail "unexpected retirement: $lc_life"
+if refused91="$(lc_lifecycle 0 again | bin/polaroid retire-procedure "$lc_child" 2>/dev/null)"; then fail "a stale retirement was accepted"; fi
+jq -e '.error.code == "lifecycle_conflict" and .error.latest_event == 1' <<<"$refused91" >/dev/null || fail "unexpected refusal of a stale base: $refused91"
+[[ "$(bin/polaroid list | jq -c --arg c "$lc_child" '[.procedures[] | select(.id == $c)]')" == "[]" ]] || fail "the default list shows a retired procedure"
+jq -e --arg c "$lc_child" '[.procedures[].id] == [$c]' <<<"$(bin/polaroid list lifecycle=retired)" >/dev/null || fail "lifecycle=retired does not list it"
+[[ "$(lc_graph | jq -c '[.edges[] | [.version, .selected_by, .retired]]')" == '[[1,"pin",1],[1,"evidence",1]]' ]] || fail "the graph does not report the retired nodes: $(lc_graph)"
+if refused91="$(jq -n --arg c "$lc_child" --arg s "$scripted" '{base_version: 1, version: {philosophy: "p", method: "m", contract: {}, instructions: {},
+	references: [{name: "latest", procedure_id: $c, version_policy: {contextual: {}}, inputs: {}}], revision_reason: $s}}' | bin/polaroid revise "$lc_parent" 2>/dev/null)"; then
+	fail "a new version referencing a retired procedure was accepted"
+fi
+jq -e '.error.code == "procedure_retired" and .error.fields[0].field == "version.references[0].procedure_id"' <<<"$refused91" >/dev/null || fail "unexpected refusal: $refused91"
+jq -e '.lifecycle_status == "retired" and .latest_version == 2' <<<"$(bin/polaroid get "$lc_child")" >/dev/null || fail "the retired procedure cannot be read by ID"
+echo "3. child retired (a stale base is lifecycle_conflict): left out of the default list, still read by ID, its pinned and contextual nodes keep their versions and evidence and report retirement, and a new parent version referencing it is procedure_retired"
+lc_life="$(lc_lifecycle 1 "Scripted: needed again." | bin/polaroid reactivate-procedure "$lc_child")"
+jq -e '.status == "active" and ([.events[].status] == ["retired", "active"])' <<<"$lc_life" >/dev/null || fail "unexpected reactivation: $lc_life"
+[[ "$(mcp_tool get_procedure_lifecycle "{\"procedure_id\":\"$lc_child\"}")" == "$(bin/polaroid get-procedure-lifecycle "$lc_child")" ]] || fail "MCP and HTTP lifecycles differ"
+[[ "$(lc_graph | jq -c '[.edges[].retired]')" == '[false,false]' ]] || fail "reactivated nodes still report retirement"
+[[ "$(lc_dev)" == "$lc_dev_before" ]] || fail "the lifecycle demonstration changed a development record"
+lc_invalidation="$(bin/polaroid get-execution-invalidation "$lc_c2")"
+dev_before="$(dev_snapshot)"
+echo "4. reactivated: the history keeps both events, MCP returns the same document, the graph is ordinary again; no development record changed"
+
+step "27. Restart polaroidd and confirm every record persisted"
 stop_daemon
 start_daemon
 [[ "$(bin/polaroid get-by-key "$key")" == "$history" ]] || fail "history differs after restart"
@@ -819,10 +883,12 @@ start_daemon
 [[ "$(bin/polaroid get-execution "$execution_id")" == "$execution" ]] || fail "execution differs after restart"
 [[ "$(dev_snapshot)" == "$dev_before" ]] || fail "the development procedures, executions or verifications differ after restart"
 [[ "$(bin/polaroid get-toil-item "$toil87")" == "$toil_history" ]] || fail "the toil item differs after restart"
-echo "every history, binding, execution, verification and toil item is byte-for-byte identical after restart"
+[[ "$(bin/polaroid get-execution-invalidation "$lc_c2")" == "$lc_invalidation" && "$(bin/polaroid get-procedure-lifecycle "$lc_child")" == "$lc_life" ]] ||
+	fail "the invalidation or the lifecycle differs after restart"
+echo "every history, binding, execution, verification, toil item, invalidation and lifecycle is byte-for-byte identical after restart"
 stop_daemon
 
-step "27. Upgrade a database written at schema version 6 (#35): history reads back, and registration associates it without rewriting it"
+step "28. Upgrade a database written at schema version 6 (#35): history reads back, and registration associates it without rewriting it"
 legacy="$work/schema-6.db"
 for f in internal/storage/sqlite/migrations/000[1-6]_*.sql; do sqlite3 "$legacy" <"$f"; done
 sqlite3 "$legacy" <<'SQL'
@@ -837,7 +903,7 @@ SQL
 demo_db=$db
 db=$legacy
 start_daemon
-legacy_procedure='{"id":"legacy-p","canonical_key":"legacy.build","created_at":"2026-10-01T12:00:00Z","latest_version":1,"scope":"unspecified","versions":[{"procedure_id":"legacy-p","version":1,"philosophy":"p","method":"m","scope":"unspecified","contract":{},"instructions":{"steps":["build"]},"revision_reason":"Written before #35.","created_at":"2026-10-01T12:00:00Z"}]}'
+legacy_procedure='{"id":"legacy-p","canonical_key":"legacy.build","created_at":"2026-10-01T12:00:00Z","latest_version":1,"scope":"unspecified","lifecycle_status":"active","versions":[{"procedure_id":"legacy-p","version":1,"philosophy":"p","method":"m","scope":"unspecified","contract":{},"instructions":{"steps":["build"]},"revision_reason":"Written before #35.","created_at":"2026-10-01T12:00:00Z"}]}'
 [[ "$(bin/polaroid get legacy-p)" == "$legacy_procedure" ]] || fail "the legacy procedure reads back differently: $(bin/polaroid get legacy-p)"
 legacy_run="$(bin/polaroid get-execution legacy-e)"
 jq -e '.evidence == {exit: 0} and .binding_id == "legacy-b" and .repository == "example.com/legacy/service"' <<<"$legacy_run" >/dev/null || fail "the legacy execution changed: $legacy_run"

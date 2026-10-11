@@ -169,7 +169,7 @@ check "usage mentions -addr and -db" out_has "-db"
 
 ########################################################################
 section "Start the daemon and check health" \
-	"\`polaroidd\` listens on loopback (\`127.0.0.1:7417\` by default; this test uses port 0 to pick a free port). Configuration comes from flags or the \`POLAROID_ADDR\` / \`POLAROID_DB\` environment variables; without either, the database is \`~/.polaroid/data/polaroid.db\` (section 32). \`GET /healthz\` reports whether the database is reachable." \
+	"\`polaroidd\` listens on loopback (\`127.0.0.1:7417\` by default; this test uses port 0 to pick a free port). Configuration comes from flags or the \`POLAROID_ADDR\` / \`POLAROID_DB\` environment variables; without either, the database is \`~/.polaroid/data/polaroid.db\` (section 33). \`GET /healthz\` reports whether the database is reachable." \
 	"\`bin/polaroidd -db polaroid.db &\` then \`bin/polaroid health\` (or \`curl -i http://127.0.0.1:7417/healthz\`)."
 start_daemon "$DB" env
 check "daemon took its database path from POLAROID_DB" grep -q "db=$DB" "$LOG"
@@ -591,7 +591,7 @@ check "graph context needs both parameters; resolution needs an environment" equ
 
 ########################################################################
 section "Use Polaroid from an agent over MCP" \
-	"\`polaroidd\` serves MCP at \`/mcp\` (ADR-0014): stateless streamable HTTP, protocols 2026-07-28 and 2025-11-25 (ADR-0016), behind the same loopback and cross-origin checks. 32 tools mirror the HTTP API with flat arguments named after record fields; results are the API's record shapes, errors are tool errors with the API's codes, and three read-only resource templates serve procedures, versions and bindings. Below, raw JSON-RPC over curl shows exactly what an MCP client sends." \
+	"\`polaroidd\` serves MCP at \`/mcp\` (ADR-0014): stateless streamable HTTP, protocols 2026-07-28 and 2025-11-25 (ADR-0016), behind the same loopback and cross-origin checks. 37 tools mirror the HTTP API with flat arguments named after record fields; results are the API's record shapes, errors are tool errors with the API's codes, and three read-only resource templates serve procedures, versions and bindings. Below, raw JSON-RPC over curl shows exactly what an MCP client sends." \
 	"Point an MCP client at \`http://127.0.0.1:7417/mcp\`, e.g. VS Code \`.vscode/mcp.json\`: \`{\"servers\": {\"polaroid\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:7417/mcp\"}}}\`."
 MCP_META='{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/clientInfo":{"name":"manual-test","version":"1"}}'
 rpc() { # rpc METHOD NAME PARAMS [PROTOCOL]: one JSON-RPC request; NAME may be empty
@@ -606,7 +606,7 @@ tool() { rpc tools/call "$1" "$(jq -cn --arg n "$1" --argjson a "$2" '{name: $n,
 show 'rpc server/discover "" "{}" | jq -c "{versions: .result.supportedVersions, capabilities: (.result.capabilities | keys), server: .result._meta[\"io.modelcontextprotocol/serverInfo\"].name}"'
 check "server/discover: protocols 2026-07-28 and 2025-11-25, tools and resources" json_has '.versions == ["2026-07-28","2025-11-25"] and .capabilities == ["resources","tools"] and .server == "polaroid"'
 show 'rpc tools/list "" "{}" | jq -c "{tools: (.result.tools | length), read_only: [.result.tools[] | select(.annotations.readOnlyHint) | .name] | length, names: [.result.tools[].name] | sort}"'
-check "32 tools, 21 of them read-only" json_has '.tools == 32 and .read_only == 21'
+check "37 tools, 23 of them read-only" json_has '.tools == 37 and .read_only == 23'
 show 'tool get_procedure "{\"canonical_key\": \"go.dependency.add\"}" | jq -S .result.structuredContent | shasum -a 256 | cut -c1-16; get /v1/procedures/by-key/go.dependency.add | jq -S . | shasum -a 256 | cut -c1-16'
 check "get_procedure over MCP returns the same document as GET /v1/procedures/by-key" equal "$(sed -n 1p <<<"$LAST")" "$(sed -n 2p <<<"$LAST")"
 show 'tool create_procedure "{\"canonical_key\": \"mcp.created\", \"philosophy\": \"p\", \"method\": \"m\", \"contract\": {\"z\": 1, \"a\": 2}, \"instructions\": {}, \"revision_reason\": \"Created by an agent over MCP.\"}" | jq -r ".result.content[0].text" | jq -c "{id, canonical_key, contract: .versions[0].contract}"'
@@ -784,12 +784,68 @@ show 'bin/polaroid get-toil-revision "$TOIL" 1 | jq -c "{revision, status, steps
 check "revision 1 is unchanged and the history has both" equal "$LAST" $'{"revision":1,"status":"observed","steps":["license"]}\n["observed","candidate"]'
 
 ########################################################################
+section "Withdraw wrong evidence; retire and reactivate a procedure" \
+	"History is never rewritten (ADR-0035). An execution that did not do what its version claims is invalidated, once and for all, with a reason and an actor: it reads back unchanged with \`evidence_status\` invalidated, is never verified, never selects a version or verifies a target, and its parents report \`child_invalidated\`. A retired procedure leaves the default list and discovery, keeps everything that exists (its nodes say \`retirement\`), and refuses new versions, references and bindings until it is reactivated. Lifecycle changes name \`base_event\`." \
+	"\`bin/polaroid invalidate-execution ID FILE\`, \`get-execution-invalidation ID\`, \`retire-procedure ID FILE\`, \`reactivate-procedure ID FILE\`, \`get-procedure-lifecycle ID\`, \`list lifecycle=…\`, \`discover TASK lifecycle=…\`, \`executions evidence_status=…\`; MCP \`invalidate_execution\`, \`get_execution_invalidation\`, \`retire_procedure\`, \`reactivate_procedure\`, \`get_procedure_lifecycle\`."
+C91=9191919191919191919191919191919191919191
+mk91() { bin/polaroid create <<<"$(jq -nc --arg k "$1" --argjson r "$2" '{canonical_key: $k, version: {philosophy: "p", method: ("Exercise " + $k + "."), contract: {}, instructions: {}, references: $r, revision_reason: "e2e"}}')" | jq -r .id; }
+run91() { jq -cn --arg p "$1" --arg c "$C91" --argjson ch "${2:-[]}" '{procedure_id: $p, version: 1, repository: "github.com/example/service-a", commit: $c, environment: {name: "e2e", attributes: {}}, inputs: {}, outcome: "succeeded", evidence: {e2e: true}, children: $ch}' | bin/polaroid record | jq -r .id; }
+CHILD91="$(mk91 e2e.lifecycle.child '[]')"
+PARENT91="$(mk91 e2e.lifecycle.parent "$(jq -nc --arg c "$CHILD91" '[{name: "pinned", procedure_id: $c, version_policy: {pin: 1}, inputs: {}}, {name: "latest", procedure_id: $c, version_policy: {contextual: {}}, inputs: {}}]')")"
+CR1="$(run91 "$CHILD91")" CR2="$(run91 "$CHILD91")"
+PR="$(run91 "$PARENT91" "$(jq -nc --arg a "$CR1" --arg b "$CR2" '[{reference: "pinned", execution_id: $a}, {reference: "latest", execution_id: $b}]')")"
+CR2_BEFORE="$(bin/polaroid get-execution "$CR2" | jq -c 'del(.evidence_status)')"
+show 'bin/polaroid get-execution-invalidation "$CR2"'
+check "a recorded execution is valid evidence" json_has --arg e "$CR2" '. == {execution_id: $e, evidence_status: "valid"}'
+show 'api POST "/v1/executions/$CR2/invalidation" "{\"reason\": \"It ran the wrong step; it is not evidence for this version.\", \"actor\": \"e2e.agent\"}"'
+check "201 Created, invalidated, Location on the invalidation" status_is 201
+check "the invalidation names its reason and actor" body_has '.evidence_status == "invalidated" and .invalidation.actor == "e2e.agent" and (.invalidation.reason | startswith("It ran"))'
+check "Location is /v1/executions/\$CR2/invalidation" header_is "location: /v1/executions/$CR2/invalidation"
+show 'api POST "/v1/executions/$CR2/invalidation" "{\"reason\": \"again\", \"actor\": \"e2e.agent\"}" | tail -n1 | jq -c .error.code'
+check "a second invalidation is 409 execution_invalidated" equal "$LAST" '"execution_invalidated"'
+show 'bin/polaroid get-execution "$CR2" | jq -c "del(.evidence_status, .invalidation)"'
+check "the execution itself is unchanged" equal "$LAST" "$CR2_BEFORE"
+show 'bin/polaroid verification "$CR2" | jq -c "{verified, evidence_status, problems}"; bin/polaroid verification "$PR" | jq -c "{verified, problems: [.problems[].code]}"'
+check "the invalidated child is not verified, and its parent reports child_invalidated" equal "$LAST" '{"verified":false,"evidence_status":"invalidated","problems":[{"code":"invalidated"}]}
+{"verified":false,"problems":["child_invalidated"]}'
+show 'bin/polaroid graph "$PARENT91" 1 github.com/example/service-a e2e "$C91" "{}" | jq -c "{target: .target_verification.verified, root: .verified_by, edges: [.references[] | {name, by: .node.verified_by}]}"'
+check "the parent run no longer verifies the target; both references fall back to the valid child run" json_has --arg c "$CR1" '.target == false and .root == null and .edges == [{name: "pinned", by: $c}, {name: "latest", by: $c}]'
+show 'bin/polaroid executions "$CHILD91" evidence_status=invalidated | jq -c "[.executions[] | {id, evidence_status}]"'
+check "the execution list filters by evidence status" json_has --arg e "$CR2" '. == [{id: $e, evidence_status: "invalidated"}]'
+RACE91="$(run91 "$CHILD91")"
+show 'race 8 "/v1/executions/$RACE91/invalidation" "{\"reason\": \"r\", \"actor\": \"e2e.agent\"}" | sort | uniq -c'
+check "of 8 concurrent invalidations, exactly one is stored" count_is 1 201
+check "the other seven get 409" count_is 7 409
+show 'bin/polaroid get-procedure-lifecycle "$CHILD91"; bin/polaroid retire-procedure "$CHILD91" <<<"{\"base_event\": 0, \"reason\": \"Superseded.\", \"actor\": \"e2e.agent\"}" | jq -c "{status, latest_event}"'
+check "active with no events, then retired at event 1" equal "$LAST" "{\"procedure_id\":\"$CHILD91\",\"status\":\"active\",\"latest_event\":0,\"events\":[]}
+{\"status\":\"retired\",\"latest_event\":1}"
+show 'bin/polaroid retire-procedure "$CHILD91" 2>/dev/null <<<"{\"base_event\": 0, \"reason\": \"again\", \"actor\": \"e2e.agent\"}" | jq -c "{code: .error.code, latest: .error.latest_event}"'
+check "a stale base is 409 lifecycle_conflict naming event 1" json_has '. == {code: "lifecycle_conflict", latest: 1}'
+show 'bin/polaroid list | jq -c --arg c "$CHILD91" "[.procedures[] | select(.id == \$c)]"; bin/polaroid list lifecycle=retired | jq -c "[.procedures[] | {canonical_key, lifecycle_status}]"; bin/polaroid discover "exercise lifecycle child" lifecycle=all limit=1 | jq -c "[.candidates[] | {canonical_key, lifecycle_status}]"'
+check "left out of the default list; listed and discovered on request, marked retired" equal "$LAST" '[]
+[{"canonical_key":"e2e.lifecycle.child","lifecycle_status":"retired"}]
+[{"canonical_key":"e2e.lifecycle.child","lifecycle_status":"retired"}]'
+show 'bin/polaroid graph "$PARENT91" 1 | jq -c "[.references[] | {name, version: .node.version, retired: .node.retirement.event}]"'
+check "the graph keeps both references and marks the retired nodes" json_has '. == [{name: "pinned", version: 1, retired: 1}, {name: "latest", version: 1, retired: 1}]'
+show 'bin/polaroid revise "$PARENT91" 2>/dev/null <<<"$(jq -nc --arg c "$CHILD91" "{base_version: 1, version: {philosophy: \"p\", method: \"m\", contract: {}, instructions: {}, references: [{name: \"x\", procedure_id: \$c, version_policy: {pin: 1}, inputs: {}}], revision_reason: \"r\"}}")" | jq -c "{code: .error.code, fields: [.error.fields[].field]}"; bin/polaroid bind 2>/dev/null <<<"$(bind_req scratch "{\"pin\": 1}" lifecycle "$CHILD91")" | jq -c .error.code'
+check "a new reference and a new binding are 409 procedure_retired" equal "$LAST" '{"code":"procedure_retired","fields":["version.references[0].procedure_id"]}
+"procedure_retired"'
+show 'bin/polaroid reactivate-procedure "$CHILD91" <<<"{\"base_event\": 1, \"reason\": \"Needed again.\", \"actor\": \"e2e.agent\"}" | jq -c "[.events[].status]"'
+check "reactivated; the history keeps both events" json_has '. == ["retired", "active"]'
+RACE_P="$(mk91 e2e.lifecycle.race '[]')"
+show 'race 8 "/v1/procedures/$RACE_P/retirement" "{\"base_event\": 0, \"reason\": \"r\", \"actor\": \"e2e.agent\"}" | sort | uniq -c'
+check "of 8 concurrent retirements from one base, exactly one is stored" count_is 1 201
+check "the other seven get 409" count_is 7 409
+
+########################################################################
 section "The database enforces immutability itself" \
-	"Even a client that bypasses polaroidd cannot rewrite history: schema triggers reject UPDATE/DELETE of procedures, versions, bindings, binding revisions, references, executions and execution links and decisions, feedback reports, repositories, repository identifiers and procedure origins, gaps in numbering, and pins to missing versions. toil items, revisions and their links, \`PRAGMA user_version\` records the schema version (9 migrations)." \
+	"Even a client that bypasses polaroidd cannot rewrite history: schema triggers reject UPDATE/DELETE of procedures, versions, bindings, binding revisions, references, executions and execution links and decisions, feedback reports, repositories, repository identifiers and procedure origins, gaps in numbering, and pins to missing versions. toil items, revisions and their links, execution invalidations and procedure lifecycle events, \`PRAGMA user_version\` records the schema version (10 migrations)." \
 	"Open the database with \`sqlite3 polaroid.db\` and try the statements below."
 SNAP_BEFORE="$(digest "/v1/procedures/$ID")$(digest "/v1/bindings/$BA")$(digest "/v1/bindings/$BB")$(digest "/v1/toil-items/$TOIL")"
 show 'sqlite3 "$DB" "PRAGMA user_version; SELECT name FROM sqlite_master WHERE type = '"'"'table'"'"' ORDER BY name;"'
-check "schema version is 9 with procedure, binding, reference, execution, execution-link, decision, feedback, repository and toil tables" equal "$(head -n1 <<<"$LAST")" 9
+check "schema version is 10 with procedure, binding, reference, execution, execution-link, decision, feedback, repository, toil and lifecycle tables" equal "$(head -n1 <<<"$LAST")" 10
+check "the procedure_lifecycle_events table exists" out_has "procedure_lifecycle_events"
+check "the execution_invalidations table exists" out_has "execution_invalidations"
 check "the toil_revisions table exists" out_has "toil_revisions"
 check "the execution_children table exists" out_has "execution_children"
 check "the execution_decisions table exists" out_has "execution_decisions"
@@ -810,7 +866,11 @@ for stmt in \
 	"UPDATE toil_revisions SET status = 'validated'" \
 	"DELETE FROM toil_items" \
 	"DELETE FROM toil_revision_sources" \
-	"INSERT INTO toil_revision_executions VALUES ('$TOIL', 1, 'observation', 5, '$RUN', 'added later')"; do
+	"INSERT INTO toil_revision_executions VALUES ('$TOIL', 1, 'observation', 5, '$RUN', 'added later')" \
+	"UPDATE execution_invalidations SET reason = 'tampered'" \
+	"DELETE FROM execution_invalidations" \
+	"DELETE FROM procedure_lifecycle_events" \
+	"INSERT INTO procedure_versions (procedure_id, version, philosophy, method, contract, instructions, revision_reason, created_at) SELECT '$RACE_P', 2, 'p', 'm', '{}', '{}', 'r', 'now'"; do
 	show "sqlite3 \"\$DB\" \"$stmt\""
 	check "rejected: ${stmt:0:60}…" test "$RC" -ne 0
 done
@@ -865,7 +925,7 @@ show 'bin/polaroid bind <<<"$(bind_req scratch "{\"pin\": 1}" legacy old-1)" | j
 check "bindings work on the upgraded database" json_has '.procedure_id == "old-1"'
 stop_daemon
 show 'sqlite3 "$WORK/v1.db" "PRAGMA user_version"'
-check "schema version is now 9" equal "$LAST" 9
+check "schema version is now 10" equal "$LAST" 10
 show 'cp "$DB" "$WORK/newer.db" && sqlite3 "$WORK/newer.db" "PRAGMA user_version = 99" && HOME="$WORK/home" bin/polaroidd -addr 127.0.0.1:0 -db "$WORK/newer.db"'
 check "newer schema refused with exit 1" rc_is 1
 check "error says the schema is newer than this build supports" out_has "newer than this build supports"

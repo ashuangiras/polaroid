@@ -147,12 +147,12 @@ note "The raw request behind \`post server/discover\`:" '```http' \
 
 ########################################################################
 section "Tool catalogue" \
-	"32 tools mirror the HTTP API one-to-one. 21 only read (including \`discover_procedures\` and \`suggest_duplicates\`, which store nothing) and are annotated \`readOnlyHint\`; 11 write (create/revise procedure, record procedure origin, register repository, add repository alias, create/revise binding, record execution, report feedback, create/revise toil item) and are annotated non-destructive (they only append). Every tool advertises a JSON Schema generated from its argument type: flat arguments named after record fields, optional ones not required." \
+	"37 tools mirror the HTTP API one-to-one. 23 only read (including \`discover_procedures\` and \`suggest_duplicates\`, which store nothing) and are annotated \`readOnlyHint\`; 14 write (create/revise procedure, record procedure origin, register repository, add repository alias, create/revise binding, record execution, report feedback, create/revise toil item, invalidate execution, retire/reactivate procedure) and are annotated non-destructive (they only append). Every tool advertises a JSON Schema generated from its argument type: flat arguments named after record fields, optional ones not required." \
 	"An MCP client lists tools automatically. By hand: \`post tools/list \"\" \"\"\`."
 show 'post tools/list "" "" | jq -c "[.result.tools[] | {name, readOnly: .annotations.readOnlyHint, destructive: .annotations.destructiveHint, required: .inputSchema.required}]" | jq -c ".[]"'
-check "32 tools" equal "$(wc -l <<<"$LAST" | tr -d ' ')" 32
-check "21 read-only tools" equal "$(grep -c '"readOnly":true' <<<"$LAST")" 21
-check "the 11 write tools are marked non-destructive" equal "$(grep -c '"readOnly":false,"destructive":false' <<<"$LAST")" 11
+check "37 tools" equal "$(wc -l <<<"$LAST" | tr -d ' ')" 37
+check "23 read-only tools" equal "$(grep -c '"readOnly":true' <<<"$LAST")" 23
+check "the 14 write tools are marked non-destructive" equal "$(grep -c '"readOnly":false,"destructive":false' <<<"$LAST")" 14
 show 'post tools/list "" "" | jq ".result.tools[] | select(.name == \"get_graph\") | .inputSchema"'
 check "get_graph requires procedure_id and version; repository and environment are optional" out_has '"required": ['
 
@@ -377,6 +377,31 @@ step get_toil_revision "{\"toil_item_id\":\"$TOIL\",\"revision\":1}" '{revision,
 check "revision 1 is unchanged" json_has '. == {"revision":1,"status":"observed","proposal":false}'
 
 ########################################################################
+section "Lifecycle: withdraw wrong evidence, retire and reactivate a procedure" \
+	"History is never rewritten (ADR-0035). \`invalidate_execution\` withdraws one execution as evidence, permanently, with a reason and an actor; it stays readable and its parents report \`child_invalidated\`. \`retire_procedure\` and \`reactivate_procedure\` append lifecycle events against \`base_event\`; a retired procedure leaves \`list_procedures\` and \`discover_procedures\` unless \`lifecycle\` asks for it, and refuses new references." \
+	"Call the tools below."
+step create_procedure '{"canonical_key":"demo.lifecycle","philosophy":"p","method":"Show the lifecycle.","contract":{},"instructions":{},"revision_reason":"r"}' '{id}'
+LC="$(ids)"
+step record_execution "$(run_args "$LC" 1 succeeded)" '{id}'
+LCRUN="$(ids)"
+step invalidate_execution "{\"execution_id\":\"$LCRUN\",\"reason\":\"It was recorded against the wrong procedure.\",\"actor\":\"manual.agent\"}" '{evidence_status, actor: .invalidation.actor}'
+check "invalidated, naming the actor" json_has '. == {"evidence_status":"invalidated","actor":"manual.agent"}'
+step invalidate_execution "{\"execution_id\":\"$LCRUN\",\"reason\":\"again\",\"actor\":\"manual.agent\"}" '.error.code'
+check "a second invalidation is execution_invalidated" json_has '. == "execution_invalidated"'
+step get_verification "{\"execution_id\":\"$LCRUN\"}" '{verified, evidence_status, problems: [.problems[].code]}'
+check "an invalidated execution is not verified" json_has '. == {"verified":false,"evidence_status":"invalidated","problems":["invalidated"]}'
+step retire_procedure "{\"procedure_id\":\"$LC\",\"base_event\":0,\"reason\":\"Superseded.\",\"actor\":\"manual.agent\"}" '{status, latest_event}'
+check "retired at event 1" json_has '. == {"status":"retired","latest_event":1}'
+step retire_procedure "{\"procedure_id\":\"$LC\",\"base_event\":0,\"reason\":\"again\",\"actor\":\"manual.agent\"}" '.error | {code, latest_event}'
+check "a stale base_event is lifecycle_conflict with latest_event 1" json_has '. == {"code":"lifecycle_conflict","latest_event":1}'
+step list_procedures '{"lifecycle":"retired"}' '[.procedures[] | {canonical_key, lifecycle_status}]'
+check "list_procedures lists it only on request" json_has '. == [{"canonical_key":"demo.lifecycle","lifecycle_status":"retired"}]'
+step create_procedure "{\"canonical_key\":\"demo.uses-retired\",\"philosophy\":\"p\",\"method\":\"m\",\"contract\":{},\"instructions\":{},\"references\":[{\"name\":\"old\",\"procedure_id\":\"$LC\",\"version_policy\":{\"pin\":1},\"inputs\":{}}],\"revision_reason\":\"r\"}" '.error | {code, fields: [.fields[].field]}'
+check "a new reference to it is procedure_retired, naming the flat field" json_has '. == {"code":"procedure_retired","fields":["references[0].procedure_id"]}'
+step reactivate_procedure "{\"procedure_id\":\"$LC\",\"base_event\":1,\"reason\":\"Needed again.\",\"actor\":\"manual.agent\"}" '[.events[].status]'
+check "reactivated; both events are kept" json_has '. == ["retired","active"]'
+
+########################################################################
 section "Same documents as the HTTP API" \
 	"MCP and HTTP share one set of record shapes (\`internal/transport/wire\`). A tool's text result is byte-identical to the HTTP response body." \
 	"Compare a tool result with the matching \`curl\`."
@@ -394,6 +419,10 @@ for pair in "get_procedure|{\"id\":\"$LEAF\"}|/v1/procedures/$LEAF" \
 	"list_toil_items|{\"repository\":\"github.com/example/service\",\"limit\":1,\"snapshot\":true}|/v1/toil-items?repository=github.com/example/service&limit=1&snapshot=true" \
 	"list_feedback|{\"kind\":\"problem\"}|/v1/feedback?kind=problem" \
 	"get_repository|{\"identifier\":\"mirror.example/service\"}|/v1/repositories/by-identifier/mirror.example/service" \
+	"get_execution_invalidation|{\"execution_id\":\"$LCRUN\"}|/v1/executions/$LCRUN/invalidation" \
+	"get_procedure_lifecycle|{\"procedure_id\":\"$LC\"}|/v1/procedures/$LC/lifecycle/events" \
+	"list_executions|{\"evidence_status\":\"invalidated\"}|/v1/executions?evidence_status=invalidated" \
+	"discover_procedures|{\"task\":\"show the lifecycle\",\"lifecycle\":\"all\"}|/v1/procedures/discovery?task=show+the+lifecycle&lifecycle=all" \
     "list_procedures|{\"repository\":\"github.com/example/service\",\"limit\":2}|/v1/procedures?repository=github.com/example/service&limit=2" \
     "list_procedures|{\"limit\":1,\"snapshot\":true}|/v1/procedures?limit=1&snapshot=true" \
     "discover_procedures|{\"task\":\"do one small thing\",\"repository\":\"github.com/example/service\",\"limit\":2}|/v1/procedures/discovery?task=do+one+small+thing&repository=github.com/example/service&limit=2"; do
