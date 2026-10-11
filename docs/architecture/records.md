@@ -22,7 +22,7 @@ A procedure is a stable identity. It does not belong to any repository, so many 
 
 The canonical key has exactly one accepted spelling: lowercase, with single separators. So exact-match uniqueness also rules out duplicates that differ only by case or separator. The storage layer enforces uniqueness, and a duplicate gets `409 canonical_key_exists`. Canonical keys stay unique across the whole catalog, not per repository.
 
-Semantic duplicate detection and procedure identity merging are **not implemented**. They are later work.
+**Lexical discovery and duplicate suggestions** are reads, not records ([ADR-0032](decisions/0032-lexical-discovery-and-duplicate-suggestions.md), [HTTP API](http-api.md#discover-procedures-for-a-task)). Discovery matches the words of a task against each procedure's latest version (canonical key, `goal`, `method`, `philosophy`, and the string values of `contract` and `instructions`), honouring applicability for a repository. A duplicate check reports a proposal's existing canonical key as a collision and overlapping summaries as advisory suggestions. Neither reads executions or evidence, and neither stores, merges or refuses anything. Semantic duplicate detection and procedure identity merging are **not implemented**.
 
 ### Procedure version (implemented)
 

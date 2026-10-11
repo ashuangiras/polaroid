@@ -41,13 +41,21 @@ type command struct {
 // queryCommands take trailing NAME=VALUE query parameters, such as filters,
 // limit and after (ADR-0021); run receives them in client.query, and min
 // and max count only the other arguments.
-var queryCommands = map[string]bool{"list": true, "bindings": true, "executions": true, "feedbacks": true, "repositories": true}
+var queryCommands = map[string]bool{"list": true, "discover": true, "bindings": true, "executions": true, "feedbacks": true, "repositories": true}
 
 var commands = []command{
 	{"health", "", "check that the daemon and its storage are available", 0, 0,
 		func(c *client, _ []string) error { return c.do(http.MethodGet, "/healthz", nil) }},
 	{"list", "[NAME=VALUE...]", "list procedures; NAME is repository, scope, q, limit, after or snapshot", 0, 0,
 		func(c *client, _ []string) error { return c.do(http.MethodGet, c.path("/v1/procedures", nil), nil) }},
+	{"discover", "TASK [NAME=VALUE...]", "find procedures for a task described in words, by shared words (lexical), ranked and explained; NAME is repository or limit", 1, 1,
+		func(c *client, args []string) error {
+			return c.do(http.MethodGet, c.path("/v1/procedures/discovery", url.Values{"task": {args[0]}}), nil)
+		}},
+	{"duplicates", "[FILE]", "check a proposed procedure in FILE or stdin for an existing canonical key and overlapping procedures; stores nothing", 0, 1,
+		func(c *client, args []string) error {
+			return c.send(http.MethodPost, "/v1/procedures/duplicates", args)
+		}},
 	{"create", "[FILE]", "create a procedure from request JSON in FILE or stdin", 0, 1,
 		func(c *client, args []string) error { return c.send(http.MethodPost, "/v1/procedures", args) }},
 	{"get", "ID", "show a procedure and its full version history", 1, 1,

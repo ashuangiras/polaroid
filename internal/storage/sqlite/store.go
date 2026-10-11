@@ -217,6 +217,42 @@ func (s *Store) ListProcedures(ctx context.Context, f memory.ProcedureFilter) ([
 	return procedures, nil
 }
 
+// LatestVersions implements memory.Store with ListProcedures' repository
+// rule: a local version applies only under an identifier of its repository.
+func (s *Store) LatestVersions(ctx context.Context, repository string) ([]memory.LatestVersion, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT p.id, p.canonical_key, v.version, v.scope, v.scope_repository_id,
+		       v.goal, v.method, v.philosophy, v.contract, v.instructions
+		FROM procedures AS p
+		JOIN procedure_versions AS v ON v.procedure_id = p.id
+		     AND v.version = (SELECT MAX(pv.version) FROM procedure_versions AS pv WHERE pv.procedure_id = p.id)
+		WHERE ? = '' OR v.scope IS NOT 'local' OR v.scope_repository_id = (
+		      SELECT ri.repository_id FROM repository_identifiers AS ri WHERE ri.identifier = ?)
+		ORDER BY p.canonical_key`, repository, repository)
+	if err != nil {
+		return nil, fmt.Errorf("query latest versions: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []memory.LatestVersion
+	for rows.Next() {
+		var v memory.LatestVersion
+		var scope, scopeRepository, goal sql.NullString
+		var contract, instructions []byte
+		if err := rows.Scan(&v.ProcedureID, &v.CanonicalKey, &v.Version, &scope, &scopeRepository,
+			&goal, &v.Method, &v.Philosophy, &contract, &instructions); err != nil {
+			return nil, fmt.Errorf("scan latest version: %w", err)
+		}
+		v.Applicability, v.Goal = applicability(scope, scopeRepository), goal.String
+		v.Contract, v.Instructions = jsontext.Value(contract), jsontext.Value(instructions)
+		out = append(out, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read latest versions: %w", err)
+	}
+	return out, nil
+}
+
 // fetchLimit is the SQL LIMIT for a page: one extra item, so the service can
 // tell whether more exist, or -1 (no limit) for a complete list.
 func fetchLimit(limit int) int {

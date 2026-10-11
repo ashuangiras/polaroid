@@ -41,6 +41,8 @@ func NewHandler(svc *memory.Service, logger *slog.Logger) http.Handler {
 	a.mux.HandleFunc("POST /v1/procedures", a.createProcedure)
 	a.mux.HandleFunc("GET /v1/procedures", a.listProcedures)
 	a.mux.HandleFunc("GET /v1/procedures/by-key/{key}", a.getProcedureByKey)
+	a.mux.HandleFunc("GET /v1/procedures/discovery", a.discoverProcedures)
+	a.mux.HandleFunc("POST /v1/procedures/duplicates", a.suggestDuplicates)
 	a.mux.HandleFunc("GET /v1/procedures/{id}", a.getProcedure)
 	a.mux.HandleFunc("POST /v1/procedures/{id}/versions", a.reviseProcedure)
 	a.mux.HandleFunc("POST /v1/procedures/{id}/origin", a.recordOrigin)
@@ -167,6 +169,42 @@ func (a *api) listProcedures(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.respond(w, r, http.StatusOK, wire.NewProcedureList(procedures, next))
+}
+
+func (a *api) discoverProcedures(w http.ResponseWriter, r *http.Request) {
+	query, ok := strictQuery(w, r, "task", "repository", "limit")
+	if !ok || !nonEmpty(w, query, "repository") {
+		return
+	}
+	limit := 0
+	if query.Has("limit") {
+		n, err := strconv.Atoi(query.Get("limit"))
+		if err != nil || n < 1 {
+			writeError(w, http.StatusBadRequest, wire.InvalidRequest("limit must be a number", "limit",
+				fmt.Sprintf("must be a number from 1 to %d", memory.MaxDiscoveryLimit)))
+			return
+		}
+		limit = n
+	}
+	d, err := a.svc.DiscoverProcedures(r.Context(), memory.DiscoveryRequest{Task: query.Get("task"), Repository: query.Get("repository"), Limit: limit})
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	a.respond(w, r, http.StatusOK, wire.NewDiscovery(d))
+}
+
+func (a *api) suggestDuplicates(w http.ResponseWriter, r *http.Request) {
+	var body wire.DuplicateCheck
+	if !decode(w, r, &body) {
+		return
+	}
+	d, err := a.svc.SuggestDuplicates(r.Context(), body.Domain())
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	a.respond(w, r, http.StatusOK, wire.NewDuplicates(d))
 }
 
 func (a *api) getProcedure(w http.ResponseWriter, r *http.Request) {

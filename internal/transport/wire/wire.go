@@ -274,6 +274,117 @@ func NewProcedureList(procedures []memory.Procedure, next string) ProcedureList 
 	return body
 }
 
+// Discovery is a discovery result (ADR-0032): the task's distinct terms, each
+// as the first word that produced it, how many procedures matched, and the
+// best candidates.
+type Discovery struct {
+	Terms      []string    `json:"terms"`
+	Repository string      `json:"repository,omitzero"`
+	Matched    int         `json:"matched"`
+	Candidates []Candidate `json:"candidates"`
+}
+
+func NewDiscovery(d memory.Discovery) Discovery {
+	body := Discovery{Terms: d.Terms, Repository: d.Repository, Matched: d.Matched, Candidates: make([]Candidate, len(d.Candidates))}
+	for i, c := range d.Candidates {
+		body.Candidates[i] = Candidate{CandidateVersion: newCandidateVersion(c.CandidateVersion),
+			MatchedTerms: c.MatchedTerms, Score: c.Score, Matches: newFieldMatches(c.Matches)}
+	}
+	return body
+}
+
+// CandidateVersion names the version a candidate was found in, its
+// procedure's latest version, with its goal and method as its description.
+type CandidateVersion struct {
+	ProcedureID   string         `json:"procedure_id"`
+	CanonicalKey  string         `json:"canonical_key"`
+	Version       int            `json:"version"`
+	Scope         string         `json:"scope"`
+	Applicability *Applicability `json:"applicability,omitzero"`
+	Goal          string         `json:"goal,omitzero"`
+	Method        string         `json:"method"`
+}
+
+func newCandidateVersion(v memory.CandidateVersion) CandidateVersion {
+	return CandidateVersion{ProcedureID: v.ProcedureID, CanonicalKey: v.CanonicalKey, Version: v.Version,
+		Scope: v.Applicability.Name(), Applicability: NewApplicability(v.Applicability), Goal: v.Goal, Method: v.Method}
+}
+
+// Candidate is a discovered procedure with its score and explanation.
+type Candidate struct {
+	CandidateVersion
+	MatchedTerms int          `json:"matched_terms"`
+	Score        int          `json:"score"`
+	Matches      []FieldMatch `json:"matches"`
+}
+
+// FieldMatch names a searched field and the request's terms found in it.
+type FieldMatch struct {
+	Field string   `json:"field"`
+	Terms []string `json:"terms"`
+}
+
+func newFieldMatches(ms []memory.FieldMatch) []FieldMatch {
+	out := make([]FieldMatch, len(ms))
+	for i, m := range ms {
+		out[i] = FieldMatch(m)
+	}
+	return out
+}
+
+// DuplicateCheck is a proposed procedure's descriptive content, with the
+// repository it is meant for and the procedure it would revise.
+type DuplicateCheck struct {
+	CanonicalKey       string `json:"canonical_key,omitzero" jsonschema:"the proposed canonical key; an existing procedure with it is reported as key_collision"`
+	Goal               string `json:"goal,omitzero"`
+	Method             string `json:"method"`
+	Philosophy         string `json:"philosophy"`
+	Repository         string `json:"repository,omitzero" jsonschema:"compare only with procedures whose latest version applies in this repository identifier: shared, unspecified, or local to it"`
+	ExcludeProcedureID string `json:"exclude_procedure_id,omitzero" jsonschema:"the procedure you are revising, left out of the comparison"`
+	Limit              int    `json:"limit,omitzero" jsonschema:"return at most this many suggestions (1 to 50, default 10)"`
+}
+
+func (c DuplicateCheck) Domain() memory.DuplicateRequest {
+	return memory.DuplicateRequest{CanonicalKey: c.CanonicalKey, Goal: c.Goal, Method: c.Method, Philosophy: c.Philosophy,
+		Repository: c.Repository, ExcludeProcedureID: c.ExcludeProcedureID, Limit: c.Limit}
+}
+
+// Duplicates is a duplicate check's advisory result.
+type Duplicates struct {
+	ProposalTerms int           `json:"proposal_terms"`
+	Repository    string        `json:"repository,omitzero"`
+	KeyCollision  *KeyCollision `json:"key_collision,omitzero"`
+	Matched       int           `json:"matched"`
+	Suggestions   []Suggestion  `json:"suggestions"`
+}
+
+// KeyCollision is the existing procedure with the proposed canonical key.
+type KeyCollision struct {
+	ProcedureID   string `json:"procedure_id"`
+	CanonicalKey  string `json:"canonical_key"`
+	LatestVersion int    `json:"latest_version"`
+}
+
+// Suggestion is an existing procedure whose summary overlaps the proposal.
+type Suggestion struct {
+	CandidateVersion
+	Similarity  float64      `json:"similarity"`
+	SharedTerms int          `json:"shared_terms"`
+	Matches     []FieldMatch `json:"matches"`
+}
+
+func NewDuplicates(d memory.Duplicates) Duplicates {
+	body := Duplicates{ProposalTerms: d.ProposalTerms, Repository: d.Repository, Matched: d.Matched, Suggestions: make([]Suggestion, len(d.Suggestions))}
+	if k := d.KeyCollision; k != nil {
+		body.KeyCollision = &KeyCollision{ProcedureID: k.ProcedureID, CanonicalKey: k.CanonicalKey, LatestVersion: k.LatestVersion}
+	}
+	for i, s := range d.Suggestions {
+		body.Suggestions[i] = Suggestion{CandidateVersion: newCandidateVersion(s.CandidateVersion),
+			Similarity: s.Similarity, SharedTerms: s.SharedTerms, Matches: newFieldMatches(s.Matches)}
+	}
+	return body
+}
+
 // Version is one version. scope is this version's own declaration: shared,
 // local or unspecified (ADR-0023); applicability is omitted when unspecified.
 type Version struct {
