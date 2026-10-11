@@ -3,15 +3,20 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
+	json "encoding/json/v2"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -126,6 +131,108 @@ func TestDaemonServesStopsGracefullyAndKeepsHistoryAcrossRestart(t *testing.T) {
 	if status != http.StatusOK || !bytes.Equal(after, before) {
 		t.Fatalf("history after restart = %d %s\nwant %s", status, after, before)
 	}
+}
+
+// TestShutdownDuringActiveWrites stops the daemon while clients are writing:
+// after a restart exactly the writes answered 201 are stored, and the
+// database passes SQLite's integrity check. Each of several rounds stops the
+// daemon under load, so a shutdown that drops in-flight requests is caught.
+func TestShutdownDuringActiveWrites(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "polaroid.db")
+	base, stop := startDaemon(t, dbPath)
+	if status, body := request(t, http.MethodPost, base+"/v1/procedures", createBody); status != http.StatusCreated {
+		t.Fatalf("create: %d %s", status, body)
+	}
+	_, created := request(t, http.MethodGet, base+"/v1/procedures/by-key/demo.restart", "")
+	var procedure struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created, &procedure); err != nil {
+		t.Fatal(err)
+	}
+
+	const rounds, clients = 8, 32
+	want := map[string]bool{}
+	for round := range rounds {
+		if round > 0 {
+			base, stop = startDaemon(t, dbPath)
+		}
+		accepted := make(chan string, 100000)
+		flowing := make(chan struct{}, 100000)
+		var wg sync.WaitGroup
+		for c := range clients {
+			wg.Go(func() {
+				for n := 0; ; n++ {
+					body := fmt.Sprintf(`{"procedure_id":%q,"version":1,"repository":"github.com/o/a","commit":"0123456789abcdef0123456789abcdef01234567",`+
+						`"environment":{"name":"ci","attributes":{}},"inputs":{},"outcome":"succeeded","evidence":{"round":%d,"client":%d,"n":%d}}`, procedure.ID, round, c, n)
+					req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, base+"/v1/executions", strings.NewReader(body))
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					req.Header.Set("Content-Type", "application/json")
+					resp, err := http.DefaultClient.Do(req)
+					if err != nil {
+						return // the daemon no longer accepts this client's requests
+					}
+					b, err := io.ReadAll(resp.Body)
+					_ = resp.Body.Close()
+					if err != nil || resp.StatusCode != http.StatusCreated {
+						t.Errorf("client %d: %d %s %v", c, resp.StatusCode, b, err)
+						return
+					}
+					var e struct {
+						ID string `json:"id"`
+					}
+					if err := json.Unmarshal(b, &e); err != nil {
+						t.Error(err)
+						return
+					}
+					accepted <- e.ID
+					flowing <- struct{}{}
+				}
+			})
+		}
+		for range 40 { // writes are flowing; stop the daemon under them
+			<-flowing
+		}
+		if err := stop(); err != nil {
+			t.Fatalf("round %d: shutdown under writes returned %v", round, err)
+		}
+		wg.Wait()
+		close(accepted)
+		for id := range accepted {
+			want[id] = true
+		}
+	}
+
+	restarted, _ := startDaemon(t, dbPath)
+	_, listed := request(t, http.MethodGet, restarted+"/v1/executions", "")
+	var list struct {
+		Executions []struct {
+			ID string `json:"id"`
+		} `json:"executions"`
+	}
+	if err := json.Unmarshal(listed, &list); err != nil {
+		t.Fatal(err)
+	}
+	stored := map[string]bool{}
+	for _, e := range list.Executions {
+		stored[e.ID] = true
+	}
+	if !maps.Equal(stored, want) {
+		t.Fatalf("%d executions stored, %d answered 201; they must be the same set", len(stored), len(want))
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	var check string
+	if err := db.QueryRowContext(context.Background(), "PRAGMA integrity_check").Scan(&check); err != nil || check != "ok" {
+		t.Fatalf("integrity_check = %q, %v", check, err)
+	}
+	t.Logf("%d writes answered 201 across %d shutdowns under load", len(want), rounds)
 }
 
 func TestDaemonServesMCPBesideTheAPI(t *testing.T) {
