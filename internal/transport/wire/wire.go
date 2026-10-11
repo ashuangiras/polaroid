@@ -706,7 +706,7 @@ type ExecutionRecord struct {
 	BindingID       string         `json:"binding_id,omitzero" jsonschema:"the binding this run followed; give it with binding_revision, or neither"`
 	BindingRevision int            `json:"binding_revision,omitzero" jsonschema:"the binding revision this run followed; requires binding_id"`
 	Repository      string         `json:"repository" jsonschema:"the repository identifier: '/'-separated segments of lowercase letters, digits, '.', '_' and '-', at most 255 characters, without a scheme or .git, for example github.com/owner/repo"`
-	Commit          string         `json:"commit" jsonschema:"the full commit hash the run used: 40 or 64 lowercase hex characters, as git rev-parse HEAD prints it"`
+	Commit          string         `json:"commit" jsonschema:"the full commit hash the run used: 40 or 64 lowercase hex characters, as git rev-parse HEAD prints it. It claims that exactly this commit ran: with uncommitted changes, commit them locally first (no push needed) and record that commit; a run on an unclean working tree is not evidence for any commit"`
 	Environment     Environment    `json:"environment" jsonschema:"where it ran: {name, attributes}"`
 	Inputs          jsontext.Value `json:"inputs" jsonschema:"the effective inputs, a JSON object ({} if none); a child's must equal what its reference maps from the parent's"`
 	Outcome         string         `json:"outcome" jsonschema:"succeeded or failed"`

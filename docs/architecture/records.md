@@ -161,7 +161,7 @@ An execution is an immutable record of one finished run, written once after the 
 | `binding_id`, `binding_revision` | string, integer ≥ 1 | client | Optional. Give both or neither. The binding must be for this procedure and repository, and a pinned revision must pin `version`. Both fields are omitted from responses when no binding was used. |
 | `repository` | string | client | The canonical path ([ADR-0007](decisions/0007-repository-identity-for-bindings.md)), exactly as submitted, forever. |
 | `repository_id` | string | derived | The registered repository `repository` belongs to, read from the registry on every response; omitted while it is not registered ([ADR-0022](decisions/0022-repository-identity-in-evidence.md)). |
-| `commit` | string | client | A full commit hash: 40 or 64 lowercase hex characters. |
+| `commit` | string | client | A full commit hash: 40 or 64 lowercase hex characters. It claims that exactly this commit ran. A run on uncommitted changes is evidence for no commit, so commit them locally first. Polaroid cannot check this. |
 | `environment` | object | client | `{"name": ..., "attributes": {...}}`. `name` uses the canonical-key format and is the environment's identity. `attributes` is a free-form JSON object, which may be `{}` and is never interpreted. |
 | `inputs` | JSON object | client | The effective inputs. Free-form, and may be `{}`. |
 | `outcome` | string | client | `succeeded` or `failed`. |

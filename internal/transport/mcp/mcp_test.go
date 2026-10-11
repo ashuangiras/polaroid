@@ -181,7 +181,8 @@ func TestToolsAndResourcesAreAdvertised(t *testing.T) {
 		t.Fatalf("negotiated protocol %q, want %q", v, mcptransport.ProtocolVersion)
 	}
 	if instr := h.session.InitializeResult().Instructions; !strings.Contains(instr, "record_execution") || !strings.Contains(instr, "report_feedback") ||
-		!strings.Contains(instr, "discover_procedures") || !strings.Contains(instr, "get_version") || !strings.Contains(instr, "suggest_duplicates") {
+		!strings.Contains(instr, "discover_procedures") || !strings.Contains(instr, "get_version") || !strings.Contains(instr, "suggest_duplicates") ||
+		!strings.Contains(instr, "commit uncommitted changes locally before the run you record") {
 		t.Fatalf("instructions do not describe the loop: %q", instr)
 	}
 
@@ -257,7 +258,7 @@ func TestWriteToolsDescribeTheirFormats(t *testing.T) {
 		schemas[tool.Name] = tool.Description + string(b)
 	}
 	for tool, wants := range map[string][]string{
-		"record_execution": {"40 or 64 lowercase hex characters", "succeeded or failed", "darwin-arm64.local", "a non-empty JSON object",
+		"record_execution": {"40 or 64 lowercase hex characters", "commit them locally first (no push needed)", "succeeded or failed", "darwin-arm64.local", "a non-empty JSON object",
 			"github.com/owner/repo", "give it with binding_revision, or neither", "rationale is required either way", "at most 65,536 bytes"},
 		"create_procedure": {"joined by single '.', '-' or '_', at most 128 characters", "go.dependency.add", `{\"input\": \"\u003cparent input name\u003e\"}`,
 			"give pin or contextual, not both", "unique within the version", "one line"},
