@@ -2,19 +2,65 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
-**Size limits on new writes ([#98](https://github.com/ashuangiras/polaroid/issues/98), [ADR-0037](../architecture/decisions/0037-size-limits-on-new-writes.md)), as of 2026-10-11:** implemented on branch `issue-98-write-limits`, not released. Per-write protection only: no catalog quota, retention, deletion or cleanup exists.
+**Catalog statistics and write limits released and adopted ([#100](https://github.com/ashuangiras/polaroid/issues/100)), as of 2026-10-11.** Each state below has its own evidence.
+
+- **Merged:** PR #99 is merged as `7f4ab44`, whose tree equals `27887c8`'s.
+  - The code was verified at `52e37b6` (`verify-change`, record-model execution `01a12bac-3e1a`).
+  - `6022ca1` and `27887c8` change only documentation and were verified at docs scope (`01a12bad-ff9d`, `01a12bbd-cc64`). `27887c8` holds the pre-merge review's contract-text fixes.
+- **Released:** [`v0.7.0-verify.1`](https://github.com/ashuangiras/polaroid/releases/tag/v0.7.0-verify.1) is a tag on `7f4ab44`, published by run `38154682847`.
+  - All eight jobs passed. The four archives, `SHA256SUMS` and `build-manifest.json` are public.
+  - The earlier eight releases are unchanged: their publish times and asset digests compared equal.
+- **Artifacts verified:**
+  - All six assets were downloaded without credentials. Checksums match, as do the manifest's archive and per-binary hashes, and `source.commit` is `7f4ab44`.
+  - Each archive holds `README.md`, `smoke-test.sh` and both binaries, with no database, private path or credential.
+  - Native darwin/arm64 (`polaroid.archive.check`, `01a12bd0-b7ed`): the binaries report `7f4ab44` with `modified` false, and `smoke-archive-check` passed 22/0.
+  - The other platforms were tested by the release runners, not here: smoke 42/0 on each; harness 22/0 on each native runner and on the published-asset test.
+- **Isolated exercise** of the downloaded binaries on copies of a live backup (separate HOME, ports 7601 to 7605): 35 checks, none failed.
+  - Every one of 575 reads equals `v0.6.0-verify.1`'s on the same backup.
+  - Statistics and `write_limits` agree across HTTP, the CLI and MCP.
+  - Each of these was refused with `value_too_large`, and reads and statistics stayed unchanged:
+    - evidence of 65,537 bytes (CLI, HTTP);
+    - feedback details of 8,193 bytes (MCP, HTTP);
+    - a write of 264,222 bytes whose fields are each within their limits (only `*`). The same shape at 6 references instead of 7 was accepted.
+  - A replay of the development fixtures wrote nothing.
+  - Oversized records written by `v0.6.0-verify.1` (70,010-byte contract and evidence, 9,000-byte details) read, verify, back up and restore byte for byte; a revision that repeats one is refused.
+  - Schema 10 throughout.
+  - Rollback: `v0.6.0-verify.1` served the copy after the new build had used it, with identical reads and resolutions, and it accepted a write. It validated a backup taken by the new build and planned its restore.
+  - A first run failed only its own positive control (an unspecified-scope version may not reference local procedures); the corrected rerun passed.
+- **Installed:** the managed instance runs `v0.7.0-verify.1`.
+  - launchd `io.github.ashuangiras.polaroid`, pid 58277, `http://127.0.0.1:7417`, the same `~/.polaroid/data/polaroid.db` at schema 10.
+  - The start-up line names revision `7f4ab44`, and it is the only `polaroidd`.
+  - Backups: before the upgrade `~/.polaroid/backups/polaroid-20261011T163450Z`, after it `…T163617Z`. Both are valid, at schema 10, and kept.
+  - 577 reads (histories, verifications, graphs, bindings and resolutions, executions, feedback, toil) have the same digest before and after (`547e9e46d2b224b4`). Five target resolutions are identical, and MCP reads equal HTTP.
+  - Statistics and `write_limits` match on HTTP, the CLI and MCP. The tool list went from 37 tools to 38.
+  - Rollback: `polaroid install -from ~/.local/state/polaroid/previous`, which holds `v0.6.0-verify.1` (the published binary, compatible as rehearsed). Restoring the pre-upgrade backup is a separate data operation, and only with the owner's agreement.
+- **Client-verified:**
+  - VS Code's MCP connection was restarted, and its log reports `Discovered 38 tools`.
+  - A new Copilot chat (`c9740191`, opened by the owner after the restart) listed 38 Polaroid tools, including `get_catalog_statistics`. It called that tool, `get_procedure`, `get_verification`, `resolve_binding`, `discover_procedures` and `list_toil_items`.
+  - Evidence comes from three sources:
+    - the chat's transcript records those six tool calls;
+    - the daemon log shows its MCP sessions at the `generated_at` it reported;
+    - its values, pasted by the owner, match the HTTP capture (19 procedures, 212 executions, schema 10, `write_limits` 1/262,144/1,048,576/37).
+- **Executions:**
+  - `polaroid.release.publish` v2 `01a12bd6-4764` (verified);
+  - its children: `polaroid.archive.check` v1 `01a12bd0-b7ed` and `polaroid.service.manage` v5 `01a12bd6-4748`.
+- **Scope of the protection:** the write limits refuse oversized individual writes. They do not bound how many writes are made or the catalog's total size: retention, quotas and growth management remain unimplemented.
+
+Next action: none for #100. The proposed next item is measuring the shared catalog's growth ([Next work item](#next-work-item)).
+
+**Size limits on new writes ([#98](https://github.com/ashuangiras/polaroid/issues/98), [ADR-0037](../architecture/decisions/0037-size-limits-on-new-writes.md)), as of 2026-10-11:** merged (PR #99, `7f4ab44`), released in `v0.7.0-verify.1` and adopted (#100, above). Per-write protection only: no catalog quota, retention, deletion or cleanup exists.
 
 - **Policy:** one fixed table in the domain, enforced before anything is stored, and reported by the statistics as `write_limits` ([http-api.md](../architecture/http-api.md#write-limits)). 37 bounded fields in four tiers, plus the whole write: documents (contract, instructions, evidence, toil assessment and proposal) 65,536 bytes; objects (inputs, attributes, contexts, decision evidence) 16,384; prose (philosophy, method, reasons, rationales, notes, details, conditions) 8,192; single lines (goal, summary, name, activity, steps, URIs) 2,048; the whole write 262,144. Existing identifier limits (128 and 255 bytes, commit formats) are unchanged. JSON is measured after storage compaction (escapes as sent), text in UTF-8 bytes; exactly the limit is accepted.
-- **Error:** `413 value_too_large` with `limits` `[{field, bytes, max_bytes}]` (`*` for the whole write), never the content; MCP the same body with flat field names; the CLI exits 1. Structural errors (`invalid_request`) come first, the 1 MiB body limit before both. A refused write stores nothing.
+- **Error:** `413 value_too_large` with `limits` `[{field, bytes, max_bytes}]` (`*` for the whole write), never the content; MCP the same body with flat field names; the CLI exits 1. The checks that need no stored record (`invalid_request`) come first, the 1 MiB body limit before both; checks against stored records come after the limits. A refused write stores nothing.
 - **History:** stored records are never re-checked: they read, verify, back up and restore unchanged. A new write that repeats an oversized stored value is refused; a retry of a write accepted before the limits and over them gets `value_too_large` instead of its conflict. The fixture loader compares first, so matching fixtures write nothing.
 - **Measurements behind the limits** (isolated live copy, aggregates only; 43 versions, 201 executions): maxima evidence 15,422, contract 8,795, instructions 6,980, toil proposal 3,610, reference inputs 1,881, execution inputs 1,861, feedback details 1,515, method 1,217, revision reasons 1,123, decision evidence 960, philosophy 705, goal 367; the largest whole write 16,899. Every limit is at least four times its tier's maximum; every stored value is within its new limit.
 - **Isolated copy with the tested build:** evidence of 65,537 bytes, feedback details of 8,193 bytes and a revision of `polaroid.record-model.change` with a pasted log in its contract (72,887 bytes) were each refused with `value_too_large`, without echoing content; a replay of `examples/development` through the loader wrote nothing; the inventory digest and the statistics were the same before and after.
 - **Still unbounded, on purpose:** IDs and references to existing records (they must exist), version numbers, enumerations, server timestamps, and the number of entries in a collection (references, children, decisions, sources, observations): bounded only by the whole-write limit where entries carry text, by uniqueness and existence, and by the 1 MiB body.
 - **Verification:** `verify-change` (full gate) at `52e37b6`, clean worktree: `make check` (lint 0 issues; test and race 9 packages each, none cached; deps, docs, records and loader checks pass), `make vuln` (no vulnerabilities), `make demo` (PASS, step 28 new), `make e2e` 302/0, `make e2e-mcp E2E_INTEROP=0` 129/0. 15 mutation checks, each caught. Executions: `polaroid.record-model.change` v5 `01a12bac-3e1a` (verified) ← `dev.change.verify` v4 `01a12bab-9f91` ← build `01a12bab-9ec6`, checks `01a12bab-9f76`; lifecycle not applicable. Not run: `make lifecycle`, the independent-client MCP checks.
 
-Next action: the owner reviews and merges the PR; a release and an upgrade of the shared service are separate tasks.
+Next action: superseded by #100's (above).
 
-**Read-only catalog statistics ([#96](https://github.com/ashuangiras/polaroid/issues/96), [ADR-0036](../architecture/decisions/0036-read-only-catalog-statistics.md)), as of 2026-10-11:** merged (PR #97, `4d6387c`), not released. #98 added write limits to it.
+**Read-only catalog statistics ([#96](https://github.com/ashuangiras/polaroid/issues/96), [ADR-0036](../architecture/decisions/0036-read-only-catalog-statistics.md)), as of 2026-10-11:** merged (PR #97, `4d6387c`), released in `v0.7.0-verify.1` and adopted (#100, above). #98 added write limits to it.
 
 - **Interfaces:** `GET /v1/statistics`, MCP `get_catalog_statistics` (38 tools, 24 read-only), CLI `statistics`; the same document on all three ([http-api.md](../architecture/http-api.md#catalog-statistics)). No parameters, no writes, no paths, no record content. No migration: schema stays 10, and `v0.6.0-verify.1` still opens the catalog.
 - **What it reports:** `statistics_version` 1, `generated_at`; counts of every record kind, identities apart from revisions and relationship records; procedures by lifecycle and scope; executions by recorded outcome, by evidence status, invalidated by outcome, and valid executions with a directly invalidated child; toil items by latest status; for 11 JSON payload categories, count, total, mean and maximum UTF-8 bytes of the stored text; schema version, pages and the sizes of the database, WAL and shared-memory files.
@@ -420,10 +466,9 @@ Repetition was not a cause: terms are sets, so a word repeated in a procedure or
 
 ## Next work item
 
-No item is scoped beyond #98 (write limits). Second-repository adoption trials are paused. Hosted CI follows the `hosted-ci` binding (local-only; owner decision, 2026-10-10); the local gates and the release workflow's archive tests are the evidence. Candidates, for the owner to choose and file:
+No item is scoped beyond #100 (release and adoption of #96 and #98). Second-repository adoption trials are paused; the independent external-repository adoption trial is a separate task. Hosted CI follows the `hosted-ci` binding (local-only; owner decision, 2026-10-10); the local gates and the release workflow's archive tests are the evidence. Candidates, for the owner to choose and file:
 
-- **Recommended next: release and adopt #96 and #98** (`polaroid.release.publish`, then `polaroid.service.manage` with a fresh-session check, as #93 did), so agents get statistics and the limits protect the shared catalog. Neither changes the schema: `v0.6.0-verify.1` stays a valid rollback.
-- **Then, before any retention design: measure growth.** Record the statistics of the shared catalog at each release or week, so that retention, if ever needed, is decided from a measured rate. The write limits bound each write, not the catalog's total size.
+- **Recommended next: measure growth, before any retention design.** Record the statistics of the shared catalog at each release or week, so that retention, if ever needed, is decided from a measured rate. Baseline on the live service just after the #100 upgrade (`2026-10-11T16:36:08Z`): 19 procedures, 43 versions, 212 executions, `database_bytes` 1,355,776 (331 pages, WAL empty). The write limits bound each write, not the catalog's total size.
   - **Not part of it:** purge, retention, quotas, namespaces, separate databases and automation.
 - A procedure for promoting earlier assessments, separate from `procedure.capability.extract` (feedback `01a12ac5-d046`), so that a promotion-only run is recorded as such.
 - Later catalog lifecycle work, not scoped: physical purge, retention, namespaces, promotion between catalogs, and separate databases.
