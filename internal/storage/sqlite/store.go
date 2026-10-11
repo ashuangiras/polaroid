@@ -2,9 +2,10 @@
 //
 // Every write runs in one transaction that takes SQLite's write lock when it
 // begins, so concurrent writers queue instead of interleaving. Every read is a
-// single statement, so it observes one consistent snapshot. Schema triggers
-// reject updates and deletes of stored records, and gaps in version and
-// revision numbers.
+// single statement, or, when it needs several, one read-only transaction; either
+// way it observes one consistent snapshot without the write lock. Schema
+// triggers reject updates and deletes of stored records, and gaps in version
+// and revision numbers.
 package sqlite
 
 import (
@@ -37,6 +38,9 @@ const timeLayout = "2006-01-02T15:04:05.000000000Z"
 type Store struct {
 	db   *sql.DB
 	path string
+	// readStarted, set only by tests, runs inside each multi-statement read
+	// once its snapshot is open.
+	readStarted func()
 }
 
 var _ memory.Store = (*Store)(nil)
@@ -488,6 +492,27 @@ func (s *Store) write(ctx context.Context, fn func(*sql.Tx) error) error {
 	return nil
 }
 
+// read runs fn, which only reads, in one transaction that sees a single
+// snapshot of the database and never takes the write lock: the driver begins
+// a read-only transaction as a plain deferred BEGIN, not with _txlock.
+func (s *Store) read(ctx context.Context, fn func(*sql.Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("begin read: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	// A deferred transaction takes its WAL snapshot at its first statement;
+	// take it now, so the snapshot is the moment the read began.
+	var schemaVersion int
+	if err := tx.QueryRowContext(ctx, `PRAGMA schema_version`).Scan(&schemaVersion); err != nil {
+		return fmt.Errorf("open read snapshot: %w", err)
+	}
+	if s.readStarted != nil {
+		s.readStarted()
+	}
+	return fn(tx)
+}
+
 // insertVersion stores v and its references. References go first: the schema
 // accepts them only for a version that does not exist yet.
 func insertVersion(ctx context.Context, tx *sql.Tx, v memory.Version) error {
@@ -550,10 +575,10 @@ func insertVersion(ctx context.Context, tx *sql.Tx, v memory.Version) error {
 }
 
 // Resolve implements memory.Store. The walk takes several queries, so it
-// runs in one transaction to read a single snapshot.
+// runs in one read transaction to read a single snapshot.
 func (s *Store) Resolve(ctx context.Context, procedureID string, policy memory.VersionPolicy, c memory.ResolutionContext) (memory.Resolution, error) {
 	var res memory.Resolution
-	err := s.write(ctx, func(tx *sql.Tx) error {
+	err := s.read(ctx, func(tx *sql.Tx) error {
 		var err error
 		res, err = memory.ResolveGraph(ctx, txResolution{txGraph{tx}, txRuns{tx}}, procedureID, policy, c)
 		return err
