@@ -147,11 +147,11 @@ note "The raw request behind \`post server/discover\`:" '```http' \
 
 ########################################################################
 section "Tool catalogue" \
-	"37 tools mirror the HTTP API one-to-one. 23 only read (including \`discover_procedures\` and \`suggest_duplicates\`, which store nothing) and are annotated \`readOnlyHint\`; 14 write (create/revise procedure, record procedure origin, register repository, add repository alias, create/revise binding, record execution, report feedback, create/revise toil item, invalidate execution, retire/reactivate procedure) and are annotated non-destructive (they only append). Every tool advertises a JSON Schema generated from its argument type: flat arguments named after record fields, optional ones not required." \
+	"38 tools mirror the HTTP API one-to-one. 24 only read (including \`discover_procedures\` and \`suggest_duplicates\`, which store nothing, and \`get_catalog_statistics\`) and are annotated \`readOnlyHint\`; 14 write (create/revise procedure, record procedure origin, register repository, add repository alias, create/revise binding, record execution, report feedback, create/revise toil item, invalidate execution, retire/reactivate procedure) and are annotated non-destructive (they only append). Every tool advertises a JSON Schema generated from its argument type: flat arguments named after record fields, optional ones not required." \
 	"An MCP client lists tools automatically. By hand: \`post tools/list \"\" \"\"\`."
 show 'post tools/list "" "" | jq -c "[.result.tools[] | {name, readOnly: .annotations.readOnlyHint, destructive: .annotations.destructiveHint, required: .inputSchema.required}]" | jq -c ".[]"'
-check "37 tools" equal "$(wc -l <<<"$LAST" | tr -d ' ')" 37
-check "23 read-only tools" equal "$(grep -c '"readOnly":true' <<<"$LAST")" 23
+check "38 tools" equal "$(wc -l <<<"$LAST" | tr -d ' ')" 38
+check "24 read-only tools" equal "$(grep -c '"readOnly":true' <<<"$LAST")" 24
 check "the 14 write tools are marked non-destructive" equal "$(grep -c '"readOnly":false,"destructive":false' <<<"$LAST")" 14
 show 'post tools/list "" "" | jq ".result.tools[] | select(.name == \"get_graph\") | .inputSchema"'
 check "get_graph requires procedure_id and version; repository and environment are optional" out_has '"required": ['
@@ -402,6 +402,18 @@ step reactivate_procedure "{\"procedure_id\":\"$LC\",\"base_event\":1,\"reason\"
 check "reactivated; both events are kept" json_has '. == ["retired","active"]'
 
 ########################################################################
+section "Catalog statistics" \
+	"\`get_catalog_statistics\` (ADR-0036) summarizes the whole catalog, read-only: record counts (identities apart from their revisions and relationship records), procedures by lifecycle and scope, executions by recorded outcome and by evidence status (an outcome is not verification), toil items by latest status, logical payload bytes, and database pages and file sizes. It takes no arguments and writes nothing." \
+	"Ask your agent how large the catalog is; or call the tool below."
+step get_catalog_statistics '{}' '{statistics_version, toil: .toil_items.by_status.candidate, executions: .executions | {by_outcome, by_evidence_status, invalidated_by_outcome}}'
+check "version 1; the invalidated run keeps its succeeded outcome; the candidate toil item counts" json_has '.statistics_version == 1 and .toil == 1 and .executions.by_evidence_status.invalidated == 1 and .executions.invalidated_by_outcome == {"succeeded":1,"failed":0} and .executions.by_outcome.failed == 0'
+A="$(tool get_catalog_statistics '{}' | text | jq -c 'del(.generated_at)')"
+B="$(curl -sS "$URL/v1/statistics" | jq -c 'del(.generated_at)')"
+check "the same document as GET /v1/statistics, apart from generated_at" equal "$A" "$B"
+step get_catalog_statistics '{"repository":"github.com/example/service"}' '.error.code'
+check "arguments are refused: invalid_request" json_has '. == "invalid_request"'
+
+########################################################################
 section "Same documents as the HTTP API" \
 	"MCP and HTTP share one set of record shapes (\`internal/transport/wire\`). A tool's text result is byte-identical to the HTTP response body." \
 	"Compare a tool result with the matching \`curl\`."
@@ -507,10 +519,10 @@ await client.close().catch(() => {});
 EOF
 show '(cd "$TSDIR" && node probe.mjs "$URL/mcp")'
 check "TypeScript SDK 1.32.1 connects at 2025-11-25, without a session" out_has "negotiated: 2025-11-25 session: none"
-check "...lists all 32 tools" out_has "connected; tools: 32"
+check "...lists all 38 tools" out_has "connected; tools: 38"
 check "...and records feedback" out_has "report_feedback: ts.sdk"
 show '(cd "$TSDIR" && npx --no-install mcp-inspector --cli "$URL/mcp" --transport http --method tools/list 2>/dev/null | jq -c "[.tools[].name] | length")'
-check "MCP Inspector 2.10.1 lists the 32 tools" equal "$LAST" 32
+check "MCP Inspector 2.10.1 lists the 38 tools" equal "$LAST" 38
 fi
 VSCODE_GITHUB="/Applications/Visual Studio Code.app/Contents/Resources/app/node_modules.asar.unpacked/@github"
 if [[ "${E2E_INTEROP:-1}" == 0 ]]; then

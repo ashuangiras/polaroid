@@ -2,6 +2,22 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
+**Read-only catalog statistics ([#96](https://github.com/ashuangiras/polaroid/issues/96), [ADR-0036](../architecture/decisions/0036-read-only-catalog-statistics.md)), as of 2026-10-11:** implemented on branch `issue-96-catalog-statistics`, not released. Visibility only: no limit, retention, pruning or cleanup exists.
+
+- **Interfaces:** `GET /v1/statistics`, MCP `get_catalog_statistics` (38 tools, 24 read-only), CLI `statistics`; the same document on all three ([http-api.md](../architecture/http-api.md#catalog-statistics)). No parameters, no writes, no paths, no record content. No migration: schema stays 10, and `v0.6.0-verify.1` still opens the catalog.
+- **What it reports:** `statistics_version` 1, `generated_at`; counts of every record kind, identities apart from revisions and relationship records; procedures by lifecycle and scope; executions by recorded outcome, by evidence status, invalidated by outcome, and valid executions with a directly invalidated child; toil items by latest status; for 11 JSON payload categories, count, total, mean and maximum UTF-8 bytes of the stored text; schema version, pages and the sizes of the database, WAL and shared-memory files.
+- **Guarantees:** counts, payloads and pages are one SQL statement, so one committed state; file sizes are read just after it and can disagree. A missing file is `present: false`. Verification counts, per-table physical sizes, prose fields, percentiles and anything per procedure are left out (ADR-0036 says why).
+- **Finding:** a response writes an escaped character of stored JSON as the character itself (`"\u00e9"`, 6 stored bytes, is returned as `"é"`, 2 bytes). Payload bytes are defined on the stored text. [records.md](../architecture/records.md) says escapes are kept as submitted, which is true of storage only; clarifying it is left to a later docs change.
+- **Isolated copy of the live catalog** (a `polaroid backup` restored twice; the new build on another port with a temporary HOME; the shared service, still `v0.6.0-verify.1`, was only backed up):
+  - 19 procedures (43 versions, all active; 8 shared, 11 local), 37 references, 7 bindings (11 revisions), 2 repositories, 9 feedback reports, 1 toil item (2 revisions, `candidate`);
+  - 194 executions: 190 succeeded, 4 failed; 193 valid, 1 invalidated (succeeded); 129 child links, 72 decisions; no valid execution links an invalidated child;
+  - database 1,298,432 bytes (317 pages of 4 KiB, no free page; WAL empty after the restore); logical JSON payloads 566,229 bytes in total: execution evidence 231,042 (mean 1,190, max 15,422), instructions 125,817 (max 6,980), contracts 112,490 (max 8,795), execution environment attributes 35,564, execution inputs 34,758 (max 1,861), the rest under 8 KB each;
+  - beyond the API, from the same copy with `sqlite3`: evidence median 761 bytes, 90th percentile 2,534, 99th 4,406, one value above 8 KiB, none above 16 KiB; the longest method is 1,217 bytes, philosophy 705;
+  - the inventory digest was the same before and after the statistics reads, two reads and the MCP tool returned the same counts, the response held no path, and a request took 44 ms. An independent `sqlite3` count of the second copy matched every compared count and byte sum.
+- **Verification:** `verify-change` (full gate) at `607bda7`, in a clean worktree: `make check` (lint 0 issues; test and race 9 packages each, none cached; deps, docs, records and loader checks pass), `make vuln` (no vulnerabilities), `make demo` (PASS, step 27 new), `make e2e` 297/0, `make e2e-mcp E2E_INTEROP=0` 127/0. 17 mutation checks, each caught. Executions: `polaroid.record-model.change` v5 `01a12b7c-2f78` (verified) ← `dev.change.verify` v4 `01a12b7b-b592` ← build `01a12b7b-b55a`, checks `01a12b7b-b571`; the lifecycle reference was decided not applicable. Not run: `make lifecycle`, the independent-client MCP checks.
+
+Next action: the owner reviews and merges the PR; a release and an upgrade of the shared service are separate tasks, when the owner asks. Then the next increment (see [Next work item](#next-work-item)).
+
 **Catalog lifecycle released and adopted ([#93](https://github.com/ashuangiras/polaroid/issues/93)), as of 2026-10-11:** published as [`v0.6.0-verify.1`](https://github.com/ashuangiras/polaroid/releases/tag/v0.6.0-verify.1). That is a tag on `6a6c835`, the merge of PR #92. Its tree equals `be935a0`, which is `status.md` only, verified at docs scope; the code was verified at `8a14c22`.
 
 - **Shared instance:**
@@ -15,7 +31,7 @@ This page is a snapshot of the repository's current state, replaced at every han
   - The correction follows a new shared procedure, `execution.evidence.invalidate` v1 (`01a12b4b-f6d3-7d3f-ac93-c0cd84705b50`, fixture `examples/development/procedures/execution-evidence-invalidate/`), recorded as execution `01a12b4d-34e4`.
 - **Agents:** after `MCP: Restart Server` (VS Code logged `Discovered 37 tools`), a fresh Copilot session listed the five new tools and read the invalidation, the verification, discovery, extract's graph and verifications, the `verify-change` resolution and a lifecycle against the live service.
 
-Next action: the owner chooses the next increment (see [Next work item](#next-work-item)).
+Next action: superseded by #96's (above).
 
 **Catalog lifecycle, first increment: execution-evidence invalidation and procedure retirement ([#91](https://github.com/ashuangiras/polaroid/issues/91), [ADR-0035](../architecture/decisions/0035-evidence-invalidation-and-procedure-retirement.md)):** released in `v0.6.0-verify.1` (above).
 
@@ -392,20 +408,14 @@ Repetition was not a cause: terms are sets, so a word repeated in a procedure or
 
 ## Next work item
 
-No item is scoped beyond #93 (the release and adoption of #91). Second-repository adoption trials are paused. Hosted CI follows the `hosted-ci` binding (local-only; owner decision, 2026-10-10); the local gates and the release workflow's archive tests are the evidence. Candidates, for the owner to choose and file:
+No item is scoped beyond #96 (catalog statistics). Second-repository adoption trials are paused. Hosted CI follows the `hosted-ci` binding (local-only; owner decision, 2026-10-10); the local gates and the release workflow's archive tests are the evidence. Candidates, for the owner to choose and file:
 
-- **Recommended next bounded increment: catalog statistics, then payload limits decided from them.**
-  - **Statistics:** a read-only statistics read on HTTP, MCP and the CLI. It reports:
-    - record counts by kind;
-    - executions by `evidence_status` and outcome;
-    - procedures by `lifecycle_status` and scope;
-    - the catalog file's size;
-    - per-field payload sizes (count, total, maximum and a high percentile) for `evidence`, `inputs`, `contract` and `instructions`.
-
-    It would add no schema, no stored counter and no write, and the ADR would settle its shape and cost.
-  - **Today's numbers:** the live catalog is about 1.2 MB with 182 executions. The largest `evidence` is 15 KB (213 KB in total), the largest `contract` 8.8 KB and the largest `instructions` 7.0 KB. The only limit is the 1 MiB request body.
-  - **Payload limits:** per-field limits for new writes, chosen from the measured distribution, in an ADR with an explicit error code. They would apply only to writes; stored records are never refused on read or rewritten. That is the second step, after the statistics.
+- **Recommended next bounded increment: per-field payload limits for new writes, decided from the #96 measurements.**
+  - **The numbers (live copy, 2026-10-11):** 194 executions (182 at the #93 handoff earlier the same day); the catalog is 1.3 MB, of which 0.57 MB are logical JSON payloads. Evidence is the largest category (231 KB): median 761 bytes, 99th percentile 4,406, maximum 15,422. Contracts reach 8,795 bytes, instructions 6,980, execution inputs 1,861, methods 1,217. The only limit is the 1 MiB request body, about 68 times the largest stored value.
+  - **Proposal:** an ADR with per-field byte limits on the stored (compacted) text, one explicit error code (for example `payload_too_large` naming the field and its limit), applied to new writes only, never on read and never to stored records. Limits with wide headroom over today's maxima (for example 64 KiB for evidence, contracts and instructions, 16 KiB for inputs, contexts and decision evidence, and a bound for prose fields), exposed in the statistics response so agents can see them.
+  - **Why limits before retention:** nothing is large yet, and retention would need deletion, which the history rules forbid without an ADR. A limit stops one accidental log dump from becoming permanent; no growth rate has been measured yet (statistics over time would give one).
   - **Not part of it:** purge, retention, namespaces, separate databases and automation.
+- Clarify in [records.md](../architecture/records.md) that responses write escaped characters as themselves (found in #96).
 - A procedure for promoting earlier assessments, separate from `procedure.capability.extract` (feedback `01a12ac5-d046`), so that a promotion-only run is recorded as such.
 - Later catalog lifecycle work, not scoped: physical purge, retention, namespaces, promotion between catalogs, and separate databases.
 

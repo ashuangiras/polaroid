@@ -46,6 +46,8 @@ var queryCommands = map[string]bool{"list": true, "discover": true, "bindings": 
 var commands = []command{
 	{"health", "", "check that the daemon and its storage are available", 0, 0,
 		func(c *client, _ []string) error { return c.do(http.MethodGet, "/healthz", nil) }},
+	{"statistics", "", "show read-only catalog statistics: record counts, outcome and evidence status, payload sizes, storage", 0, 0,
+		func(c *client, _ []string) error { return c.do(http.MethodGet, "/v1/statistics", nil) }},
 	{"list", "[NAME=VALUE...]", "list procedures; NAME is repository, scope, q, lifecycle (active, the default, retired or all), limit, after or snapshot", 0, 0,
 		func(c *client, _ []string) error { return c.do(http.MethodGet, c.path("/v1/procedures", nil), nil) }},
 	{"discover", "TASK [NAME=VALUE...]", "find procedures for a task described in words, by shared words (lexical), ranked and explained; NAME is repository, lifecycle or limit", 1, 1,

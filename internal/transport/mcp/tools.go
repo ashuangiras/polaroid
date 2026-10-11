@@ -396,6 +396,14 @@ func (t *tools) register(s *sdk.Server) {
 		})
 	t.registerToil(s)
 	t.registerLifecycle(s)
+	add(s, t, "get_catalog_statistics", "Read-only statistics of the whole catalog (statistics_version 1): record counts (identities, their revisions and relationship records), "+
+		"procedures by lifecycle and scope, executions by recorded outcome and by evidence status (an outcome is not verification), toil items by latest status, "+
+		"logical byte sizes of the stored JSON payloads (count, total, mean, max), and database pages and file sizes. "+
+		"Counts and payloads are one snapshot; file sizes are read just after it and may differ. Takes no arguments and writes nothing.", read,
+		func(ctx context.Context, _ struct{}) (any, error) {
+			st, err := t.svc.Statistics(ctx)
+			return wire.NewStatistics(st), err
+		})
 }
 
 // registerLifecycle adds the evidence invalidation and procedure retirement

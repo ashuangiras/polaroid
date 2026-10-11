@@ -874,7 +874,21 @@ lc_invalidation="$(bin/polaroid get-execution-invalidation "$lc_c2")"
 dev_before="$(dev_snapshot)"
 echo "4. reactivated: the history keeps both events, MCP returns the same document, the graph is ordinary again; no development record changed"
 
-step "27. Restart polaroidd and confirm every record persisted"
+step "27. Catalog statistics: one read-only summary of everything above (#96, ADR-0036; scripted regression evidence)"
+stats96="$(bin/polaroid statistics)"
+jq -e '.statistics_version == 1 and .storage.schema_version == 10 and (.procedures.by_lifecycle | add) == .records.procedures
+	and (.executions.by_outcome | add) == .records.executions and .executions.by_evidence_status.invalidated == .records.execution_invalidations
+	and .records.execution_invalidations >= 1 and .executions.valid_with_invalidated_child >= 1 and (.toil_items.by_status | add) == .records.toil_items
+	and .records.procedure_versions > .records.procedures and ([.. | strings | select(contains("/"))] == [])' <<<"$stats96" >/dev/null ||
+	fail "unexpected statistics: $stats96"
+[[ "$(bin/polaroid executions | jq '.executions | length')" == "$(jq '.records.executions' <<<"$stats96")" ]] || fail "statistics count other executions than the list"
+stats96_counts() { jq -c 'del(.generated_at, .storage.files)'; }
+[[ "$(mcp_tool get_catalog_statistics '{}' | stats96_counts)" == "$(stats96_counts <<<"$stats96")" ]] || fail "MCP and HTTP statistics differ"
+[[ "$(dev_snapshot)" == "$dev_before" ]] || fail "reading statistics changed a development record"
+jq -r '"\(.records.procedures) procedures (\(.records.procedure_versions) versions), \(.records.executions) executions (\(.executions.by_outcome.failed) failed, \(.records.execution_invalidations) invalidated), \(.records.toil_items) toil item; \(.payloads.execution_evidence.total_bytes) bytes of execution evidence; schema \(.storage.schema_version)"' <<<"$stats96"
+echo "the counts add up, match the execution list and the MCP tool, name no path, and reading them changed nothing"
+
+step "28. Restart polaroidd and confirm every record persisted"
 stop_daemon
 start_daemon
 [[ "$(bin/polaroid get-by-key "$key")" == "$history" ]] || fail "history differs after restart"
@@ -886,9 +900,10 @@ start_daemon
 [[ "$(bin/polaroid get-execution-invalidation "$lc_c2")" == "$lc_invalidation" && "$(bin/polaroid get-procedure-lifecycle "$lc_child")" == "$lc_life" ]] ||
 	fail "the invalidation or the lifecycle differs after restart"
 echo "every history, binding, execution, verification, toil item, invalidation and lifecycle is byte-for-byte identical after restart"
+[[ "$(bin/polaroid statistics | stats96_counts)" == "$(stats96_counts <<<"$stats96")" ]] || fail "the statistics differ after restart"
 stop_daemon
 
-step "28. Upgrade a database written at schema version 6 (#35): history reads back, and registration associates it without rewriting it"
+step "29. Upgrade a database written at schema version 6 (#35): history reads back, and registration associates it without rewriting it"
 legacy="$work/schema-6.db"
 for f in internal/storage/sqlite/migrations/000[1-6]_*.sql; do sqlite3 "$legacy" <"$f"; done
 sqlite3 "$legacy" <<'SQL'
@@ -920,6 +935,9 @@ jq -e --arg r "$legacy_repo" '.repository == "example.com/legacy/service" and .r
 jq -e --arg r "$legacy_repo" '.verified and .combination.repository == "example.com/legacy/service-renamed" and .combination.repository_id == $r' <<<"$(bin/polaroid verification legacy-e)" >/dev/null ||
 	fail "the legacy combination is not under the renamed repository's identity (ADR-0022)"
 legacy_run="$(bin/polaroid get-execution legacy-e)"
+jq -e '.storage.schema_version == 10 and .records.procedures == 1 and .records.executions == 1 and .records.feedback == 1
+	and .payloads.execution_evidence == {count: 1, total_bytes: 10, mean_bytes: 10, max_bytes: 10}' <<<"$(bin/polaroid statistics)" >/dev/null ||
+	fail "unexpected statistics of the upgraded database: $(bin/polaroid statistics)"
 stop_daemon
 start_daemon
 [[ "$(bin/polaroid get legacy-p)" == "$legacy_procedure" && "$(bin/polaroid get-execution legacy-e)" == "$legacy_run" ]] || fail "the upgraded database differs after a restart"
