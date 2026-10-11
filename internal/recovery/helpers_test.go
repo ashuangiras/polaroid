@@ -120,7 +120,7 @@ func executionBody(procedureID string, extra string) string {
 // conditional reference with a decision, and returns the API reads that
 // describe them.
 type fixture struct {
-	leaf, parent, binding, run, feedback string
+	leaf, parent, binding, run, feedback, toil string
 }
 
 func populate(a *api) fixture {
@@ -138,6 +138,12 @@ func populate(a *api) fixture {
 		"children": [{"reference": "checks", "execution_id": "`+checks+`"}],
 		"decisions": [{"reference": "integration", "applicable": false, "rationale": "Only README.md changed.", "evidence": {"files": ["README.md"]}}]`))
 	f.feedback = a.post("/v1/feedback", `{"kind": "problem", "summary": "A report", "details": "d", "reporter": "recovery.test", "subject": {"type": "execution", "execution_id": "`+f.run+`"}}`)
+	toil := `"activity": "Run the checks by hand", "applicability": {"shared": {}}, "sources": [{"procedure_id": "` + f.leaf + `", "version": 1, "steps": ["run"]}],
+		"observations": [{"execution_id": "` + checks + `", "note": "ran by hand"}], "assessment": {"repetition": {"status": "observed"}, "burden": {"status": "unknown"}},
+		"status_rationale": "Seen once.", "revision_reason": "First.", "author": "recovery.test"`
+	f.toil = a.post("/v1/toil-items", `{"canonical_key": "recovery.toil", "revision": {"status": "observed", `+toil+`}}`)
+	a.post("/v1/toil-items/"+f.toil+"/revisions", `{"base_revision": 1, "revision": {"status": "candidate", "proposal": {"inputs": 1, "outputs": 2,
+		"remaining_judgment": 3, "failure_and_recovery": 4, "acceptance_criteria": ["c"]}, `+toil+`}}`)
 	return f
 }
 
@@ -151,7 +157,7 @@ func (f fixture) reads(a *api) map[string]string {
 		"/v1/bindings/" + f.binding, "/v1/bindings?repository=" + url.QueryEscape(fixtureRepo),
 		"/v1/executions/" + f.run, "/v1/executions/" + f.run + "/verification",
 		"/v1/procedures/" + f.parent + "/versions/1/graph?" + target.Encode(),
-		"/v1/feedback/" + f.feedback, "/v1/repositories",
+		"/v1/feedback/" + f.feedback, "/v1/repositories", "/v1/toil-items/" + f.toil, "/v1/toil-items",
 	} {
 		out[p] = string(a.get(p))
 	}

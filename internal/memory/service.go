@@ -150,6 +150,36 @@ type Store interface {
 	// extra item when f.Page.Limit is set and more exist.
 	ListFeedback(ctx context.Context, f FeedbackFilter) ([]Feedback, error)
 
+	// CreateToilItem stores t together with its first revision and its
+	// links. It returns an error wrapping ErrCanonicalKeyExists if the key
+	// is used by another toil item; then nothing is stored.
+	CreateToilItem(ctx context.Context, t ToilItem, first ToilRevision) error
+
+	// AppendToilRevision stores next if, and only if, baseRevision is the
+	// latest revision of next.ToilItemID; the check and the write are one
+	// atomic step. Callers set next.Number to baseRevision+1. It returns a
+	// *RevisionConflictError when baseRevision is not the latest revision,
+	// and an error wrapping ErrNotFound when the item does not exist.
+	AppendToilRevision(ctx context.Context, baseRevision int, next ToilRevision) error
+
+	// ToilHistory and ToilHistoryByKey return a consistent snapshot of a toil
+	// item and all of its revisions, or an error wrapping ErrNotFound.
+	ToilHistory(ctx context.Context, id string) (ToilHistory, error)
+	ToilHistoryByKey(ctx context.Context, canonicalKey string) (ToilHistory, error)
+
+	// ToilRevision returns one revision, or an error wrapping ErrNotFound.
+	ToilRevision(ctx context.Context, id string, number int) (ToilRevision, error)
+
+	// ListToilItems returns summaries of the items f selects by their latest
+	// revision, ordered by canonical key, with one extra item when
+	// f.Page.Limit is set and more exist. With f.Snapshot it reads only what
+	// the boundary includes, and returns ErrInvalidSnapshot for a boundary
+	// ToilSnapshot did not issue.
+	ListToilItems(ctx context.Context, f ToilFilter) ([]ToilItem, error)
+
+	// ToilSnapshot returns the current boundary of the toil item list.
+	ToilSnapshot(ctx context.Context) (Snapshot, error)
+
 	// Ping reports whether the store can serve requests.
 	Ping(ctx context.Context) error
 }

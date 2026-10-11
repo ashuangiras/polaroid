@@ -135,6 +135,30 @@ type (
 		Repository     string `json:"repository,omitzero" jsonschema:"only reports made in, or about, this repository (by identity)"`
 		pageArgs
 	}
+	createToilItemArgs struct {
+		CanonicalKey string `json:"canonical_key" jsonschema:"a new key in canonical-key form; an existing toil item's key is a canonical_key_exists conflict"`
+		wire.ToilContent
+	}
+	reviseToilItemArgs struct {
+		ToilItemID   string `json:"toil_item_id"`
+		BaseRevision int    `json:"base_revision" jsonschema:"the latest revision you read; a stale base is a revision_conflict"`
+		wire.ToilContent
+	}
+	toilItemRef struct {
+		ID           string `json:"id,omitzero" jsonschema:"the toil item ID; give this or canonical_key"`
+		CanonicalKey string `json:"canonical_key,omitzero" jsonschema:"the toil item's canonical key; give this or id"`
+	}
+	toilRevisionRef struct {
+		ToilItemID string `json:"toil_item_id"`
+		Revision   int    `json:"revision"`
+	}
+	listToilItemsArgs struct {
+		Status      string `json:"status,omitzero" jsonschema:"only items whose latest revision has this status: observed, candidate, implemented, validated or retired"`
+		Repository  string `json:"repository,omitzero" jsonschema:"only shared items and items local to this repository identifier's repository (by identity, aliases included)"`
+		ProcedureID string `json:"procedure_id,omitzero" jsonschema:"only items whose latest revision cites this procedure, at any version, as a source"`
+		pageArgs
+		snapshotArgs
+	}
 )
 
 func (a pageArgs) page() memory.Page {
@@ -146,6 +170,10 @@ func (a listProceduresArgs) page() memory.Page {
 }
 
 func (a repositoryArgs) page() memory.Page {
+	return memory.Page{Limit: a.Limit, After: a.After, Snapshot: a.Snapshot}
+}
+
+func (a listToilItemsArgs) page() memory.Page {
 	return memory.Page{Limit: a.Limit, After: a.After, Snapshot: a.Snapshot}
 }
 
@@ -348,6 +376,59 @@ func (t *tools) register(s *sdk.Server) {
 		func(ctx context.Context, in byID) (any, error) {
 			f, err := t.svc.Feedback(ctx, in.ID)
 			return wire.NewFeedback(f), err
+		})
+	t.registerToil(s)
+}
+
+// registerToil adds the toil item tools (ADR-0034).
+func (t *tools) registerToil(s *sdk.Server) {
+	const read, write = true, false
+	add(s, t, "list_toil_items", "List toil items (assessments of repetitive work that may be automated), ordered by canonical key, as summaries of their latest revision: activity, status, scope. "+
+		"Filter by status, repository (shared items and items local to it) and procedure_id (items citing it as a source). "+
+		"Look here before create_toil_item: different keys may describe the same activity, and nothing detects that for you. Pass limit to page, and snapshot to page a fixed snapshot.", read,
+		func(ctx context.Context, in listToilItemsArgs) (any, error) {
+			items, next, err := t.svc.ListToilItems(ctx, memory.ToilFilter{Status: memory.ToilStatus(in.Status), Repository: in.Repository,
+				ProcedureID: in.ProcedureID, Page: in.page()})
+			return wire.NewToilItemList(items, next), err
+		})
+	add(s, t, "get_toil_item", "Get a toil item and all of its revisions, by id or by canonical_key.", read,
+		func(ctx context.Context, in toilItemRef) (any, error) {
+			var h memory.ToilHistory
+			var err error
+			switch {
+			case in.ID != "" && in.CanonicalKey != "":
+				return nil, &memory.ValidationError{Problems: []memory.FieldProblem{{Field: "canonical_key", Message: "must not be given with id"}}}
+			case in.ID != "":
+				h, err = t.svc.ToilItem(ctx, in.ID)
+			case in.CanonicalKey != "":
+				h, err = t.svc.ToilItemByKey(ctx, in.CanonicalKey)
+			default:
+				return nil, required("id")
+			}
+			return wire.NewToilHistory(h), err
+		})
+	add(s, t, "get_toil_revision", "Get one revision of a toil item.", read,
+		func(ctx context.Context, in toilRevisionRef) (any, error) {
+			r, err := t.svc.ToilRevision(ctx, in.ToilItemID, in.Revision)
+			return wire.NewToilRevision(r), err
+		})
+	const content = "activity is one line; applicability is {\"shared\": {}} or {\"repository\": \"<repository id>\"}. " +
+		"sources are exact procedure versions {procedure_id, version, steps?}; steps are declared identifiers, never checked against instructions. " +
+		"observations are supporting executions {execution_id, note}; a failed run is valid support. " +
+		"assessment is free-form, but repetition.status and burden.status must be observed, hypothesis or unknown: keep what you saw apart from what you assume. " +
+		"proposal (inputs, outputs, remaining_judgment, failure_and_recovery, acceptance_criteria) is required from candidate on; replacement {summary, references} for implemented and validated; " +
+		"validation {rationale, executions, references} only for validated (or retired). References are declared, never fetched. " +
+		"status is your assessment, not verification: observed, candidate, implemented, validated, retired, with status_rationale. author names you in canonical-key form."
+	add(s, t, "create_toil_item", "Create a toil item, an evidence-backed assessment of repetitive work that may be automated, with its revision 1 (status observed or candidate). "+content, write,
+		func(ctx context.Context, in createToilItemArgs) (any, error) {
+			h, err := t.svc.CreateToilItem(ctx, memory.NewToilItem{CanonicalKey: in.CanonicalKey, Content: in.Domain()})
+			return wire.NewToilHistory(h), flatten(err, "revision.")
+		})
+	add(s, t, "revise_toil_item", "Append a complete revision of a toil item derived from base_revision, which must be the latest. "+
+		"Statuses follow observed -> candidate -> implemented -> validated; validated or implemented go back to candidate when a replacement fails; any status may be retired, and retired reopens as observed; every status may stay the same. "+content, write,
+		func(ctx context.Context, in reviseToilItemArgs) (any, error) {
+			r, err := t.svc.ReviseToilItem(ctx, in.ToilItemID, memory.ToilRevise{BaseRevision: in.BaseRevision, Content: in.Domain()})
+			return wire.NewToilRevision(r), flatten(err, "revision.")
 		})
 }
 

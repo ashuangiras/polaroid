@@ -1,6 +1,6 @@
 # HTTP API (v1)
 
-This page is the contract of the API that `polaroidd` serves. It covers only what is implemented: procedure identity and immutable versions with subprocedure references and applicability, lexical procedure discovery and duplicate suggestions, the repository registry, repository bindings with immutable revisions, execution records, and feedback reports. Field rules are defined in [records.md](records.md). The same operations are available to MCP clients at `/mcp`; see [mcp.md](mcp.md).
+This page is the contract of the API that `polaroidd` serves. It covers only what is implemented: procedure identity and immutable versions with subprocedure references and applicability, lexical procedure discovery and duplicate suggestions, the repository registry, repository bindings with immutable revisions, execution records, feedback reports, and toil items with append-only revisions. Field rules are defined in [records.md](records.md). The same operations are available to MCP clients at `/mcp`; see [mcp.md](mcp.md).
 
 - **Base URL:** `http://127.0.0.1:7417` by default (`polaroidd -addr`).
 - **Bodies:** every request and response body is UTF-8 JSON. Requests with a body must send `Content-Type: application/json` and stay under 1 MiB.
@@ -40,6 +40,12 @@ This page is the contract of the API that `polaroidd` serves. It covers only wha
 | `GET /v1/repositories/{id}` | `200` repository | One repository with its aliases. |
 | `GET /v1/repositories/by-identifier/{identifier}` | `200` repository | The repository an identifier, canonical or alias, is registered to. |
 | `POST /v1/repositories/{id}/aliases` | `201` repository | Register another identifier of the same repository. |
+| `POST /v1/toil-items` | `201` toil item history, with a `Location` header | Create a [toil item](#toil-items) and its revision 1. |
+| `GET /v1/toil-items[?status=…][&repository=…][&procedure_id=…][&limit=…&after=…][&snapshot=true]` | `200 {"toil_items":[...]}` | List toil item summaries by their latest revision, ordered by canonical key. |
+| `GET /v1/toil-items/{id}` | `200` toil item history | A toil item and all of its revisions, oldest first. |
+| `GET /v1/toil-items/by-key/{canonical_key}` | `200` toil item history | The same history, looked up by canonical key. |
+| `GET /v1/toil-items/{id}/revisions/{n}` | `200` toil revision | One revision. |
+| `POST /v1/toil-items/{id}/revisions` | `201` toil revision, with a `Location` header | Append a revision derived from `base_revision`. |
 
 `HEAD` is accepted wherever `GET` is.
 
@@ -223,18 +229,18 @@ The response is `201` with the repository and `Location: /v1/repositories/{id}`:
 - `scope`: `shared`, `local` or `unspecified`;
 - `q`: the canonical key or the latest goal contains this text, ignoring ASCII case.
 
-The procedure, repository, binding, execution and feedback lists take **opt-in pagination** ([ADR-0021](decisions/0021-targeted-feedback-and-bounded-lists.md), [ADR-0023](decisions/0023-pagination-guarantees-and-scope-labels.md)):
+The procedure, repository, binding, execution, feedback and toil item lists take **opt-in pagination** ([ADR-0021](decisions/0021-targeted-feedback-and-bounded-lists.md), [ADR-0023](decisions/0023-pagination-guarantees-and-scope-labels.md)):
 
 - `limit` (1 to 500) returns at most that many items. If more remain, the body adds `"next"`, an opaque cursor; pass it back as `after`, with a `limit` (which may change) and **the same other parameters**, to continue. The last page has no `next`.
 - Without `limit` the list is complete, as before, and has no `next`. `after` without `limit` is `400`, and so is an `after` that is not a cursor, or a cursor issued by another list or with other parameters (`400` on `after`). Cursors issued before ADR-0023 are still accepted, as positions without that check.
-- **Order** is stable, with unique tie-breakers: procedures by `canonical_key` (unique); bindings by `name`, then `id`; repositories, executions and feedback by `created_at`, then `id`.
+- **Order** is stable, with unique tie-breakers: procedures and toil items by `canonical_key` (unique); bindings by `name`, then `id`; repositories, executions and feedback by `created_at`, then `id`.
 - **A page is a fresh read; the default traversal is live, not a snapshot.** A cursor means "after this item, in this order".
   - Time-ordered lists (repositories, executions, feedback): `created_at` is assigned inside the write transaction, strictly after every stored one, so a record committed while you page sorts after your cursor and a later page returns it. Continuing never skips or repeats one.
-  - Key-ordered lists (procedures, bindings): a record created while you page is returned only if its key sorts after the cursor. None is repeated.
-  - Filters are evaluated on each page against the state then: a procedure's latest version (for `scope`, `q` and `repository`) and the repository registry (for every `repository` filter). A record whose membership changes between pages may be missed, or returned late. Item contents, such as `latest_version`, are as of the page that returned them.
+  - Key-ordered lists (procedures, bindings, toil items): a record created while you page is returned only if its key sorts after the cursor. None is repeated.
+  - Filters are evaluated on each page against the state then: a procedure's latest version (for `scope`, `q` and `repository`), a toil item's latest revision (for every toil filter) and the repository registry (for every `repository` filter). A record whose membership changes between pages may be missed, or returned late. Item contents, such as `latest_version`, are as of the page that returned them.
   - To see what a traversal could not return, start again without `after`.
-- **Snapshot traversal** (`snapshot=true`, with `limit`, on `GET /v1/procedures` and `GET /v1/bindings`): the first page fixes a boundary, carried by its cursors, and every page reads only records committed before it.
-  - **Membership and contents are fixed as of the first page.** For procedures: which exist, each one's latest version (so `latest_version`, `scope`, `goal`, `applicability`), its origin, and repository identity for `repository`. For bindings: which exist, `latest_revision`, and the identity for `repository`.
+- **Snapshot traversal** (`snapshot=true`, with `limit`, on `GET /v1/procedures`, `GET /v1/bindings` and `GET /v1/toil-items`): the first page fixes a boundary, carried by its cursors, and every page reads only records committed before it.
+  - **Membership and contents are fixed as of the first page.** For procedures: which exist, each one's latest version (so `latest_version`, `scope`, `goal`, `applicability`), its origin, and repository identity for `repository`. For bindings: which exist, `latest_revision`, and the identity for `repository`. For toil items: which exist, each one's latest revision (so `latest_revision`, `status`, `activity`, `scope`, `applicability`, `updated_at` and the sources `procedure_id` matches), and the identity for `repository`.
   - **Every record within the boundary is returned exactly once**, wherever its key sorts. Records committed later are excluded: start a new snapshot to see them.
   - **Nothing else is a snapshot:** reading a record by ID, or any other list, returns current state. `snapshot` must be given on every page; it is `400` without `limit`, with `true` or `false` as its only values, and an unknown parameter on the other lists.
 - A filter given but empty is `400`.
@@ -416,6 +422,35 @@ An unknown subject record or execution, a subject member of another type, and a 
 
 Reports are never changed or deleted, and Polaroid tracks no triage state ([records.md](records.md#feedback-report-implemented)).
 
+### Toil items
+
+A toil item is an agent's versioned assessment of repetitive work, with a proposal and an assessment lifecycle ([ADR-0034](decisions/0034-toil-items.md), field rules in [records.md](records.md#toil-item-implemented)). Its status is never execution verification: Polaroid checks structure and links, and derives nothing.
+
+```http
+POST /v1/toil-items
+Content-Type: application/json
+
+{"canonical_key": "polaroid.change-classification.manual",
+ "revision": {
+   "activity": "Classify the files a change touches by hand",
+   "applicability": {"repository": "01a12236-…"},
+   "sources": [{"procedure_id": "…", "version": 3, "steps": ["files"]}],
+   "observations": [{"execution_id": "…", "note": "#81: the changed files classified by hand."}],
+   "assessment": {"repetition": {"status": "observed", "evidence": "…"}, "burden": {"status": "hypothesis", "note": "…"}},
+   "proposal": {"inputs": "…", "outputs": "…", "remaining_judgment": "…", "failure_and_recovery": "…", "acceptance_criteria": ["…"]},
+   "status": "candidate", "status_rationale": "A proposal awaits the owner's decision.",
+   "revision_reason": "Promoted from #85's extraction evidence.", "author": "copilot.vscode"}}
+```
+
+- The response is `201` with the history and `Location: /v1/toil-items/{id}`. The history is the item's summary (`id`, `canonical_key`, `created_at`, `latest_revision`, and the latest revision's `activity`, `status`, `scope`, `applicability`, plus `updated_at`, its `created_at`) and `revisions`, oldest first. `GET /v1/toil-items/{id}` and `GET /v1/toil-items/by-key/{key}` return the same document.
+- A revision document is the revision's content plus `toil_item_id`, `revision`, `scope` and `created_at`. `observations` is always present (`[]` when none); `proposal`, `replacement` and `validation` are omitted when absent, and a stored `validation` always lists `executions` and `references`. `steps` and a reference's `note` are omitted when absent.
+- `POST /v1/toil-items/{id}/revisions` with `{"base_revision": 1, "revision": {…}}` appends a complete revision: `201`, `Location: /v1/toil-items/{id}/revisions/2`. A stale base is `409 revision_conflict` with `latest_revision`, and nothing is stored. A status that may not follow the base revision's is `400` on `revision.status`, naming the allowed ones.
+- Revision 1 is `observed` or `candidate`. Each status requires and allows: `candidate` a `proposal`; `implemented` a `proposal` and a `replacement` (`summary` and at least one `references` entry `{uri, note?}`); `validated` those and a `validation` (`rationale`, and `executions` `{execution_id, note}`, `references`, or both); `observed` and `retired` neither require them, and only `retired` allows a `replacement` or `validation`; a field a status does not allow is `400`. The allowed transitions are in [records.md](records.md#toil-item-implemented).
+- `400`, naming the field: an invalid `canonical_key`; a blank or multi-line `activity`; a missing `applicability` (it is required) or an unregistered repository in it; no `sources`, an unknown procedure or version, or a duplicate; an `observations` or `validation.executions` entry naming an unknown execution, or one cited twice; `assessment` without `repetition` and `burden` objects whose `status` is `observed`, `hypothesis` or `unknown`; a `proposal` missing a member or with empty `acceptance_criteria`; a blank `status_rationale` or `revision_reason`; an invalid `author`. For a local item, a source version not applicable in its repository and an execution that ran elsewhere (by identity) are `400`.
+- References and step IDs are declared: they are stored and returned, and never fetched, opened, executed or checked against instructions. Failed executions are valid observations.
+- `GET /v1/toil-items` lists summaries. Its filters apply to each item's latest revision: `status`; `repository`, an identifier, for shared items and items local to the repository it belongs to (aliases included; an unregistered identifier sees shared items only); `procedure_id`, items whose sources cite that procedure at any version (an unknown ID matches nothing). With `limit`, `after` and `snapshot` as [above](#discovery-filters-and-pages). An invalid `status` or `repository` is `400`.
+- An unknown item, key or revision is `404`.
+
 ## Errors
 
 Every error is a JSON object of this form:
@@ -428,16 +463,16 @@ Every error is a JSON object of this form:
 
 | Status | `code` | When |
 | --- | --- | --- |
-| 400 | `invalid_request` | Malformed JSON, unknown or duplicate members, wrong JSON types, or a field that fails validation (listed in `fields`). Also a version or revision path segment that is not a positive integer, a pinned version the procedure does not have, a reference to an unknown procedure, an execution that does not match its version or binding, and a missing, repeated, invalid or unknown query parameter when listing bindings, executions, verifications or feedback. |
+| 400 | `invalid_request` | Malformed JSON, unknown or duplicate members, wrong JSON types, or a field that fails validation (listed in `fields`). Also a version or revision path segment that is not a positive integer, a pinned version the procedure does not have, a reference to an unknown procedure, an execution that does not match its version or binding, and a missing, repeated, invalid or unknown query parameter when listing bindings, executions, verifications, feedback or toil items. Also a toil revision whose status may not follow its base revision's. |
 | 403 | `forbidden` | The `Host` header does not name a loopback address while the daemon listens on loopback, or a browser sent an unsafe cross-origin request. |
-| 404 | `not_found` | Unknown procedure (also as a binding's or execution's `procedure_id`), canonical key, version, binding (also as an execution's `binding_id`), binding revision, execution, feedback report or endpoint. |
+| 404 | `not_found` | Unknown procedure (also as a binding's or execution's `procedure_id`), canonical key, version, binding (also as an execution's `binding_id`), binding revision, execution, feedback report, toil item, toil item key or toil revision, or endpoint. |
 | 405 | `method_not_allowed` | The endpoint exists, but not for this method. The `Allow` header lists the methods it accepts. |
-| 409 | `canonical_key_exists` | Another procedure already uses the canonical key. |
+| 409 | `canonical_key_exists` | Another procedure already uses the canonical key, or, when creating a toil item, another toil item does. The two namespaces are separate. |
 | 409 | `version_conflict` | `base_version` is not the latest version. `latest_version` is included. |
 | 409 | `binding_exists` | The repository already has a binding with this `name`, under this or another of its identifiers, or an alias would give it two. |
 | 409 | `repository_identifier_exists` | The identifier is already registered, as a canonical identifier or an alias. |
 | 409 | `origin_exists` | The procedure's origin is already recorded. |
-| 409 | `revision_conflict` | `base_revision` is not the latest revision. `latest_revision` is included. |
+| 409 | `revision_conflict` | `base_revision` is not the latest revision of the binding or toil item. `latest_revision` is included. |
 | 409 | `reference_cycle` | The version's references would form a cycle, or a stored graph contains one. `cycle` is included. |
 | 413 | `request_too_large` | The body exceeds 1 MiB. |
 | 415 | `unsupported_media_type` | A request with a body that is not `application/json`. |
@@ -489,6 +524,12 @@ Example `invalid_request` response:
 | `polaroid repository ID` | `GET /v1/repositories/{id}` |
 | `polaroid repository-by-identifier IDENTIFIER` | `GET /v1/repositories/by-identifier/{identifier}` |
 | `polaroid repositories [NAME=VALUE...]` | `GET /v1/repositories[?…]` |
+| `polaroid toil-items [NAME=VALUE...]` | `GET /v1/toil-items[?…]` |
+| `polaroid create-toil-item [FILE]` | `POST /v1/toil-items` |
+| `polaroid get-toil-item ID` | `GET /v1/toil-items/{id}` |
+| `polaroid get-toil-item-by-key KEY` | `GET /v1/toil-items/by-key/{key}` |
+| `polaroid get-toil-revision ID N` | `GET /v1/toil-items/{id}/revisions/{n}` |
+| `polaroid revise-toil-item ID [FILE]` | `POST /v1/toil-items/{id}/revisions` |
 
 `FILE` defaults to stdin, and so does `-`. Trailing `NAME=VALUE` arguments of the list commands become query parameters, for example `polaroid list repository=github.com/ashuangiras/polaroid scope=shared limit=20`. The server is `-server URL`, else `$POLAROID_URL`, else `http://127.0.0.1:7417`.
 
@@ -537,3 +578,9 @@ Changes for [#79](https://github.com/ashuangiras/polaroid/issues/79) ([ADR-0032]
 - New read-only endpoints `GET /v1/procedures/discovery` and `POST /v1/procedures/duplicates`. Procedure IDs are UUIDs, so `GET /v1/procedures/{id}` never meant `discovery` or `duplicates`; `GET /v1/procedures/duplicates` is still `404` as an unknown procedure.
 - #81 replaced the discovery ranking before the endpoints were released: `score` became a non-integer ranking value, and `considered`, `rarity`, `detail_cap`, `detail_points` and `contributions` were added.
 - No record, response field or existing request changes; listing, verification and resolution behave as before.
+
+Changes for [#87](https://github.com/ashuangiras/polaroid/issues/87) ([ADR-0034](decisions/0034-toil-items.md)), additive; migration 9:
+
+- New endpoints under `/v1/toil-items`, the error cases above for them, and `snapshot` on their list. `canonical_key_exists` and `revision_conflict` can now come from toil items too, with the same shape.
+- No existing endpoint, request, response or record changes: procedures, bindings, executions, verification, resolution, discovery and feedback read and behave as before, and toil items never affect them. The message of a `snapshot` refused on another list now names the toil item list among those that offer it.
+- A schema-9 catalog cannot be opened by earlier builds, and their `inspect-backup` and `restore` refuse a schema-9 backup.

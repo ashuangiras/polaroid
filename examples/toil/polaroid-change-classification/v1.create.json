@@ -1,0 +1,134 @@
+{
+  "canonical_key": "polaroid.change-classification.manual",
+  "revision": {
+    "activity": "Classify the files a change touches by hand to decide a verification scope or a conditional reference",
+    "applicability": {
+      "repository": "github.com/ashuangiras/polaroid"
+    },
+    "sources": [
+      {"procedure": "polaroid.change.records", "version": 3, "steps": ["files"]},
+      {"procedure": "polaroid.change.docs", "version": 1, "steps": ["files"]},
+      {"procedure": "polaroid.change.focused", "version": 2, "steps": ["classify"]},
+      {"procedure": "polaroid.operations.change", "version": 1, "steps": ["lifecycle"]},
+      {"procedure": "polaroid.packaging.change", "version": 2, "steps": ["lifecycle"]},
+      {"procedure": "polaroid.record-model.change", "version": 5, "steps": ["lifecycle"]},
+      {"procedure": "polaroid.release.publish", "version": 2, "steps": ["upgrade"]},
+      {"procedure": "dev.change.classify", "version": 1, "steps": ["match", "aggregate", "check"]}
+    ],
+    "observations": [
+      {
+        "execution": {"procedure": "procedure.capability.extract", "version": 1, "repository": "github.com/ashuangiras/polaroid", "commit": "bffb3c407be97e27e156984bdbaa72bd105d9897"},
+        "note": "Provenance: #85's extraction recorded this assessment in its evidence (toil_assessments[0]); that execution is unchanged, and this item promotes the assessment."
+      },
+      {
+        "execution": {"procedure": "polaroid.change.records", "version": 1, "repository": "github.com/ashuangiras/polaroid", "commit": "370f0fc35365094dab1d9d3520d3d2339f86443c"},
+        "note": "#71: the changed files and their classification were written by hand."
+      },
+      {
+        "execution": {"procedure": "polaroid.change.records", "version": 2, "repository": "github.com/ashuangiras/polaroid", "commit": "d7d91a6ceb6ec21bd339bbf8c3a723b77fbd480b"},
+        "note": "#75: four files classified by hand."
+      },
+      {
+        "execution": {"procedure": "polaroid.change.records", "version": 3, "repository": "github.com/ashuangiras/polaroid", "commit": "69a32fda4813c9240a0e652a52a0ce716b9ea706"},
+        "note": "#81: the changed files classified by hand."
+      },
+      {
+        "execution": {"procedure": "polaroid.change.docs", "version": 1, "repository": "github.com/ashuangiras/polaroid", "commit": "b320e7e82d44a04f6adcf8a4f52a47180d5d3206"},
+        "note": "#69: base, files and a reader grep, by hand."
+      },
+      {
+        "execution": {"procedure": "polaroid.record-model.change", "version": 4, "repository": "github.com/ashuangiras/polaroid", "commit": "79baad1c73710bb5964c939df8c770fb6b512589"},
+        "note": "#50: the lifecycle decision rests on a hand-run git diff of 41 files, with the lifecycle paths listed in prose."
+      },
+      {
+        "execution": {"procedure": "polaroid.release.publish", "version": 1, "repository": "github.com/ashuangiras/polaroid", "commit": "58b38814b43eb1a8149e31ba25f283f307537c06"},
+        "note": "The upgrade decision rests on a hand-run diff of 16 files and the prose rule 'no Go file, go.mod, go.sum or migration'."
+      },
+      {
+        "execution": {"procedure": "polaroid.record-model.change", "version": 5, "repository": "github.com/ashuangiras/polaroid", "commit": "96f2290100fbaed7ab4d9cfc8099af9415d8284e"},
+        "note": "#81: the lifecycle decision's file count is wrong (24 for 22), copied from an earlier record; a feedback report on this execution states it. The cause was copying, not classifying."
+      },
+      {
+        "execution": {"procedure": "dev.change.classify", "version": 1, "repository": "github.com/ashuangiras/polaroid", "commit": "d7d91a6ceb6ec21bd339bbf8c3a723b77fbd480b"},
+        "note": "#85: the #75 range classified through a throwaway helper script written for the task."
+      },
+      {
+        "execution": {"procedure": "dev.change.classify", "version": 1, "repository": "github.com/ashuangiras/polaroid", "commit": "4df5a51096fa187e27d0b0682c03bc5efe73c309"},
+        "note": "#85: the #73 range, with the same helper."
+      },
+      {
+        "execution": {"procedure": "dev.change.classify", "version": 1, "repository": "github.com/ashuangiras/polaroid", "commit": "bffb3c407be97e27e156984bdbaa72bd105d9897", "occurrence": 1},
+        "note": "#85: the classify child of polaroid.change.records v4, with the same helper."
+      },
+      {
+        "execution": {"procedure": "dev.change.classify", "version": 1, "repository": "github.com/ashuangiras/polaroid", "commit": "bffb3c407be97e27e156984bdbaa72bd105d9897", "occurrence": 2},
+        "note": "#85: the second task (does the shared service need an upgrade?), with the same helper."
+      }
+    ],
+    "assessment": {
+      "repetition": {
+        "status": "observed",
+        "evidence": "The activity is an instruction in the 7 Polaroid procedure versions cited as sources (and in the task-aware example change.verify.scoped). When #85 assessed it, the catalog held 24 executions of procedures whose instructions require it, 7 of them read in full; dev.change.classify then ran 4 times through a hand-written helper.",
+        "does_not_establish": "That the activity is costly, error-prone, or safe or worthwhile to automate."
+      },
+      "burden": {
+        "status": "hypothesis",
+        "note": "No recorded run measured the time spent classifying; the #62 timing baseline measured gates, not this step.",
+        "would_establish": "Timing hand classification and a tool on the same recorded ranges."
+      },
+      "error_rate": {
+        "status": "hypothesis",
+        "note": "One wrong file count in one decision rationale, caused by copying an earlier record rather than by classifying. The procedures use different bases (merge base, main...HEAD, the previous main, the running build), which is inconsistency, not an observed error.",
+        "would_establish": "Re-classifying the recorded ranges with explicit rules and comparing with the recorded evidence."
+      },
+      "worth": {
+        "status": "unknown",
+        "note": "Nothing recorded bears on whether a tool would repay its maintenance."
+      },
+      "uncertainty": "The 24 executions were counted by procedure, not each read. Whether agents write correct rules for new scopes is unknown. The helper written in #85 shows that the mechanics fit a small script, not that a committed tool is worth maintaining."
+    },
+    "proposal": {
+      "summary": "A committed command that applies dev.change.classify v1 mechanically: resolve the range, list the changes with git, apply ordered glob rules with change filters, aggregate, check determinism, and print the outputs as JSON.",
+      "inputs": {
+        "base": "A commit-ish the caller resolved; the caller keeps the base rule.",
+        "head": "A commit-ish, HEAD by default.",
+        "rules": "A JSON file in dev.change.classify v1's rules shape, written by the caller from the procedure record that owns the rules (for example polaroid.change.records v4's classify mapping)."
+      },
+      "outputs": {
+        "stdout": "dev.change.classify v1's outputs: range, working_tree, files, unmatched, counts, verdict, rationale.",
+        "exit_status": "0 for any verdict (in-scope, review, escalate); 2 for invalid rules or an unknown commit, with nothing on stdout."
+      },
+      "remaining_judgment": [
+        "Writing and changing the rules of a scope: task knowledge that stays in procedure records, never in the tool.",
+        "Choosing the base for the decision at hand (merge base, installed build, previous release).",
+        "The content check of every review file and of claims in documentation.",
+        "Deciding the scope or applicability from the verdict, and whether an unmatched file is a rule gap or a real escalation."
+      ],
+      "failure_and_recovery": [
+        "Glob semantics: shell or fnmatch globs differ from git pathspecs, so a tool that is not git-based misclassifies silently. The known-range tests detect it; fix the tool and rerun.",
+        "Stale base: an origin/main that was not fetched gives the wrong range. The output names both commits for the caller to check; fetch and rerun.",
+        "A tool that is missing or fails in an environment: dev.change.classify's manual steps remain the fallback, and the evidence says which was used.",
+        "A wrong recorded classification cannot be edited: record a new execution and report feedback on the old one.",
+        "Rules embedded in the tool would move task knowledge into code; the acceptance criteria refuse that."
+      ],
+      "acceptance_criteria": [
+        "Given a base, a head and a rules file in dev.change.classify v1's rules shape, the tool prints that version's outputs as JSON, and its file list equals git diff --no-renames --name-only BASE HEAD.",
+        "On the four ranges classified in #85 (the #75 and #73 ranges, and bffb3c4 against main and against the installed build), it reproduces the recorded files, counts and verdicts exactly.",
+        "Tests cover first-match order, change-type filters, unmatched files (escalate), review, a dirty working tree (escalate) and an empty range, each shown to fail on a deliberate violation.",
+        "Invalid rules or an unknown commit exit 2 with an error naming the problem, and print no verdict.",
+        "The tool contains no classification rules; every rule comes from the rules file.",
+        "A dev.change.classify version that names the tool keeps the manual steps as the fallback, and a polaroid.change.records classify child run with and without the tool on one range records identical outputs.",
+        "Any claim that the tool saves time or prevents errors is backed by measurements on recorded ranges; otherwise it stays a hypothesis."
+      ],
+      "replacement_tool": {
+        "form": "A script, for example scripts/classify-changes.sh BASE [HEAD] RULES_FILE, or an equivalent Make target.",
+        "location": "This repository (scripts/), verified through verify-focused or verify-change, with its own tests.",
+        "callers": "A later dev.change.classify version that names it as an optional tool for its match, aggregate and check steps, keeping the manual steps; through it, polaroid.change.records' classify reference and the lifecycle and upgrade decisions once those procedures reference dev.change.classify."
+      }
+    },
+    "status": "candidate",
+    "status_rationale": "The proposal and its acceptance criteria are complete and await the owner's decision whether to file an implementation issue. Repetition is observed, but time cost, error reduction and worth remain hypotheses or unknown, so this status does not claim that automating is worthwhile.",
+    "revision_reason": "#87: promotes the toil assessment that #85 recorded in the evidence of its procedure.capability.extract v1 execution (at bffb3c4), following procedure.capability.extract v2's toil_item contract. The assessment's fields map to the record: source and also_in to sources with their steps, supporting_executions to observations with their notes, observed_burden to assessment claims, and proposed_automation, remaining_judgment, failure_and_recovery, replacement_tool and acceptance_criteria to the proposal. The original execution is unchanged and cited first, as provenance.",
+    "author": "copilot.vscode"
+  }
+}

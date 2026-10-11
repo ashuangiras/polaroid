@@ -59,6 +59,23 @@ For [#65](https://github.com/ashuangiras/polaroid/issues/65) ([ADR-0031](../docs
 
 The executions (the extraction, the capability's independent runs, the revised parent and a second task) and the toil assessment are listed in [status.md](../docs/development/status.md).
 
+[#87](https://github.com/ashuangiras/polaroid/issues/87) makes toil assessments records ([ADR-0034](../docs/architecture/decisions/0034-toil-items.md)). Version 2 of `procedure.capability.extract` explains promotion: its contract's `toil_item` says how an assessment becomes a toil item revision (repetition and burden claims as `observed`, `hypothesis` or `unknown`; `observed` or `candidate`, never `implemented` or `validated` from an assessment alone), and a new step, `toil-items`, looks for an existing item by procedure and repository, revises it or creates one, citing the extraction as provenance, and records the item's key, ID, revision and status in evidence. Where a catalog does not offer toil items yet, the assessment stays in the evidence, as in version 1, and is promoted later.
+
+## Toil items
+
+[toil/polaroid-change-classification/](toil/polaroid-change-classification) is the #85 assessment of hand classification of changed files, promoted to a toil item local to Polaroid: `v1.create.json` is revision 1 (`candidate`: the #85 proposal awaits the owner's decision; burden and error rate stay hypotheses, worth unknown), and `v2.revise.json` adds a later observation of the same activity without changing the status. Neither is `implemented` or `validated`: no replacement exists.
+
+The templates name records portably, never by a catalog's IDs: sources by `{"procedure": KEY, "version": N}`, executions by `{"execution": {"procedure", "version", "repository", "commit"[, "occurrence"]}}` (the *n*th match, oldest first), and the repository by identifier. `scripts/load-toil-example.sh DIR` resolves every name through the API before its first write, creates the item if its key is new, and appends the revisions it lacks; a selector that matches no execution, or several without `occurrence`, stops it. The executions are those of Polaroid's development history, so the example loads only into a catalog that holds them (a restored copy of Polaroid's own catalog), and only with a build that offers toil items:
+
+```sh
+polaroid restore -db /tmp/copy/polaroid.db BACKUP              # a copy, never the live catalog
+bin/polaroidd -addr 127.0.0.1:7579 -db /tmp/copy/polaroid.db &
+POLAROID_URL=http://127.0.0.1:7579 scripts/load-toil-example.sh examples/toil/polaroid-change-classification
+POLAROID_URL=http://127.0.0.1:7579 bin/polaroid toil-items repository=github.com/ashuangiras/polaroid status=candidate
+```
+
+`make demo` step 25 shows the same operations on a scripted item over the development fixtures.
+
 These fixtures name referenced procedures by canonical key instead of ID, so they are loaded with the loader rather than the commands above:
 
 ```sh

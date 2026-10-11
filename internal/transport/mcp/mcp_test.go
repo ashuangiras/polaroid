@@ -166,10 +166,10 @@ func (b *syncBuffer) String() string {
 }
 
 var (
-	readTools = []string{"discover_procedures", "get_binding", "get_binding_revision", "get_execution", "get_feedback", "get_graph", "get_procedure", "get_repository", "get_verification", "get_version",
-		"list_bindings", "list_executions", "list_feedback", "list_procedures", "list_repositories", "list_verifications", "resolve_binding", "suggest_duplicates"}
-	writeTools = []string{"add_repository_alias", "create_binding", "create_procedure", "record_execution", "record_procedure_origin", "register_repository",
-		"report_feedback", "revise_binding", "revise_procedure"}
+	readTools = []string{"discover_procedures", "get_binding", "get_binding_revision", "get_execution", "get_feedback", "get_graph", "get_procedure", "get_repository", "get_toil_item", "get_toil_revision", "get_verification", "get_version",
+		"list_bindings", "list_executions", "list_feedback", "list_procedures", "list_repositories", "list_toil_items", "list_verifications", "resolve_binding", "suggest_duplicates"}
+	writeTools = []string{"add_repository_alias", "create_binding", "create_procedure", "create_toil_item", "record_execution", "record_procedure_origin", "register_repository",
+		"report_feedback", "revise_binding", "revise_procedure", "revise_toil_item"}
 )
 
 func TestToolsAndResourcesAreAdvertised(t *testing.T) {
