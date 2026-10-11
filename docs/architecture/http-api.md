@@ -658,7 +658,7 @@ Example `invalid_request` response:
 | `polaroid revise-toil-item ID [FILE]` | `POST /v1/toil-items/{id}/revisions` |
 | `polaroid statistics` | `GET /v1/statistics` |
 
-`FILE` defaults to stdin, and so does `-`. Trailing `NAME=VALUE` arguments of the list commands become query parameters, for example `polaroid list repository=github.com/ashuangiras/polaroid scope=shared limit=20`. The server is `-server URL`, else `$POLAROID_URL`, else `http://127.0.0.1:7417`.
+`FILE` defaults to stdin, and so does `-`. Trailing `NAME=VALUE` arguments of the list commands become query parameters, for example `polaroid list repository=github.com/ashuangiras/polaroid scope=shared limit=20`. Required arguments are sent as written, whatever they contain: `polaroid discover 'Add max_age=0 expiry tests' repository=github.com/o/r` sends the whole task. After them, an argument with `=` is a parameter; a parameter without a name, or another argument after a parameter, is a usage error (exit 2), and an unknown name is the server's `400`. The server is `-server URL`, else `$POLAROID_URL`, else `http://127.0.0.1:7417`.
 
 ### Local lifecycle commands
 

@@ -281,11 +281,14 @@ func (c *client) path(path string, query url.Values) string {
 	return path + "?" + all.Encode()
 }
 
-// splitQuery separates trailing NAME=VALUE arguments from the others.
-func splitQuery(args []string) ([]string, url.Values, error) {
+// splitQuery separates trailing NAME=VALUE arguments from the others. The
+// first required arguments are positional whatever they contain, so a
+// free-text TASK may include "=".
+func splitQuery(args []string, required int) ([]string, url.Values, error) {
 	query := url.Values{}
-	var rest []string
-	for _, a := range args {
+	n := min(required, len(args))
+	rest := append([]string(nil), args[:n]...)
+	for _, a := range args[n:] {
 		name, value, ok := strings.Cut(a, "=")
 		switch {
 		case !ok:
@@ -360,7 +363,7 @@ func dispatch(server string, timeout time.Duration, name string, args []string, 
 		var query url.Values
 		if queryCommands[name] {
 			var err error
-			if args, query, err = splitQuery(args); err != nil {
+			if args, query, err = splitQuery(args, cmd.min); err != nil {
 				return err
 			}
 		}
