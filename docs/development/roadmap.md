@@ -4,7 +4,7 @@ Increments are ordered. Issue-ready items are filed as [GitHub issues](https://g
 
 > **Work-item authority.** GitHub Issues are the source of truth for scope and acceptance criteria. This roadmap keeps only order and links for filed items, never a second copy. Items not yet issue-ready stay here until they are refined and filed.
 
-Increments 1 to 6, the items from agent feedback, the production-readiness items and #79 are implemented. Nothing in "Later" is.
+Increments 1 to 6, the items from agent feedback, the production-readiness items, #79 and #81 are implemented. Nothing in "Later" is.
 
 ## Increment 1 — Procedure identity and immutable versions (done)
 
@@ -70,12 +70,13 @@ Second-repository adoption trials are paused while the existing features are pre
 
 ## Procedure discovery
 
-1. [#79 Procedure discovery by task and duplicate suggestions (lexical, first increment)](https://github.com/ashuangiras/polaroid/issues/79) — **done** ([ADR-0032](../architecture/decisions/0032-lexical-discovery-and-duplicate-suggestions.md)); not released
+1. [#79 Procedure discovery by task and duplicate suggestions (lexical, first increment)](https://github.com/ashuangiras/polaroid/issues/79) — **done** ([ADR-0032](../architecture/decisions/0032-lexical-discovery-and-duplicate-suggestions.md)); released with #81
+2. [#81 Discovery relevance: rarity, purpose priority and capped instruction matches; release and upgrade; agent guidance](https://github.com/ashuangiras/polaroid/issues/81) — **done** ([ADR-0033](../architecture/decisions/0033-discovery-ranking-rarity-purpose-detail.md))
 
 ## Later (unordered, not yet scoped)
 
 - Onboard a second real repository: register it, bind the shared development procedures with its own commands, and verify one of its commits through them. It can rely on the identity, pagination and discovery contracts of #37.
-- Better discovery beyond the lexical first increment (#79): weighting terms by how rare they are in the catalog, reporting where a candidate is used as a subprocedure, and semantic matching (needs an ADR and likely a dependency).
+- Discovery beyond #81: reporting where a candidate is used as a subprocedure, search terms declared in records, and semantic matching (needs an ADR and likely a dependency).
 - Merging two registered repositories (identity consolidation); aliases exist since #35, but a merge does not.
 - Access control for reads and writes ([ADR-0006](../architecture/decisions/0006-local-unauthenticated-api.md)).
 - **Import from the earlier Python/SQLite PoC — blocked:** no source database or schema is available in this environment. Compatibility is not claimed; scope the importer only once a real database or schema is provided.

@@ -11,6 +11,7 @@ Polaroid is a versioned procedural memory service for agents, written in Go, wit
    - [docs/architecture/overview.md](docs/architecture/overview.md): boundaries and dependency direction.
 3. Identify the work item and its acceptance criteria. Work items are [GitHub issues](https://github.com/ashuangiras/polaroid/issues); [docs/development/roadmap.md](docs/development/roadmap.md) gives their order. If the criteria are missing or ambiguous, settle them before writing code.
 4. Inspect the implementation and its tests before proposing a change. Do not design from the docs alone.
+5. Find the procedure for the work in Polaroid: the bindings of `github.com/ashuangiras/polaroid` cover verification (below); for anything else, describe the task to `discover_procedures` with that repository and read the candidates. Before creating or revising a procedure, follow the `discover` and `bind-or-wrap-or-create` steps of `repo.polaroid.adopt` (latest version), including `suggest_duplicates`. Choosing to reuse, revise or create remains yours.
 
 ## Rules
 

@@ -3,6 +3,7 @@ package http_test
 import (
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
+	"math"
 	"net/http"
 	"net/url"
 	"slices"
@@ -27,13 +28,26 @@ type candidateJSON struct {
 	Goal          string         `json:"goal"`
 	Method        string         `json:"method"`
 	MatchedTerms  int            `json:"matched_terms"`
-	Score         int            `json:"score"`
-	Matches       []matchJSON    `json:"matches"`
+	Score         float64        `json:"score"`
+	DetailPoints  float64        `json:"detail_points"`
+	Contributions []struct {
+		Term   string  `json:"term"`
+		Field  string  `json:"field"`
+		Points float64 `json:"points"`
+	} `json:"contributions"`
+	Matches []matchJSON `json:"matches"`
 }
 
 type discoveryJSON struct {
-	Terms      []string        `json:"terms"`
-	Repository string          `json:"repository"`
+	Terms      []string `json:"terms"`
+	Repository string   `json:"repository"`
+	Considered int      `json:"considered"`
+	Rarity     []struct {
+		Term       string  `json:"term"`
+		Procedures int     `json:"procedures"`
+		Rarity     float64 `json:"rarity"`
+	} `json:"rarity"`
+	DetailCap  float64         `json:"detail_cap"`
 	Matched    int             `json:"matched"`
 	Candidates []candidateJSON `json:"candidates"`
 }
@@ -197,8 +211,28 @@ func TestDiscoveryFindsProceduresForATask(t *testing.T) {
 	top := d.Candidates[0]
 	if top.CanonicalKey != "go.dependency.add" || top.ProcedureID != c.ids["go.dependency.add"] || top.Version != 1 ||
 		top.Scope != "shared" || string(top.Applicability) != `{"shared":{}}` || !strings.HasPrefix(top.Goal, "Add a third-party") ||
-		!strings.HasPrefix(top.Method, "Justify") || top.MatchedTerms != 4 || top.Score != 12 {
+		!strings.HasPrefix(top.Method, "Justify") || top.MatchedTerms != 4 || top.DetailPoints != 0 {
 		t.Fatalf("top candidate %+v; all %v", top, keysOf(d.Candidates))
+	}
+	// The score is the sum of the per-term points, each the term's rarity
+	// times its best field's weight (prose fields longer than average weigh
+	// less); rarity is ln(1 + considered/procedures).
+	sum := 0.0
+	for i, k := range top.Contributions {
+		want := []string{"canonical_key", "canonical_key", "canonical_key", "goal"}[i]
+		limit := 4 * d.Rarity[i].Rarity
+		if k.Field != want || k.Points > limit+0.03 || k.Field == "canonical_key" && math.Abs(k.Points-limit) > 0.03 {
+			t.Fatalf("contribution %d: %+v, rarity %+v", i, k, d.Rarity[i])
+		}
+		sum += k.Points
+	}
+	if math.Abs(sum-top.Score) > 0.02 || d.Considered != 7 {
+		t.Fatalf("score %v, contributions %+v, considered %d", top.Score, top.Contributions, d.Considered)
+	}
+	for _, r := range d.Rarity {
+		if r.Procedures < 1 || math.Abs(r.Rarity-math.Log(1+7/float64(r.Procedures))) > 0.005 {
+			t.Fatalf("rarity %+v", r)
+		}
 	}
 	if got := matchesOf(top); !slices.Equal(got["canonical_key"], []string{"adding", "dependencies", "go"}) ||
 		!slices.Equal(got["goal"], []string{"adding", "dependencies", "go", "module"}) || top.Matches[0].Field != "canonical_key" {
@@ -336,13 +370,12 @@ func TestDiscoveryOrderIsStableAndBounded(t *testing.T) {
 	if d := s.discover(t, "rotate logs"); !slices.Equal(keysOf(d.Candidates), []string{"logs.rotate.archive", "logs.rotate.daily"}) {
 		t.Fatalf("tie order %v", keysOf(d.Candidates))
 	}
-	// Score first: one term in a key and goal (3) outranks two terms found
-	// only in instructions (1 + 1).
+	// A term in a key and goal outranks two terms found only in instructions.
 	s.mustPost(t, "/v1/procedures", proc{Key: "optics.calibrate", Goal: "Calibrate the instrument.", Method: "m", Philosophy: "p"}.body())
 	s.mustPost(t, "/v1/procedures", proc{Key: "observatory.notes", Method: "m", Philosophy: "p",
 		Instructions: map[string]any{"steps": []any{"Clean the telescope and its mirrors."}}}.body())
 	if d := s.discover(t, "calibrate telescope mirrors"); !slices.Equal(keysOf(d.Candidates), []string{"optics.calibrate", "observatory.notes"}) ||
-		d.Candidates[0].Score != 3 || d.Candidates[1].MatchedTerms != 2 {
+		d.Candidates[1].MatchedTerms != 2 || d.Candidates[1].DetailPoints == 0 {
 		t.Fatalf("score order %+v", d.Candidates)
 	}
 

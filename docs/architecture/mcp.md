@@ -21,7 +21,7 @@ Arguments are flat JSON objects, named after the record fields in [records.md](r
 | Tool | Read-only | Arguments | Result |
 | --- | --- | --- | --- |
 | `list_procedures` | yes | `repository`, `scope`, `q`, `limit`, `after` and `snapshot`, all optional | `{"procedures":[…]}`, with `next` when more remain |
-| `discover_procedures` | yes | `task`; `repository` and `limit` optional | [discovery](http-api.md#discover-procedures-for-a-task): ranked candidates with `score`, `matched_terms` and per-field `matches` |
+| `discover_procedures` | yes | `task`; `repository` and `limit` optional | [discovery](http-api.md#discover-procedures-for-a-task): ranked candidates with `score`, `matched_terms`, per-term `contributions` and per-field `matches`, with the corpus `considered`, each term's `rarity` and the `detail_cap` |
 | `suggest_duplicates` | yes | `method`, `philosophy`; `goal`, `canonical_key`, `repository`, `exclude_procedure_id` and `limit` optional | [duplicates](http-api.md#check-a-proposal-for-duplicates): `key_collision` when the key exists, and advisory `suggestions` with `similarity` |
 | `get_procedure` | yes | `id` or `canonical_key` (exactly one) | procedure history |
 | `get_version` | yes | `procedure_id`, `version` | version |

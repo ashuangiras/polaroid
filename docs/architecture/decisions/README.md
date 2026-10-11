@@ -35,6 +35,7 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0029](0029-conditional-references-and-applicability-decisions.md) | Conditional references and recorded applicability decisions | Accepted |
 | [0030](0030-catalog-backup-and-restore.md) | Catalog backup, inspection and restore with the packaged binaries | Accepted |
 | [0031](0031-scoped-verification-and-local-only-ci.md) | Scoped verification procedures, work done once, and local-only hosted CI | Accepted |
-| [0032](0032-lexical-discovery-and-duplicate-suggestions.md) | Lexical procedure discovery by task, and advisory duplicate suggestions | Accepted |
+| [0032](0032-lexical-discovery-and-duplicate-suggestions.md) | Lexical procedure discovery by task, and advisory duplicate suggestions | Accepted; ranking replaced by 0033 |
+| [0033](0033-discovery-ranking-rarity-purpose-detail.md) | Discovery ranks by term rarity, stated purpose and bounded detail | Accepted |
 
 Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.

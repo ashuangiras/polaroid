@@ -274,21 +274,40 @@ func NewProcedureList(procedures []memory.Procedure, next string) ProcedureList 
 	return body
 }
 
-// Discovery is a discovery result (ADR-0032): the task's distinct terms, each
-// as the first word that produced it, how many procedures matched, and the
-// best candidates.
+// Discovery is a discovery result (ADR-0032, ADR-0033): the task's distinct
+// terms, each as the first word that produced it, the candidates its
+// rarities were computed over, the cap on detail points, how many
+// procedures matched, and the best candidates.
 type Discovery struct {
-	Terms      []string    `json:"terms"`
-	Repository string      `json:"repository,omitzero"`
-	Matched    int         `json:"matched"`
-	Candidates []Candidate `json:"candidates"`
+	Terms      []string     `json:"terms"`
+	Repository string       `json:"repository,omitzero"`
+	Considered int          `json:"considered"`
+	Rarity     []TermRarity `json:"rarity"`
+	DetailCap  float64      `json:"detail_cap"`
+	Matched    int          `json:"matched"`
+	Candidates []Candidate  `json:"candidates"`
+}
+
+// TermRarity is how many candidates contain a task term, and its rarity.
+type TermRarity struct {
+	Term       string  `json:"term"`
+	Procedures int     `json:"procedures"`
+	Rarity     float64 `json:"rarity"`
 }
 
 func NewDiscovery(d memory.Discovery) Discovery {
-	body := Discovery{Terms: d.Terms, Repository: d.Repository, Matched: d.Matched, Candidates: make([]Candidate, len(d.Candidates))}
+	body := Discovery{Terms: d.Terms, Repository: d.Repository, Considered: d.Considered, Rarity: make([]TermRarity, len(d.Rarity)),
+		DetailCap: d.DetailCap, Matched: d.Matched, Candidates: make([]Candidate, len(d.Candidates))}
+	for i, r := range d.Rarity {
+		body.Rarity[i] = TermRarity(r)
+	}
 	for i, c := range d.Candidates {
+		contributions := make([]Contribution, len(c.Contributions))
+		for j, k := range c.Contributions {
+			contributions[j] = Contribution(k)
+		}
 		body.Candidates[i] = Candidate{CandidateVersion: newCandidateVersion(c.CandidateVersion),
-			MatchedTerms: c.MatchedTerms, Score: c.Score, Matches: newFieldMatches(c.Matches)}
+			MatchedTerms: c.MatchedTerms, Score: c.Score, DetailPoints: c.DetailPoints, Contributions: contributions, Matches: newFieldMatches(c.Matches)}
 	}
 	return body
 }
@@ -310,12 +329,22 @@ func newCandidateVersion(v memory.CandidateVersion) CandidateVersion {
 		Scope: v.Applicability.Name(), Applicability: NewApplicability(v.Applicability), Goal: v.Goal, Method: v.Method}
 }
 
-// Candidate is a discovered procedure with its score and explanation.
+// Candidate is a discovered procedure with its ranking value and its
+// explanation: the points each matched term added, and where it was found.
 type Candidate struct {
 	CandidateVersion
-	MatchedTerms int          `json:"matched_terms"`
-	Score        int          `json:"score"`
-	Matches      []FieldMatch `json:"matches"`
+	MatchedTerms  int            `json:"matched_terms"`
+	Score         float64        `json:"score"`
+	DetailPoints  float64        `json:"detail_points"`
+	Contributions []Contribution `json:"contributions"`
+	Matches       []FieldMatch   `json:"matches"`
+}
+
+// Contribution is one term's points and the field they came from.
+type Contribution struct {
+	Term   string  `json:"term"`
+	Field  string  `json:"field"`
+	Points float64 `json:"points"`
 }
 
 // FieldMatch names a searched field and the request's terms found in it.

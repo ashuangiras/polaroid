@@ -20,12 +20,17 @@ func TestDiscoveryAndDuplicatesThroughTools(t *testing.T) {
 		`"contract":{},"instructions":{},"references":[{"name":"build","procedure_id":"`+build+`","version_policy":{"contextual":{}},"inputs":{}}],"revision_reason":"r"}`)
 
 	d := h.ok(t, "discover_procedures", `{"task":"building a Go module","limit":1}`)
-	want := `{"terms":["building","go","module"],"matched":2,"candidates":[{"procedure_id":"` + build + `","canonical_key":"go.module.build","version":1,` +
-		`"scope":"shared","applicability":{"shared":{}},"goal":"Build every package of a Go module.","method":"Run the repository's build command from the module root.",` +
-		`"matched_terms":3,"score":9,"matches":[{"field":"canonical_key","terms":["building","go","module"]},{"field":"goal","terms":["building","go","module"]},` +
-		`{"field":"method","terms":["building","module"]},{"field":"philosophy","terms":["building"]},{"field":"instructions","terms":["building"]}]}]}`
-	if d != want {
-		t.Fatalf("discover_procedures =\n%s\nwant\n%s", d, want)
+	for _, want := range []string{`{"terms":["building","go","module"],"considered":2,"rarity":[{"term":"building","procedures":2,`,
+		`"matched":2,"candidates":[{"procedure_id":"` + build + `","canonical_key":"go.module.build","version":1,` +
+			`"scope":"shared","applicability":{"shared":{}},"goal":"Build every package of a Go module.","method":"Run the repository's build command from the module root.",` +
+			`"matched_terms":3,"score":`,
+		`"contributions":[{"term":"building","field":"canonical_key",`,
+		`"matches":[{"field":"canonical_key","terms":["building","go","module"]},{"field":"goal","terms":["building","go","module"]},` +
+			`{"field":"method","terms":["building","module"]},{"field":"philosophy","terms":["building"]},{"field":"instructions","terms":["building"]}]}]}`,
+	} {
+		if !strings.Contains(d, want) {
+			t.Fatalf("discover_procedures =\n%s\nlacks\n%s", d, want)
+		}
 	}
 	if d := h.ok(t, "discover_procedures", `{"task":"publish a prerelease","repository":"github.com/o/b"}`); !strings.Contains(d, `"candidates":[]`) {
 		t.Fatalf("a local procedure of A discovered in B: %s", d)

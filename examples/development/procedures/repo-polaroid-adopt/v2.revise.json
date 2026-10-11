@@ -1,0 +1,84 @@
+{
+  "base_version": 1,
+  "version": {
+    "philosophy": "Task knowledge belongs in Polaroid's procedure records, not in a repository's own files or in one conversation's memory. A fresh agent must be able to rediscover and reuse that knowledge through the service's ordinary interfaces alone -- never by trusting a prior conversation, inventing history, or assuming a procedure written for one repository's conventions transfers unexamined to another's.",
+    "method": "Confirm the service is reachable through ordinary MCP tool discovery, not a diagnostic HTTP fallback. Register the repository under its canonical identifier if it is not registered already. Before writing anything, describe the task in your own words to discover_procedures (with this repository) and read the explained candidates; fetch each plausible one and read its scope, contract and instructions in full, and check its assumptions (commands, tools, artifacts, verification) against this repository's own real conventions rather than assuming they transfer. Bind a shared procedure that fits, with this repository's own inputs; write a new procedure only when no existing contract covers the task, after suggest_duplicates finds no procedure to reuse or revise. Execute with the repository's own real tools, recording every execution bottom-up with the exact commit, environment and evidence, recording failures honestly -- distinguishing an environment blocker from a wrong instruction from a product defect before deciding whether to repair, report or revise. Leave only minimal, durable pointers to the service and this repository's bindings in the repository itself; keep the operational detail in Polaroid.",
+    "goal": "Adopt Polaroid's procedural memory in a repository that has not used it before: connect over ordinary MCP, register the repository, discover and reuse applicable existing procedures before creating new ones, complete one real development task through recorded, versioned executions, and leave only the minimal durable guidance a future agent needs to find this again.",
+    "applicability": {
+      "shared": {}
+    },
+    "contract": {
+      "boundaries": [
+        "Does not design this repository's development task from Polaroid's own development procedures alone; inspects this repository's actual conventions first.",
+        "Does not fork a shared procedure merely to change input values; uses a binding instead.",
+        "Does not revise a shared procedure to fit one repository's local convention; keeps repository-specific knowledge in bindings or a local wrapper procedure.",
+        "Does not treat another commit's, another repository's or another session's evidence as verification of this repository's own target commit.",
+        "Does not fabricate a failure, a revision, or a self-referential execution merely to demonstrate the correction loop."
+      ],
+      "expected_outcome": "The repository is registered in Polaroid; an applicable shared procedure is reused via a repository binding (or a new procedure is created only if none fit); one real development task is completed and verified through recorded executions at an exact commit; the repository carries only minimal durable guidance to find the service and its bindings again; any adoption friction is recorded as feedback.",
+      "inputs": {
+        "polaroid_endpoint": "The MCP endpoint to connect to, for example http://127.0.0.1:7417/mcp.",
+        "repository_identifier": "This repository's canonical identifier: host and path, lowercase, no scheme or .git, from `git remote get-url origin`.",
+        "task_source": "Where the chosen development task's acceptance criteria come from: an existing issue number, or a newly filed one if none fit."
+      },
+      "preconditions": [
+        "An MCP client already configured to reach polaroid_endpoint (for example this workspace's own MCP server list), or documented setup steps to start one if it is unavailable.",
+        "A local checkout of the repository, with its own real build/test/contribution conventions inspected firsthand, not assumed from another repository."
+      ],
+      "verification": [
+        "list_repositories / get_repository shows this repository registered under its canonical identifier.",
+        "resolve_binding or get_graph for the chosen procedure reports target_verification.verified: true at the task's exact commit and inputs, with this run's execution as latest_execution_id.",
+        "A second, later MCP session can rediscover the same repository, binding and procedure versions without reusing this session's own conversation."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "connect",
+          "action": "Confirm the MCP client already lists this service's tools (for example by searching for its tool names) and can call at least one read-only tool successfully. If no MCP connection to polaroid_endpoint exists yet, inspect Polaroid's own current setup documentation and add the smallest working configuration (an existing local daemon's endpoint if one is already running, or a newly started one with its database kept outside disposable build output); never fall back to raw HTTP as a silent substitute for a broken MCP integration -- diagnose it, report it as feedback, and label any HTTP probe as diagnostic only."
+        },
+        {
+          "id": "repository",
+          "action": "Call get_repository with this repository's canonical identifier. If not found, register_repository with that identifier and a display name. Add an alias only when a second identifier demonstrably names the same repository -- never to merge two genuinely different repositories."
+        },
+        {
+          "id": "discover",
+          "action": "Before creating anything: list_bindings for this repository and resolve any binding that may cover the task (resolve_binding with the commit and inputs you will run). Then call discover_procedures with the task in your own words and this repository: it ranks the latest versions of the procedures that apply here by shared words (lexical, not meaning) and explains each candidate per term and field. Treat the ranking as a reading list, not an answer: its score is not a confidence and says nothing about verification, and a fitting procedure may use other words, so also try the task's other likely terms and list_procedures with repository when the candidates look thin. For each plausible candidate, get_procedure (or get_version for the version shown) and read its scope, goal, applicability, contract and instructions in full. A shared or unspecified-scope procedure is a candidate; a procedure local to a different repository is not."
+        },
+        {
+          "id": "assess-fit",
+          "action": "For each candidate that looks relevant, check its assumptions against this repository's own real build/test/contribution conventions, inspected firsthand: does its contract take the repository-specific parts (commands, paths, tool lists) as inputs rather than hard-coding them? If yes, it is reusable through a binding. If its instructions assume a different repository's specific commands, directory layout or tooling outright, it does not fit as-is."
+        },
+        {
+          "id": "bind-or-wrap-or-create",
+          "action": "If an existing shared procedure fits: create_binding in this repository under a clear local name, with this repository's own inputs and a revision_reason explaining the exact values chosen and why, preferring a contextual version policy so future evidence can inform selection. If repository-specific orchestration is needed beyond supplying inputs, create a small local wrapper procedure (applicability: this repository) that references the shared ones, rather than copying their instructions. Before create_procedure or revise_procedure, call suggest_duplicates with the proposed method, philosophy, goal and canonical_key, this repository, and exclude_procedure_id when revising: a key_collision means the key is taken; a suggestion is a procedure whose summary overlaps, to read and to reuse, bind or revise if it fits. The tool only advises; the choice to reuse, revise or create is yours, and you state it with its reason in the execution's evidence. Create an entirely new procedure only when no existing contract covers the task at all, with a real goal, philosophy, method, contract, instructions, applicability and revision_reason, and record_procedure_origin naming this repository and why."
+        },
+        {
+          "id": "execute",
+          "action": "Resolve the binding (or read the procedure directly) for the exact environment, commit and effective inputs you will actually run. Treat any selection_evidence or pre-existing target_verification as context about a candidate or an earlier state, never as verification of your own commit. Run every step with this repository's own real tools -- never another repository's commands merely because a procedure's example used them."
+        },
+        {
+          "id": "record",
+          "action": "Record each execution bottom-up: children, by reference name with the reference's own input mapping applied, before any parent that links them, each with its exact procedure version, this repository's identifier, the full commit SHA, environment (name and attributes, including tool versions actually used), effective inputs, outcome and evidence. Recheck that the commit, working tree and inputs have not changed immediately before recording. A child execution belongs to one parent only."
+        },
+        {
+          "id": "on-failure",
+          "action": "When a step fails, decide what failed before changing anything: wrong or outdated procedure instructions, an environment blocker such as missing or incompatible local tooling, or a genuine defect in the repository's own code. Only wrong instructions justify revise_procedure, with base_version set to the version actually followed, or revise_binding; repair an environment blocker locally and record the failed attempt honestly alongside the repaired, succeeded one; a genuine product defect becomes this repository's own work item, not a Polaroid change. Never edit or delete an earlier record to make it look like the first attempt succeeded."
+        },
+        {
+          "id": "confirm",
+          "action": "After recording, call get_verification on the parent execution and resolve the binding again, or get_graph for an explicitly chosen version, with the same commit and inputs; confirm target_verification.verified is true with this run's execution as latest_execution_id for the root and every child before reporting the task done."
+        },
+        {
+          "id": "leave-guidance",
+          "action": "Add only the minimal durable pointer a future agent needs into the repository itself: the service endpoint, and that a binding or procedure already exists for its development workflow. Keep the full procedural detail in Polaroid, not in the repository."
+        },
+        {
+          "id": "feedback",
+          "action": "Report any confusing error, missing capability, misbehaving tool, or procedure whose instructions do not fit, with report_feedback naming the right subject (service, repository, procedure version, binding revision or execution), as friction is found rather than only at the end."
+        }
+      ]
+    },
+    "revision_reason": "Discovery is a service operation now (#79, #81): the discover step uses discover_procedures and reads it as an explained, lexical reading list beside the repository's bindings and resolution, and the create step checks suggest_duplicates before creating or revising, with the choice and its reason left to the agent. Everything else is version 1 unchanged."
+  }
+}

@@ -1,6 +1,6 @@
 # 0032. Lexical procedure discovery by task, and advisory duplicate suggestions
 
-**Status:** Accepted. Builds on [ADR-0020](0020-procedure-origin-and-applicability.md), [ADR-0021](0021-targeted-feedback-and-bounded-lists.md) and [ADR-0023](0023-pagination-guarantees-and-scope-labels.md).
+**Status:** Accepted. Builds on [ADR-0020](0020-procedure-origin-and-applicability.md), [ADR-0021](0021-targeted-feedback-and-bounded-lists.md) and [ADR-0023](0023-pagination-guarantees-and-scope-labels.md). Its discovery ranking (fixed field weights) was replaced, before release, by [ADR-0033](0033-discovery-ranking-rarity-purpose-detail.md).
 **Date:** 2026-10-11
 
 ## Context
