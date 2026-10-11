@@ -76,11 +76,16 @@ Second-repository adoption trials are paused while the existing features are pre
 ## Capability extraction and toil identification
 
 1. [#85 Capability extraction and toil assessment, first increment](https://github.com/ashuangiras/polaroid/issues/85): **done**, records only. It covers the method (`procedure.capability.extract`), one demonstrated capability (`dev.change.classify`, extracted from `polaroid.change.records` v3 and referenced by its v4) and one toil assessment, kept in the extraction execution's evidence ([status](status.md)). No code, schema or API changed.
-2. [#87 Dedicated toil records](https://github.com/ashuangiras/polaroid/issues/87): **done** ([ADR-0034](../architecture/decisions/0034-toil-items.md)). Toil items with stable identity, append-only revisions and a checked assessment lifecycle (`observed`, `candidate`, `implemented`, `validated`, `retired`), on HTTP, MCP and the CLI, in schema 9. `procedure.capability.extract` v2 promotes assessments into items, and the #85 assessment is a portable example (`examples/toil/`), status `candidate`. Released builds before it do not offer toil items, and the live catalog has none until a release that includes them is installed.
+2. [#87 Dedicated toil records](https://github.com/ashuangiras/polaroid/issues/87): **done** ([ADR-0034](../architecture/decisions/0034-toil-items.md)). Toil items with stable identity, append-only revisions and a checked assessment lifecycle (`observed`, `candidate`, `implemented`, `validated`, `retired`), on HTTP, MCP and the CLI, in schema 9. `procedure.capability.extract` v2 promotes assessments into items, and the #85 assessment is a portable example (`examples/toil/`), status `candidate`. Released builds before it do not offer toil items.
+3. [#89 Release and adopt toil items](https://github.com/ashuangiras/polaroid/issues/89): **done**.
+   - Published as `v0.5.0-verify.1` (tag on `833627e`).
+   - The shared managed instance is upgraded to it, at schema 9.
+   - The #85 assessment is promoted into the live catalog as `polaroid.change-classification.manual`, status `candidate`.
+   - A fresh Copilot session used the toil tools on the live service.
 
 ## Later (unordered, not yet scoped)
 
-- **The #85 assessment's automation (proposed, not filed):** a committed tool that applies `dev.change.classify` rules mechanically. Its inputs, outputs and acceptance criteria are in the extraction execution's evidence and in the `polaroid.change-classification.manual` toil example ([status](status.md)). Filing it as an issue is a decision for the owner.
+- **The #85 assessment's automation (proposed, not filed):** a committed tool that applies `dev.change.classify` rules mechanically. Its inputs, outputs and acceptance criteria are in the live toil item `polaroid.change-classification.manual` (`candidate`; [#89](https://github.com/ashuangiras/polaroid/issues/89)) ([status](status.md)). Filing it as an issue is a decision for the owner.
 
 - Onboard a second real repository: register it, bind the shared development procedures with its own commands, and verify one of its commits through them. It can rely on the identity, pagination and discovery contracts of #37.
 - Discovery beyond #81: reporting where a candidate is used as a subprocedure, search terms declared in records, and semantic matching (needs an ADR and likely a dependency).
