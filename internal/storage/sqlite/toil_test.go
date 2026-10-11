@@ -207,7 +207,7 @@ func TestSchemaEnforcesToilRules(t *testing.T) {
 		"a revision without a source":       {revision("2", "observed", "NULL", "")},
 		"observed to implemented":           {source("2"), revision("2", "implemented", proposal, `replacement_summary, replacement_references='s', '[{"uri":"u"}]'`)},
 		"candidate without a proposal":      {source("2"), revision("2", "candidate", "NULL", "")},
-		"a source of a missing version":     {`INSERT INTO toil_revision_sources (toil_item_id, revision, position, procedure_id, version) VALUES ('toil-1', 2, 0, 'leaf', 2)`, revision("2", "observed", "NULL", "")},
+		"a source of a missing version":     {`INSERT INTO toil_revision_sources (toil_item_id, revision, position, procedure_id, version) VALUES ('toil-1', 2, 0, 'leaf', 3)`, revision("2", "observed", "NULL", "")},
 		"a citation of a missing run":       {source("2"), `INSERT INTO toil_revision_executions (toil_item_id, revision, role, position, execution_id, note) VALUES ('toil-1', 2, 'observation', 0, 'missing', 'n')`, revision("2", "observed", "NULL", "")},
 		"validation evidence, no rationale": {source("2"), validation("2"), revision("2", "retired", "NULL", "")},
 		"a link without its revision":       {source("2")},
