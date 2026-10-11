@@ -49,7 +49,15 @@ func (n NewProcedure) validate() (Definition, error) {
 		checkOrigin(&p, "origin", *n.Origin)
 	}
 	def := checkDefinition(&p, n.Definition)
-	return def, p.err()
+	if err := p.err(); err != nil {
+		return def, err
+	}
+	var s sizes
+	def.measure(&s)
+	if n.Origin != nil {
+		s.text(recOrigin, "origin.reason", n.Origin.Reason)
+	}
+	return def, s.err()
 }
 
 // validate checks r and returns its definition in stored form.
@@ -59,7 +67,12 @@ func (r Revision) validate() (Definition, error) {
 		p.add("base_version", "must be a version number of at least 1")
 	}
 	def := checkDefinition(&p, r.Definition)
-	return def, p.err()
+	if err := p.err(); err != nil {
+		return def, err
+	}
+	var s sizes
+	def.measure(&s)
+	return def, s.err()
 }
 
 func checkDefinition(p *problems, d Definition) Definition {
@@ -176,7 +189,7 @@ func (n NewBinding) validate() (BindingConfig, error) {
 		p.add("procedure_id", "is required")
 	}
 	cfg := checkBindingConfig(&p, n.Config)
-	return cfg, p.err()
+	return cfg, bindingSizes(p, cfg)
 }
 
 // validate checks r and returns its configuration in stored form.
@@ -186,7 +199,17 @@ func (r BindingRevise) validate() (BindingConfig, error) {
 		p.add("base_revision", "must be a revision number of at least 1")
 	}
 	cfg := checkBindingConfig(&p, r.Config)
-	return cfg, p.err()
+	return cfg, bindingSizes(p, cfg)
+}
+
+// bindingSizes returns p's error, else cfg's limit error, if any.
+func bindingSizes(p problems, cfg BindingConfig) error {
+	if err := p.err(); err != nil {
+		return err
+	}
+	var s sizes
+	cfg.measure(&s)
+	return s.err()
 }
 
 func checkBindingConfig(p *problems, c BindingConfig) BindingConfig {

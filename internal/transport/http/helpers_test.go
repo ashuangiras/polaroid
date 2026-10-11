@@ -170,6 +170,7 @@ type errorJSON struct {
 		Version     int    `json:"version"`
 		Reference   string `json:"reference"`
 	} `json:"cycle"`
+	Limits []limitViolationJSON `json:"limits"`
 }
 
 type bindingJSON struct {

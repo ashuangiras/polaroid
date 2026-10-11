@@ -55,6 +55,7 @@ type statisticsJSON struct {
 		DatabaseBytes int64               `json:"database_bytes"`
 		Files         map[string]fileJSON `json:"files"`
 	} `json:"storage"`
+	WriteLimits writeLimitsJSON `json:"write_limits"`
 }
 
 var payloadCategories = []string{"procedure_contracts", "procedure_instructions", "reference_inputs", "binding_revision_inputs",

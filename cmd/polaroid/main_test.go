@@ -480,6 +480,24 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 	}
 }
 
+// TestOversizedWritesExitOne: a value over its write limit (ADR-0037) is a
+// failed request: the API's value_too_large body on stdout, exit 1.
+func TestOversizedWritesExitOne(t *testing.T) {
+	server := newServer(t)
+	mustSucceed(t, cli("", nil, "-server", server, "create", writeFile(t, createJSON)))
+	big := `{"log":"` + strings.Repeat("Q", 70000) + `"}`
+	run := `{"procedure_id":"` + procedureIDOf(t, server) + `","version":1,"repository":"github.com/o/a","commit":"0123456789abcdef0123456789abcdef01234567",` +
+		`"environment":{"name":"ci","attributes":{}},"inputs":{},"outcome":"succeeded","evidence":` + big + `}`
+	r := cli("", nil, "-server", server, "record", writeFile(t, run))
+	if r.code != exitFailure || !strings.Contains(r.stdout, `"code":"value_too_large"`) || !strings.Contains(r.stdout, `"limits":[{"field":"evidence","bytes":70010,"max_bytes":65536}]`) ||
+		!strings.Contains(r.stderr, "413") || !strings.Contains(r.stderr, "value_too_large") || strings.Contains(r.stdout+r.stderr, "QQQQ") {
+		t.Fatalf("exit %d; stdout %.300s; stderr %s", r.code, r.stdout, r.stderr)
+	}
+	if out := cli("", nil, "-server", server, "executions"); !strings.Contains(out.stdout, `"executions":[]`) {
+		t.Fatalf("a refused execution was stored: %s", out.stdout)
+	}
+}
+
 func TestStatisticsCommand(t *testing.T) {
 	server := newServer(t)
 	mustSucceed(t, cli("", nil, "-server", server, "create", writeFile(t, createJSON)))

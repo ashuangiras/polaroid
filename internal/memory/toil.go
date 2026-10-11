@@ -170,7 +170,7 @@ func (n NewToilItem) validate() (ToilContent, error) {
 	if c.Status != "" && c.Status != ToilObserved && c.Status != ToilCandidate {
 		p.add("revision.status", `must be "observed" or "candidate" for revision 1`)
 	}
-	return c, p.err()
+	return c, toilSizes(p, c)
 }
 
 // validate checks r and returns its content in stored form.
@@ -180,7 +180,17 @@ func (r ToilRevise) validate() (ToilContent, error) {
 		p.add("base_revision", "must be a revision number of at least 1")
 	}
 	c := checkToilContent(&p, r.Content)
-	return c, p.err()
+	return c, toilSizes(p, c)
+}
+
+// toilSizes returns p's error, else c's limit error, if any.
+func toilSizes(p problems, c ToilContent) error {
+	if err := p.err(); err != nil {
+		return err
+	}
+	var s sizes
+	c.measure(&s)
+	return s.err()
 }
 
 func checkToilContent(p *problems, c ToilContent) ToilContent {

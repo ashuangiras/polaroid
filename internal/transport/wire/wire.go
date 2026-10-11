@@ -1155,6 +1155,17 @@ type ErrorDetail struct {
 	LatestEvent int `json:"latest_event,omitzero"`
 	// Cycle is the path of a reference_cycle error.
 	Cycle []CycleStep `json:"cycle,omitzero"`
+	// Limits lists the values over their write limits for value_too_large
+	// errors.
+	Limits []LimitViolation `json:"limits,omitzero"`
+}
+
+// LimitViolation is one value over its write limit; field "*" is the whole
+// write.
+type LimitViolation struct {
+	Field    string `json:"field"`
+	Bytes    int    `json:"bytes"`
+	MaxBytes int    `json:"max_bytes"`
 }
 
 type CycleStep struct {
@@ -1192,6 +1203,7 @@ func Classify(err error) (status int, detail ErrorDetail, ok bool) {
 	var limit *memory.GraphLimitError
 	var lifecycleConflict *memory.LifecycleConflictError
 	var retired *memory.RetiredProcedureError
+	var tooLarge *memory.LimitError
 	switch {
 	case errors.As(err, &invalid):
 		detail = ErrorDetail{Code: "invalid_request", Message: invalid.Error()}
@@ -1199,6 +1211,12 @@ func Classify(err error) (status int, detail ErrorDetail, ok bool) {
 			detail.Fields = append(detail.Fields, FieldProblem(p))
 		}
 		return http.StatusBadRequest, detail, true
+	case errors.As(err, &tooLarge):
+		detail = ErrorDetail{Code: "value_too_large", Message: tooLarge.Error()}
+		for _, v := range tooLarge.Violations {
+			detail.Limits = append(detail.Limits, LimitViolation(v))
+		}
+		return http.StatusRequestEntityTooLarge, detail, true
 	case errors.As(err, &retired):
 		detail = ErrorDetail{Code: "procedure_retired", Message: retired.Error()}
 		for _, p := range retired.Fields {

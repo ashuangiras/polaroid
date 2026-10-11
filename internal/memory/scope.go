@@ -100,6 +100,11 @@ func (s *Service) RecordOrigin(ctx context.Context, procedureID string, o Origin
 	if err := p.err(); err != nil {
 		return History{}, err
 	}
+	var sz sizes
+	sz.text(recOrigin, "origin.reason", o.Reason)
+	if err := sz.err(); err != nil {
+		return History{}, err
+	}
 	o.CreatedAt = timestamp()
 	if err := s.store.SetOrigin(ctx, procedureID, o); err != nil {
 		switch {
