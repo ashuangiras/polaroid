@@ -8,9 +8,10 @@
 # manifest's verification.independent_review.status is always "not_reviewed"
 # here: that only changes when someone else performs and records one.
 #
-# An existing OUTDIR/<commit>/ whose manifest names the same targets and
-# build command, and whose checksums still match the files on disk, is
-# reused, not rebuilt.
+# An existing OUTDIR/<commit>/ whose manifest names the same targets, Go
+# toolchain and build command, and whose checksums still match the files on
+# disk, is reused, not rebuilt. Any difference in targets, toolchain, build
+# command or a checksum forces a rebuild.
 #
 # Usage: scripts/build-artifact.sh OUTDIR [TARGET...]   (default: linux/amd64)
 # Optional: LOCAL_GATE="<a reference to the commit's verification evidence>"
@@ -48,6 +49,7 @@ reusable() {
 	have=$(jq -r '.assets[] | .os + "/" + .arch' "$DIR/manifest.json" 2>/dev/null | sort | tr '\n' ' ') || return 1
 	[[ "$want" == "$have" ]] || return 1
 	[[ "$(jq -r '.build.packages' "$DIR/manifest.json" 2>/dev/null)" == "$PACKAGES" ]] || return 1
+	[[ "$(jq -r '.go' "$DIR/manifest.json" 2>/dev/null)" == "$GOVERSION" ]] || return 1
 	local file want_sum got_sum
 	while IFS=$'\t' read -r file want_sum; do
 		[[ -n "$file" ]] || continue

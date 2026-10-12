@@ -20,7 +20,7 @@ ARTIFACT_TARGETS      ?= linux/amd64
 export GO BIN
 
 .DEFAULT_GOAL := help
-.PHONY: help fmt fmt-check vet lint build binaries test race deps-check docs-check records-check loader-check check focused vuln demo run ci e2e e2e-mcp lifecycle artifact clean
+.PHONY: help fmt fmt-check vet lint build binaries test race deps-check docs-check records-check loader-check check focused vuln demo run ci e2e e2e-mcp lifecycle artifact artifact-check clean
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z0-9-]+:.*## / {printf "  %-13s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -74,6 +74,9 @@ vuln: ## Scan for known vulnerabilities (needs network)
 
 artifact: ## Build a lightweight, local, gitignored verification artifact for an exact commit (ADR-0041); never a release
 	@./scripts/build-artifact.sh $(ARTIFACT_OUT) $(ARTIFACT_TARGETS)
+
+artifact-check: ## Targeted test: build-artifact.sh reuses only when targets, toolchain and checksums match, else rebuilds
+	@./scripts/check-artifact.sh
 
 demo: binaries ## Demonstrate storage and versioning against a real daemon
 	./scripts/demo.sh
