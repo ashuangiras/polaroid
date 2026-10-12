@@ -16,6 +16,7 @@ type Statistics struct {
 	Records     RecordCounts
 	Procedures  ProcedureCounts
 	Executions  ExecutionCounts
+	Feedback    FeedbackCounts
 	ToilItems   ToilStatusCounts
 	Payloads    PayloadSizes
 	Storage     StorageStatistics
@@ -40,6 +41,7 @@ type RecordCounts struct {
 	ExecutionDecisions       int64
 	ExecutionInvalidations   int64
 	Feedback                 int64
+	FeedbackResolutions      int64
 	ToilItems                int64
 	ToilRevisions            int64
 	ToilRevisionSources      int64
@@ -67,6 +69,11 @@ type ExecutionCounts struct {
 // ToilStatusCounts counts toil items by the status of their latest revision.
 type ToilStatusCounts struct {
 	Observed, Candidate, Implemented, Validated, Retired int64
+}
+
+// FeedbackCounts counts feedback reports by status (ADR-0040).
+type FeedbackCounts struct {
+	Open, Resolved int64
 }
 
 // PayloadSize summarises the logical sizes of one category of stored JSON

@@ -13,6 +13,7 @@ type Statistics struct {
 	Records           RecordCounts        `json:"records"`
 	Procedures        ProcedureStatistics `json:"procedures"`
 	Executions        ExecutionStatistics `json:"executions"`
+	Feedback          FeedbackStatistics  `json:"feedback"`
 	ToilItems         ToilStatistics      `json:"toil_items"`
 	Payloads          PayloadStatistics   `json:"payloads"`
 	Storage           StorageStatistics   `json:"storage"`
@@ -60,6 +61,7 @@ type RecordCounts struct {
 	ExecutionDecisions       int64 `json:"execution_decisions"`
 	ExecutionInvalidations   int64 `json:"execution_invalidations"`
 	Feedback                 int64 `json:"feedback"`
+	FeedbackResolutions      int64 `json:"feedback_resolutions"`
 	ToilItems                int64 `json:"toil_items"`
 	ToilRevisions            int64 `json:"toil_revisions"`
 	ToilRevisionSources      int64 `json:"toil_revision_sources"`
@@ -105,6 +107,14 @@ type ToilStatistics struct {
 		Implemented int64 `json:"implemented"`
 		Validated   int64 `json:"validated"`
 		Retired     int64 `json:"retired"`
+	} `json:"by_status"`
+}
+
+// FeedbackStatistics counts feedback reports by status (ADR-0040).
+type FeedbackStatistics struct {
+	ByStatus struct {
+		Open     int64 `json:"open"`
+		Resolved int64 `json:"resolved"`
 	} `json:"by_status"`
 }
 
@@ -174,7 +184,7 @@ func NewStatistics(s memory.Statistics) Statistics {
 			Repositories: r.Repositories, RepositoryAliases: r.RepositoryAliases,
 			Bindings: r.Bindings, BindingRevisions: r.BindingRevisions,
 			Executions: r.Executions, ExecutionChildren: r.ExecutionChildren, ExecutionDecisions: r.ExecutionDecisions,
-			ExecutionInvalidations: r.ExecutionInvalidations, Feedback: r.Feedback,
+			ExecutionInvalidations: r.ExecutionInvalidations, Feedback: r.Feedback, FeedbackResolutions: r.FeedbackResolutions,
 			ToilItems: r.ToilItems, ToilRevisions: r.ToilRevisions, ToilRevisionSources: r.ToilRevisionSources,
 			ToilRevisionExecutions: r.ToilRevisionExecutions,
 		},
@@ -210,6 +220,7 @@ func NewStatistics(s memory.Statistics) Statistics {
 	out.ToilItems.ByStatus.Observed, out.ToilItems.ByStatus.Candidate, out.ToilItems.ByStatus.Implemented =
 		t.Observed, t.Candidate, t.Implemented
 	out.ToilItems.ByStatus.Validated, out.ToilItems.ByStatus.Retired = t.Validated, t.Retired
+	out.Feedback.ByStatus.Open, out.Feedback.ByStatus.Resolved = s.Feedback.Open, s.Feedback.Resolved
 	out.Storage.Files.Database = newFileSize(st.Files.Database)
 	out.Storage.Files.WAL = newFileSize(st.Files.WAL)
 	out.Storage.Files.SHM = newFileSize(st.Files.SharedMemory)

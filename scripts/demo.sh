@@ -876,7 +876,7 @@ echo "4. reactivated: the history keeps both events, MCP returns the same docume
 
 step "27. Catalog statistics: one read-only summary of everything above (#96, ADR-0036; scripted regression evidence)"
 stats96="$(bin/polaroid statistics)"
-jq -e '.statistics_version == 1 and .storage.schema_version == 10 and (.procedures.by_lifecycle | add) == .records.procedures
+jq -e '.statistics_version == 1 and .storage.schema_version == 11 and (.procedures.by_lifecycle | add) == .records.procedures
 	and (.executions.by_outcome | add) == .records.executions and .executions.by_evidence_status.invalidated == .records.execution_invalidations
 	and .records.execution_invalidations >= 1 and .executions.valid_with_invalidated_child >= 1 and (.toil_items.by_status | add) == .records.toil_items
 	and .records.procedure_versions > .records.procedures and ([.. | strings | select(contains("/"))] == [])' <<<"$stats96" >/dev/null ||
@@ -890,7 +890,7 @@ echo "the counts add up, match the execution list and the MCP tool, name no path
 
 step "28. Size limits on new writes: an oversized value is refused, nothing is stored (#98, ADR-0037; scripted regression evidence)"
 limits98="$(jq -c '.write_limits' <<<"$stats96")"
-jq -e '.policy_version == 1 and (.fields | length) == 37 and .write_max_bytes == 262144' <<<"$limits98" >/dev/null || fail "unexpected write limits: $limits98"
+jq -e '.policy_version == 1 and (.fields | length) == 40 and .write_max_bytes == 262144' <<<"$limits98" >/dev/null || fail "unexpected write limits: $limits98"
 evidence98="$(jq -r '.fields[] | select(.record == "execution" and .field == "evidence") | .max_bytes' <<<"$limits98")"
 if refused98="$(jq -n --arg p "$lc_child" --arg r "$lc_repo" --arg c "$lc_commit" --argjson n "$evidence98" '{procedure_id: $p, version: 1, repository: $r, commit: $c,
 	environment: {name: "demo.ci", attributes: {}}, inputs: {}, outcome: "succeeded", evidence: {log: ("x" * ($n - 9))}}' | bin/polaroid record 2>/dev/null)"; then
@@ -901,7 +901,25 @@ jq -e --argjson n "$evidence98" '.error.code == "value_too_large" and .error.lim
 [[ "$(bin/polaroid statistics | stats96_counts)" == "$(stats96_counts <<<"$stats96")" ]] || fail "a refused write changed the catalog"
 echo "evidence of $((evidence98 + 1)) bytes is value_too_large (limit $evidence98, from the statistics); the catalog's counts are unchanged"
 
-step "29. Restart polaroidd and confirm every record persisted"
+step "29. Feedback resolution: an append-only record of how a report was handled, and a status filter (#127, ADR-0040; scripted regression evidence)"
+jq -e '.status == "open" and (.resolution // null) == null' <<<"$(bin/polaroid get-feedback "$fb_version")" >/dev/null || fail "the report is not open before resolution"
+fb_resolution="$(jq -n --arg s "$scripted" '{outcome: "addressed", reason: ("Scripted: " + $s), actor: "scripts.demo",
+	references: [{uri: "https://github.com/ashuangiras/polaroid/issues/127"}]}' | bin/polaroid resolve-feedback "$fb_version")"
+jq -e '.outcome == "addressed" and .actor == "scripts.demo" and (.references | length) == 1' <<<"$fb_resolution" >/dev/null || fail "unexpected resolution: $fb_resolution"
+if refused127="$(jq -n '{outcome: "addressed", reason: "again", actor: "scripts.demo"}' | bin/polaroid resolve-feedback "$fb_version" 2>/dev/null)"; then fail "a second resolution was accepted"; fi
+jq -e '.error.code == "feedback_resolved"' <<<"$refused127" >/dev/null || fail "unexpected refusal of a second resolution: $refused127"
+[[ "$(mcp_tool get_feedback "{\"id\":\"$fb_version\"}" | jq -c '{status, resolution}')" == "$(jq -c '{status, resolution}' <<<"$(bin/polaroid get-feedback "$fb_version")")" ]] ||
+	fail "MCP and HTTP feedback resolutions differ"
+open_ids() { bin/polaroid feedbacks status="$1" | jq -c '[.feedback[].id] | sort'; }
+[[ "$(open_ids resolved)" == "[\"$fb_version\"]" ]] || fail "status=resolved does not list it"
+[[ "$(bin/polaroid feedbacks | jq --arg i "$fb_version" 'any(.feedback[]; .id == $i)')" == true ]] || fail "the unfiltered list dropped the resolved report"
+dev_before="$(dev_snapshot)"
+stats96="$(bin/polaroid statistics)"
+jq -e '.feedback.by_status.resolved >= 1 and .records.feedback_resolutions >= 1' <<<"$stats96" >/dev/null || fail "statistics do not count the resolution: $stats96"
+fb_record="$(bin/polaroid get-feedback "$fb_version")"
+echo "$fb_version resolved addressed, citing #127; the unfiltered list is unchanged, status=open excludes it, a second resolution is feedback_resolved"
+
+step "30. Restart polaroidd and confirm every record persisted"
 stop_daemon
 start_daemon
 [[ "$(bin/polaroid get-by-key "$key")" == "$history" ]] || fail "history differs after restart"
@@ -912,11 +930,12 @@ start_daemon
 [[ "$(bin/polaroid get-toil-item "$toil87")" == "$toil_history" ]] || fail "the toil item differs after restart"
 [[ "$(bin/polaroid get-execution-invalidation "$lc_c2")" == "$lc_invalidation" && "$(bin/polaroid get-procedure-lifecycle "$lc_child")" == "$lc_life" ]] ||
 	fail "the invalidation or the lifecycle differs after restart"
-echo "every history, binding, execution, verification, toil item, invalidation and lifecycle is byte-for-byte identical after restart"
+[[ "$(bin/polaroid get-feedback "$fb_version")" == "$fb_record" ]] || fail "the feedback resolution differs after restart"
+echo "every history, binding, execution, verification, toil item, invalidation, lifecycle and feedback resolution is byte-for-byte identical after restart"
 [[ "$(bin/polaroid statistics | stats96_counts)" == "$(stats96_counts <<<"$stats96")" ]] || fail "the statistics differ after restart"
 stop_daemon
 
-step "30. Upgrade a database written at schema version 6 (#35): history reads back, and registration associates it without rewriting it"
+step "31. Upgrade a database written at schema version 6 (#35): history reads back, and registration associates it without rewriting it"
 legacy="$work/schema-6.db"
 for f in internal/storage/sqlite/migrations/000[1-6]_*.sql; do sqlite3 "$legacy" <"$f"; done
 sqlite3 "$legacy" <<'SQL'
@@ -948,7 +967,7 @@ jq -e --arg r "$legacy_repo" '.repository == "example.com/legacy/service" and .r
 jq -e --arg r "$legacy_repo" '.verified and .combination.repository == "example.com/legacy/service-renamed" and .combination.repository_id == $r' <<<"$(bin/polaroid verification legacy-e)" >/dev/null ||
 	fail "the legacy combination is not under the renamed repository's identity (ADR-0022)"
 legacy_run="$(bin/polaroid get-execution legacy-e)"
-jq -e '.storage.schema_version == 10 and .records.procedures == 1 and .records.executions == 1 and .records.feedback == 1
+jq -e '.storage.schema_version == 11 and .records.procedures == 1 and .records.executions == 1 and .records.feedback == 1
 	and .payloads.execution_evidence == {count: 1, total_bytes: 10, mean_bytes: 10, max_bytes: 10}' <<<"$(bin/polaroid statistics)" >/dev/null ||
 	fail "unexpected statistics of the upgraded database: $(bin/polaroid statistics)"
 stop_daemon

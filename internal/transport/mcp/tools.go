@@ -147,7 +147,12 @@ type (
 		SubjectID      string `json:"subject_id,omitzero" jsonschema:"only reports about this record; requires subject_type"`
 		SubjectVersion int    `json:"subject_version,omitzero" jsonschema:"only reports about this procedure version or binding revision; requires subject_id"`
 		Repository     string `json:"repository,omitzero" jsonschema:"only reports made in, or about, this repository (by identity)"`
+		Status         string `json:"status,omitzero" jsonschema:"only reports with this status: open or resolved; omitted lists every report"`
 		pageArgs
+	}
+	resolveFeedbackArgs struct {
+		FeedbackID string `json:"feedback_id"`
+		wire.FeedbackResolutionRequest
 	}
 	createToilItemArgs struct {
 		CanonicalKey string `json:"canonical_key" jsonschema:"a new key in canonical-key form; an existing toil item's key is a canonical_key_exists conflict"`
@@ -384,16 +389,23 @@ func (t *tools) register(s *sdk.Server) {
 			f, err := t.svc.ReportFeedback(ctx, in.Domain())
 			return wire.NewFeedback(f), err
 		})
-	add(s, t, "list_feedback", "List feedback reports, oldest first, optionally by kind, subject and repository.", read,
+	add(s, t, "list_feedback", "List feedback reports, oldest first, optionally by kind, subject, repository and status. Without status, every report is listed, open and resolved alike; status=open answers what is still unresolved.", read,
 		func(ctx context.Context, in listFeedbackArgs) (any, error) {
 			fs, next, err := t.svc.ListFeedback(ctx, memory.FeedbackFilter{Kind: memory.FeedbackKind(in.Kind), SubjectType: memory.SubjectType(in.SubjectType),
-				SubjectID: in.SubjectID, SubjectVersion: in.SubjectVersion, Repository: in.Repository, Page: in.page()})
+				SubjectID: in.SubjectID, SubjectVersion: in.SubjectVersion, Repository: in.Repository, Status: memory.FeedbackStatus(in.Status), Page: in.page()})
 			return wire.NewFeedbackList(fs, next), err
 		})
 	add(s, t, "get_feedback", "Get one feedback report.", read,
 		func(ctx context.Context, in byID) (any, error) {
 			f, err := t.svc.Feedback(ctx, in.ID)
 			return wire.NewFeedback(f), err
+		})
+	add(s, t, "resolve_feedback", "Record how a feedback report was handled, permanently: outcome is addressed, declined, not_reproduced or duplicate. "+
+		"actor names you in canonical-key form, like report_feedback's reporter. references is optional: issue URLs, PRs, commits, or the procedure version or execution that addressed it. "+
+		"The report stays unchanged and readable; a second resolution is feedback_resolved. If the problem comes back, report it again rather than reopening this one.", write,
+		func(ctx context.Context, in resolveFeedbackArgs) (any, error) {
+			r, err := t.svc.ResolveFeedback(ctx, in.FeedbackID, in.Domain())
+			return wire.NewFeedbackResolution(r), err
 		})
 	t.registerToil(s)
 	t.registerLifecycle(s)

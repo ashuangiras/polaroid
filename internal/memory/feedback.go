@@ -92,21 +92,24 @@ type FeedbackRecord struct {
 // Feedback is an immutable report about Polaroid or a record it holds
 // (ADR-0015, ADR-0021).
 type Feedback struct {
-	ID        string
-	CreatedAt time.Time
+	ID         string
+	CreatedAt  time.Time
+	Resolution *FeedbackResolution
 	FeedbackRecord
 }
 
 // FeedbackFilter selects reports (ADR-0021). SubjectType service includes
 // reports without a subject. Repository matches the report's repository,
-// or a repository subject, by identity. Repositories, RepositoryID and After
-// are set by the service for the store.
+// or a repository subject, by identity. Status selects by resolution
+// (ADR-0040): with none given, every report is listed, resolved or not.
+// Repositories, RepositoryID and After are set by the service for the store.
 type FeedbackFilter struct {
 	Kind           FeedbackKind
 	SubjectType    SubjectType
 	SubjectID      string
 	SubjectVersion int
 	Repository     string
+	Status         FeedbackStatus
 	Page           Page
 	Repositories   []string
 	RepositoryID   string
@@ -359,7 +362,12 @@ func (s *Service) ListFeedback(ctx context.Context, f FeedbackFilter) ([]Feedbac
 	if f.Repository != "" {
 		checkRepository(&p, "repository", f.Repository)
 	}
-	g := newPager("feedback", true, f.Page, string(f.Kind), string(f.SubjectType), f.SubjectID, strconv.Itoa(f.SubjectVersion), f.Repository)
+	switch f.Status {
+	case "", FeedbackOpen, FeedbackResolved:
+	default:
+		p.add("status", `must be "open" or "resolved"`)
+	}
+	g := newPager("feedback", true, f.Page, string(f.Kind), string(f.SubjectType), f.SubjectID, strconv.Itoa(f.SubjectVersion), f.Repository, string(f.Status))
 	f.After = g.start(&p)
 	if err := p.err(); err != nil {
 		return nil, "", err

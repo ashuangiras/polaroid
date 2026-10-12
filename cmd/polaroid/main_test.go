@@ -318,6 +318,38 @@ func TestFeedbackCommands(t *testing.T) {
 	if !strings.Contains(page.stdout, f.ID) || !strings.Contains(page.stdout, `"next":"`) {
 		t.Fatalf("feedbacks subject_type=service limit=1 = %s, want the first report and a next cursor", page.stdout)
 	}
+
+	resolveBody := `{"outcome":"addressed","reason":"fixed in a later release","actor":"copilot.cli",` +
+		`"references":[{"uri":"https://github.com/ashuangiras/polaroid/pull/74"}]}`
+	resolved := cli(resolveBody, nil, "-server", server, "resolve-feedback", f.ID)
+	mustSucceed(t, resolved)
+	if !strings.Contains(resolved.stdout, `"outcome":"addressed"`) {
+		t.Fatalf("resolve-feedback: %s", resolved.stdout)
+	}
+	if r := cli("", nil, "-server", server, "resolve-feedback", f.ID, writeFile(t, resolveBody)); r.code != exitFailure || !strings.Contains(r.stderr, "feedback_resolved") {
+		t.Fatalf("second resolve-feedback: exit %d, %s", r.code, r.stderr)
+	}
+	after := cli("", nil, "-server", server, "get-feedback", f.ID)
+	mustSucceed(t, after)
+	if !strings.Contains(after.stdout, `"status":"resolved"`) || !strings.Contains(after.stdout, `"resolution":`) {
+		t.Fatalf("get-feedback after resolution: %s", after.stdout)
+	}
+	open := cli("", nil, "-server", server, "feedbacks", "status=open")
+	mustSucceed(t, open)
+	if strings.Contains(open.stdout, f.ID) {
+		t.Fatalf("feedbacks status=open still lists a resolved report: %s", open.stdout)
+	}
+	unfiltered := cli("", nil, "-server", server, "feedbacks")
+	mustSucceed(t, unfiltered)
+	if !strings.Contains(unfiltered.stdout, f.ID) {
+		t.Fatalf("unfiltered feedbacks drops a resolved report: %s", unfiltered.stdout)
+	}
+	if r := cli("", nil, "-server", server, "resolve-feedback", "0192f7e4-0000-7000-8000-000000000000", writeFile(t, resolveBody)); r.code != exitFailure || !strings.Contains(r.stderr, "not_found") {
+		t.Fatalf("resolve-feedback of an unknown report: exit %d, %s", r.code, r.stderr)
+	}
+	if r := cli("", nil, "-server", server, "resolve-feedback"); r.code != exitUsage {
+		t.Fatalf("resolve-feedback without an ID: exit %d", r.code)
+	}
 }
 
 func TestRepositoryAndDiscoveryCommands(t *testing.T) {

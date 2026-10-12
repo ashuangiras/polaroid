@@ -132,6 +132,18 @@ func writeOfField(t *testing.T, l FieldLimit, n int) error {
 		}
 		_, err := f.validate()
 		return err
+	case recResolution:
+		switch l.Field {
+		case "reason":
+			return measureFeedbackResolution(text, nil)
+		case "references[].uri":
+			return measureFeedbackResolution("r", []ExternalReference{{URI: "u"}, {URI: text}})
+		case "references[].note":
+			return measureFeedbackResolution("r", []ExternalReference{{URI: "u"}, {URI: "u2", Note: text}})
+		default:
+			t.Fatalf("no write sets %s %s", l.Record, l.Field)
+		}
+		return nil
 	case recToil:
 		c := limitToil()
 		switch l.Field {
