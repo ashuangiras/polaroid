@@ -69,6 +69,8 @@ The executions (the extraction, the capability's independent runs, the revised p
 
 Its first use withdrew the promotion-only run `01a12ac5-7fc7`, which had been recorded against `procedure.capability.extract` v2.
 
+[#129](https://github.com/ashuangiras/polaroid/issues/129) adds `go.module.artifact` (shared, [ADR-0041](../docs/architecture/decisions/0041-verification-artifacts.md)): a lightweight, local, gitignored verification artifact for independent review, never a release. `dev.change.verify` v5 references it conditionally, applicable only when the effective inputs name `module_packages`, after every earlier applicable child succeeded; v5 itself omitted `applicability`, reverting it to `unspecified`, a genuine authoring mistake corrected (content unchanged) by v6, which restates it `shared`. Both are kept as fixtures, like `go.module.checks`' stale v1 and its v2 correction. Revision 2 of the `verify-change` binding opts in: `module_packages`, `artifact_targets` (`linux/amd64`) and `artifact_output_dir` (`dist/artifacts`); every other binding, never setting `module_packages`, is unaffected.
+
 ## Toil items
 
 [toil/polaroid-change-classification/](toil/polaroid-change-classification) is the #85 assessment of hand classification of changed files, promoted to a toil item local to Polaroid: `v1.create.json` is revision 1 (`candidate`: the #85 proposal awaits the owner's decision; burden and error rate stay hypotheses, worth unknown), and `v2.revise.json` adds a later observation of the same activity without changing the status. Neither is `implemented` or `validated`: no replacement exists.
