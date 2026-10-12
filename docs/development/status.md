@@ -2,6 +2,16 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
+**Feedback resolution ([#127](https://github.com/ashuangiras/polaroid/issues/127), ADR-0040), PR open, as of 2026-10-12.**
+
+- 2026-10-12 feedback triage filed #122-#126 from the shared catalog's reports; #127 was given priority because closing the others is expected to resolve the reports they came from.
+- [PR #128](https://github.com/ashuangiras/polaroid/pull/128) (branch `127-feedback-resolution`, commit `ca6e104`): migration 11 (`feedback_resolutions`), `POST /v1/feedback/{id}/resolution`, MCP `resolve_feedback`, CLI `resolve-feedback`, `list_feedback`'s `status` filter, `get_catalog_statistics`'s `feedback.by_status`. 39 MCP tools (24 read), 40 write-limit fields, schema 11.
+- Verified `verify-change` at `ca6e104`: `dev.change.verify` v4 execution `01a13088-02d4-7ec0-9777-634417e4746f` (target-verified; children `go.module.build` v2 `01a13087-525a-7516-ad6f-b359fced698a`, `go.module.checks` v4 `01a13087-af99-7e97-a44f-f45cdf7f69c7`). Full gate: `make check`, `make vuln`, `make demo` (adds step 29), `make e2e` (313/0), `make e2e-mcp E2E_INTEROP=0` (129/0).
+- Gotcha found and fixed during the gate: untracked `external-reports/` (never committed, a duplicate of `docs/development/acceptance/`) had broken links and failed `docs-check`, unrelated to #127; the owner approved deleting it.
+- Next action: review and merge PR #128; after the next release and the shared instance's upgrade, resolve the feedback reports #127's issue body lists as `addressed`, then start on #122-#126.
+
+The `v1.0.1` handoff below is unchanged.
+
 **Maintenance release `v1.0.1` in progress ([#120](https://github.com/ashuangiras/polaroid/issues/120)), as of 2026-10-11.**
 
 - **Merged:**
