@@ -15,6 +15,10 @@ CREATE TABLE feedback_resolutions (
                           AND actor NOT GLOB '*[._-]'
                           AND actor NOT GLOB '*[._-][._-]*'),
     references_json TEXT NOT NULL DEFAULT '[]'
+                   -- An element's shape (a uri, an optional note) is
+                   -- Service.ResolveFeedback's contract, not this CHECK's,
+                   -- matching toil_revisions' replacement/validation
+                   -- references (ADR-0040).
                    CHECK (json_valid(references_json) AND json_type(references_json) = 'array'),
     created_at     TEXT NOT NULL
 ) STRICT;

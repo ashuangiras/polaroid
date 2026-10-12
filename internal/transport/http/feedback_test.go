@@ -273,3 +273,41 @@ func TestFeedbackResolutionOverHTTP(t *testing.T) {
 	}
 	expect(t, s.call(t, http.MethodGet, "/v1/feedback?status=closed", ""), http.StatusBadRequest, "invalid_request")
 }
+
+// TestInvalidFeedbackResolutionReferencesAreRejected: a malformed reference
+// is Service.ResolveFeedback's contract to reject (ADR-0040); the schema
+// itself only guards references_json's own shape (TestSchemaGuardsFeedback
+// Resolutions in internal/storage/sqlite covers that boundary).
+func TestInvalidFeedbackResolutionReferencesAreRejected(t *testing.T) {
+	s := newTestServer(t)
+	cases := map[string]struct {
+		references string
+		field      string // "" for a decode-level type mismatch: no field is named
+	}{
+		"missing uri":    {`[{}]`, "references[0].uri"},
+		"blank uri":      {`[{"uri": " "}]`, "references[0].uri"},
+		"multi-line uri": {`[{"uri": "one\ntwo"}]`, "references[0].uri"},
+		"blank note":     {`[{"uri": "u", "note": "\n"}]`, "references[0].note"},
+		"non-string uri": {`[{"uri": 1}]`, ""},
+		"not an array":   {`{}`, ""},
+		"array of nulls": {`[null]`, "references[0].uri"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, fb := s.report(t, nil)
+			body := fmt.Sprintf(`{"outcome": "addressed", "reason": "fixed", "actor": "copilot.vscode", "references": %s}`, tc.references)
+			resp := s.call(t, http.MethodPost, "/v1/feedback/"+fb.ID+"/resolution", body)
+			expect(t, resp, http.StatusBadRequest, "invalid_request")
+			f := fieldsOf(t, resp)
+			switch {
+			case tc.field == "" && len(f) != 0:
+				t.Fatalf("fields = %v, want none; body: %s", f, resp.body)
+			case tc.field != "" && (len(f) != 1 || f[0] != tc.field):
+				t.Fatalf("fields = %v, want [%s]; body: %s", f, tc.field, resp.body)
+			}
+			if got := s.call(t, http.MethodGet, "/v1/feedback/"+fb.ID, ""); decodeStrict[feedbackJSON](t, got.body).Status != "open" {
+				t.Fatalf("a rejected resolution left %s resolved", fb.ID)
+			}
+		})
+	}
+}

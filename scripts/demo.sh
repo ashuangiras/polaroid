@@ -32,7 +32,9 @@
 # Isolated example procedures with a pinned and a contextual reference show
 # evidence invalidation and procedure retirement and reactivation (#91).
 # Finally it restarts the daemon and confirms every record is unchanged, and
-# upgrades a database written at schema version 6.
+# upgrades a database written at schema version 6, then one written at schema
+# version 10, resolving a feedback report that predates feedback_resolutions
+# and confirming the resolution survives a restart (#127 PR #128 review).
 #
 # Usage: scripts/demo.sh   (or `make demo`; needs jq and sqlite3)
 set -euo pipefail
@@ -976,5 +978,31 @@ start_daemon
 stop_daemon
 db=$demo_db
 echo "a schema-6 store upgraded: its procedure, execution, verification and report read back; registering a new identifier with the old one as alias lists the binding and moves its combination to the new identity, without rewriting the execution"
+
+step "32. Upgrade a database written at schema version 10 to 11 (#127 PR #128 review): a feedback report predating feedback_resolutions reads back unchanged, accepts one resolution, and the resolution survives a restart"
+schema10="$work/schema-10.db"
+for f in internal/storage/sqlite/migrations/000[1-9]_*.sql internal/storage/sqlite/migrations/0010_*.sql; do sqlite3 "$schema10" <"$f"; done
+sqlite3 "$schema10" <<'SQL'
+PRAGMA user_version = 10;
+INSERT INTO feedback (id, kind, summary, details, reporter, context, created_at)
+VALUES ('s10-f', 'problem', 'Written before feedback_resolutions existed', 'A report stored at schema version 10.', 'scripts.demo', '{}', '2026-10-01T12:00:00.000000000Z');
+SQL
+demo_db=$db
+db=$schema10
+start_daemon
+s10_report="$(bin/polaroid get-feedback s10-f)"
+jq -e '.status == "open" and (.resolution // null) == null and .summary == "Written before feedback_resolutions existed"' <<<"$s10_report" >/dev/null ||
+	fail "the schema-10 report changed across the upgrade: $s10_report"
+jq -e '.storage.schema_version == 11' <<<"$(bin/polaroid statistics)" >/dev/null || fail "the schema-10 database did not upgrade to schema 11: $(bin/polaroid statistics)"
+s10_resolution="$(jq -n '{outcome: "addressed", reason: "Resolved after the schema-10 to 11 upgrade (#127).", actor: "scripts.demo"}' | bin/polaroid resolve-feedback s10-f)"
+jq -e '.outcome == "addressed" and .actor == "scripts.demo"' <<<"$s10_resolution" >/dev/null || fail "resolving the migrated report failed: $s10_resolution"
+s10_record="$(bin/polaroid get-feedback s10-f)"
+jq -e '.status == "resolved"' <<<"$s10_record" >/dev/null || fail "the migrated report did not record its resolution: $s10_record"
+stop_daemon
+start_daemon
+[[ "$(bin/polaroid get-feedback s10-f)" == "$s10_record" ]] || fail "the migrated report's resolution did not survive a restart"
+stop_daemon
+db=$demo_db
+echo "a schema-10 store upgraded to 11: its feedback report is unchanged, accepts exactly one resolution, and the resolution is byte-for-byte identical after restart"
 
 printf '\ndemo: PASS\n'

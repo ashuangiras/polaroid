@@ -268,6 +268,12 @@ func TestSchemaGuardsFeedbackResolutions(t *testing.T) {
 	}{
 		{"control: a valid resolution", insert(nil), true},
 		{"control: declared references", insert(map[string]string{"feedback_id": "'f3'", "references_json": `'[{"uri":"u"}]'`}), true},
+		// The schema only guards references_json's own shape (a JSON array);
+		// an element's shape is Service.ResolveFeedback's contract, not the
+		// schema's (ADR-0040) -- these malformed elements are accepted here.
+		{"control: a reference missing uri", insert(map[string]string{"feedback_id": "'f3'", "references_json": `'[{}]'`}), true},
+		{"control: a reference with a non-string uri", insert(map[string]string{"feedback_id": "'f3'", "references_json": `'[{"uri":1}]'`}), true},
+		{"control: an array of non-objects", insert(map[string]string{"feedback_id": "'f3'", "references_json": `'[1,2]'`}), true},
 		{"update", `UPDATE feedback_resolutions SET reason = 'changed' WHERE feedback_id = 'f1'`, false},
 		{"delete", `DELETE FROM feedback_resolutions WHERE feedback_id = 'f1'`, false},
 		{"second resolution", insert(map[string]string{"feedback_id": "'f1'"}), false},
