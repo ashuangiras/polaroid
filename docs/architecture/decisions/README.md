@@ -43,5 +43,6 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0037](0037-size-limits-on-new-writes.md) | Size limits on new writes | Accepted |
 | [0038](0038-stable-releases-and-compatibility.md) | Stable releases and the compatibility policy | Accepted |
 | [0039](0039-read-only-snapshot-transactions.md) | Multi-statement reads use read-only snapshot transactions | Accepted |
+| [0041](0041-verification-artifacts.md) | Verification artifacts: a lightweight, local, gitignored build for independent review, never implying a release | Accepted |
 
 Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.

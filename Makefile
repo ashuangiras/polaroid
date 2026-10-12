@@ -13,10 +13,14 @@ GOVULNCHECK_VERSION   := v1.8.0
 E2E_INTEROP           ?= 1
 # Packages for test, race and focused.
 PKGS                  ?= ./...
+# Where `make artifact` writes its verification artifact (ADR-0041), and
+# which OS/ARCH targets it cross-compiles; both gitignored.
+ARTIFACT_OUT          ?= dist/artifacts
+ARTIFACT_TARGETS      ?= linux/amd64
 export GO BIN
 
 .DEFAULT_GOAL := help
-.PHONY: help fmt fmt-check vet lint build binaries test race deps-check docs-check records-check loader-check check focused vuln demo run ci e2e e2e-mcp lifecycle clean
+.PHONY: help fmt fmt-check vet lint build binaries test race deps-check docs-check records-check loader-check check focused vuln demo run ci e2e e2e-mcp lifecycle artifact clean
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z0-9-]+:.*## / {printf "  %-13s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -67,6 +71,9 @@ focused: ## Offline checks with the tests of PKGS only, for a bounded change (PK
 
 vuln: ## Scan for known vulnerabilities (needs network)
 	$(GO) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+
+artifact: ## Build a lightweight, local, gitignored verification artifact for an exact commit (ADR-0041); never a release
+	@./scripts/build-artifact.sh $(ARTIFACT_OUT) $(ARTIFACT_TARGETS)
 
 demo: binaries ## Demonstrate storage and versioning against a real daemon
 	./scripts/demo.sh
