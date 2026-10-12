@@ -39,6 +39,31 @@
         },
         "revision_reason": "#75: pins polaroid.change.focused version 2 (the precise boundary for description wording). Contextual resolution would keep version 1, which has evidence, until version 2 had a run of its own."
       }
+    },
+    {
+      "base_revision": 2,
+      "revision": {
+        "inputs": {
+          "scope": "focused",
+          "build_command": "make build",
+          "artifacts": [
+            "bin/polaroidd",
+            "bin/polaroid"
+          ],
+          "gate_commands": [
+            "make focused PKGS='{packages}'"
+          ],
+          "module_packages": "./cmd/polaroidd ./cmd/polaroid",
+          "artifact_targets": [
+            "linux/amd64"
+          ],
+          "artifact_output_dir": "dist/artifacts"
+        },
+        "version_policy": {
+          "pin": 3
+        },
+        "revision_reason": "#129 (PR #130 review): pins polaroid.change.focused version 3, which maps module_packages through to dev.change.verify v7's artifact reference. A focused code change is still an executable change: module_packages is always set here, so the artifact decision is never a bare not_applicable citing only the absent input."
+      }
     }
   ]
 }
