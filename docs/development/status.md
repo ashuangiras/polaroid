@@ -2,6 +2,14 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
+**Verification artifacts ([#129](https://github.com/ashuangiras/polaroid/issues/129), ADR-0041), PR open, as of 2026-10-12.**
+
+- Kept separate from #127/[PR #128](https://github.com/ashuangiras/polaroid/pull/128) (open, unmerged) as asked, branched from `main`.
+- [PR #130](https://github.com/ashuangiras/polaroid/pull/130) (branch `129-verification-artifact`, commit `d9fbdb1`): `scripts/build-artifact.sh` + `make artifact` (cross-compiled, checksummed, idempotent, gitignored `dist/artifacts/<commit>/`); new shared procedure `go.module.artifact`; `dev.change.verify` v6 (v5 is a kept, honest fixture of an authoring mistake: it omitted `applicability`) adds a conditional `artifact` reference, applicable only when the effective inputs name `module_packages`, running last after `build`/`checks`/`hosted-ci`; `verify-change` binding revision 2 opts in. No other binding sets `module_packages`, so nothing else changes behaviour.
+- Verified `verify-change` at `d9fbdb1`: first run of `dev.change.verify` v6, execution `01a130c8-6d2d-7bb2-8f15-cd4107827f9f` (target-verified; children `go.module.build` v2 `01a130c7-f551-727a-9421-7ff3649f8c64`, `go.module.checks` v4 `01a130c7-f558-7856-b86a-802dd222c7a4`, `go.module.artifact` v1 `01a130c8-2315-7178-9381-861bfaa385c7`, each individually verified). Full gate: `make check`, `make vuln`, `make demo`, `make e2e` (302/0), `make e2e-mcp E2E_INTEROP=0` (129/0).
+- Artifact built from `d9fbdb1`: `dist/artifacts/d9fbdb1f5a5e57dcd4328de96d9978f48e18ad18/` (linux/amd64 only, per the binding's `artifact_targets`); manifest's `verification.independent_review.status` is `not_reviewed` (never set to anything else by the build itself).
+- Next action: review and merge PR #130 (independently of #128/#127); no release follows automatically.
+
 **Maintenance release `v1.0.1` in progress ([#120](https://github.com/ashuangiras/polaroid/issues/120)), as of 2026-10-11.**
 
 - **Merged:**
