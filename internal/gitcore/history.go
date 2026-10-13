@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/storer"
 )
 
 // Action is how a path changed between two snapshots.
@@ -52,27 +53,36 @@ func (r *Repository) History(ctx context.Context, from Snapshot, limit int) ([]C
 		if err != nil {
 			return nil, fmt.Errorf("%w: commit %s: %w", ErrCorrupt, h, err)
 		}
-		subject, body, trailers := parseMessage(c.Message)
-		e := Commit{Snapshot: Snapshot(c.Hash.String()), Author: c.Author.Name, When: c.Author.When, Subject: subject, Body: body, Trailers: trailers}
-		for _, p := range c.ParentHashes {
-			e.Parents = append(e.Parents, Snapshot(p.String()))
-		}
-		var parent *object.Commit
-		if len(c.ParentHashes) > 0 {
-			if parent, err = object.GetCommit(r.st, c.ParentHashes[0]); err != nil {
-				return nil, fmt.Errorf("%w: commit %s: %w", ErrCorrupt, c.ParentHashes[0], err)
-			}
-		}
-		if e.Changed, err = diffCommits(ctx, parent, c); err != nil {
+		e, err := r.describe(ctx, r.st, c)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, e)
 		h = plumbing.ZeroHash
-		if parent != nil {
-			h = parent.Hash
+		if len(c.ParentHashes) > 0 {
+			h = c.ParentHashes[0]
 		}
 	}
 	return out, nil
+}
+
+// describe reports one commit with what changed against its first parent.
+func (r *Repository) describe(ctx context.Context, st storer.EncodedObjectStorer, c *object.Commit) (Commit, error) {
+	subject, body, trailers := parseMessage(c.Message)
+	e := Commit{Snapshot: Snapshot(c.Hash.String()), Author: c.Author.Name, When: c.Author.When, Subject: subject, Body: body, Trailers: trailers}
+	for _, p := range c.ParentHashes {
+		e.Parents = append(e.Parents, Snapshot(p.String()))
+	}
+	var parent *object.Commit
+	if len(c.ParentHashes) > 0 {
+		var err error
+		if parent, err = object.GetCommit(st, c.ParentHashes[0]); err != nil {
+			return e, fmt.Errorf("%w: commit %s: %w", ErrCorrupt, c.ParentHashes[0], err)
+		}
+	}
+	var err error
+	e.Changed, err = diffCommits(ctx, parent, c)
+	return e, err
 }
 
 // Diff lists the paths that differ between two published snapshots.

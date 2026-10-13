@@ -51,3 +51,10 @@ func (l *lockedStorage) EncodedObjectSize(h plumbing.Hash) (int64, error) {
 func (l *lockedStorage) SetEncodedObject(plumbing.EncodedObject) (plumbing.Hash, error) {
 	return plumbing.ZeroHash, errors.New("gitcore: objects are written only through Publish")
 }
+
+// reindex makes packs that were just moved into the store visible.
+func (l *lockedStorage) reindex() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.Reindex()
+}

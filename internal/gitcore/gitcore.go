@@ -136,44 +136,64 @@ func Open(dir string, opt Options) (*Repository, error) {
 func (r *Repository) Close() error { return r.st.Close() }
 
 // Active returns the active snapshot, "" when nothing is published.
-func (r *Repository) Active(context.Context) (Snapshot, error) {
-	b, err := os.ReadFile(filepath.Join(r.dir, filepath.FromSlash(activeRef))) //nolint:gosec // inside the repository directory
+func (r *Repository) Active(context.Context) (Snapshot, error) { return r.readRef(activeRef) }
+
+// readRef returns the snapshot a ref names, "" when the ref does not exist.
+func (r *Repository) readRef(name string) (Snapshot, error) {
+	b, err := os.ReadFile(filepath.Join(r.dir, filepath.FromSlash(name))) //nolint:gosec // a ref inside the repository directory
 	if errors.Is(err, fs.ErrNotExist) {
-		return r.packedActive()
+		refs, err := r.packedRefs()
+		if err != nil || refs[name] == "" {
+			return "", err
+		}
+		return parseRef(name, refs[name])
 	}
 	if err != nil {
 		return "", err
 	}
-	return parseRef(string(b))
+	return parseRef(name, string(b))
 }
 
-func parseRef(s string) (Snapshot, error) {
+func parseRef(name, s string) (Snapshot, error) {
 	v := Snapshot(strings.TrimSpace(s))
 	if !v.valid() {
 		if len(v) > 64 {
 			v = v[:64]
 		}
-		return "", fmt.Errorf("%w: the active ref holds %q", ErrCorrupt, v)
+		return "", fmt.Errorf("%w: %s holds %q", ErrCorrupt, name, v)
 	}
 	return v, nil
 }
 
-// packedActive reads the active ref from packed-refs, where standard Git
-// tools (clone --mirror, pack-refs, gc) may have moved it.
-func (r *Repository) packedActive() (Snapshot, error) {
+// packedRefs reads packed-refs (name to raw value), where standard Git tools
+// (clone --mirror, pack-refs, gc) may have moved refs.
+func (r *Repository) packedRefs() (map[string]string, error) {
 	b, err := os.ReadFile(filepath.Join(r.dir, "packed-refs")) //nolint:gosec // inside the repository directory
 	if errors.Is(err, fs.ErrNotExist) {
-		return "", nil
+		return nil, nil
 	}
 	if err != nil {
-		return "", err
+		return nil, err
 	}
+	refs := map[string]string{}
 	for _, line := range strings.Split(string(b), "\n") {
-		if h, name, ok := strings.Cut(line, " "); ok && name == activeRef {
-			return parseRef(h)
+		if h, name, ok := strings.Cut(line, " "); ok && !strings.HasPrefix(line, "#") && !strings.HasPrefix(line, "^") {
+			refs[name] = h
 		}
 	}
-	return "", nil
+	return refs, nil
+}
+
+// writeRef replaces a ref atomically and durably.
+func (r *Repository) writeRef(name string, s Snapshot) error {
+	path := filepath.Join(r.dir, filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil { //nolint:gosec // a ref directory of the repository
+		return err
+	}
+	if err := r.replaceFile(path, []byte(string(s)+"\n"), 0o600, "ref-temp"); err != nil {
+		return err
+	}
+	return syncDir(filepath.Dir(path))
 }
 
 // Tree is the read view of one snapshot. Every read through it sees that
@@ -183,6 +203,7 @@ type Tree struct {
 	snap    Snapshot
 	ix      *index
 	pending map[plumbing.Hash][]byte // content not yet stored (a proposed tree)
+	cand    *Candidate               // content still in a candidate's quarantine
 }
 
 type index struct {
@@ -222,6 +243,9 @@ func (t *Tree) Read(path string) ([]byte, error) {
 	}
 	if b, ok := t.pending[h]; ok {
 		return slices.Clone(b), nil
+	}
+	if t.cand != nil {
+		return t.cand.readBlob(h)
 	}
 	return t.r.readBlob(h)
 }

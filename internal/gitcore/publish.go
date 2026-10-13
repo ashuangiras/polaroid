@@ -414,16 +414,7 @@ func (r *Repository) replaceFile(path string, data []byte, perm os.FileMode, sta
 }
 
 // setActive replaces the active ref atomically and durably.
-func (r *Repository) setActive(s Snapshot) error {
-	path := filepath.Join(r.dir, filepath.FromSlash(activeRef))
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil { //nolint:gosec // refs/heads of the repository
-		return err
-	}
-	if err := r.replaceFile(path, []byte(string(s)+"\n"), 0o600, "ref-temp"); err != nil {
-		return err
-	}
-	return syncDir(filepath.Dir(path))
-}
+func (r *Repository) setActive(s Snapshot) error { return r.writeRef(activeRef, s) }
 
 // appendReflog records the move in Git's reflog format, for audit and as
 // the source of Recover.
