@@ -10,5 +10,22 @@
     },
     "version_policy": { "contextual": {} },
     "revision_reason": "Polaroid verifies its changes with the shared procedure. The gate is what CI runs (make ci), one command at a time for per-command evidence."
-  }
+  },
+  "later_revisions": [
+    {
+      "base_revision": 1,
+      "revision": {
+        "inputs": {
+          "build_command": "make build",
+          "artifacts": ["bin/polaroidd", "bin/polaroid"],
+          "gate_commands": ["make check", "make vuln", "make demo", "make e2e", "make e2e-mcp E2E_INTEROP=0"],
+          "module_packages": "./cmd/polaroidd ./cmd/polaroid",
+          "artifact_targets": ["linux/amd64"],
+          "artifact_output_dir": "dist/artifacts"
+        },
+        "version_policy": { "contextual": {} },
+        "revision_reason": "#129 (ADR-0041): opt in to dev.change.verify v6's conditional artifact reference, so completing a verified change also builds a lightweight, local, gitignored Linux AMD64 verification artifact (scripts/build-artifact.sh, go.module.artifact) for independent review. Not a release: gate_commands, build_command and artifacts are unchanged from revision 1."
+      }
+    }
+  ]
 }
