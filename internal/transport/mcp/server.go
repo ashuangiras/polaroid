@@ -40,11 +40,22 @@ const instructions = `Polaroid stores procedures: versioned, shared instructions
 8. History is never rewritten. An execution recorded wrongly (it did not do what its version claims) is withdrawn as evidence with invalidate_execution and a precise reason: it stays readable with evidence_status invalidated, never supports selection or verification again, and its parents are unverified (child_invalidated); record a new genuine run to replace it. A procedure that should no longer be used is retired with retire_procedure (base_event from get_procedure_lifecycle): discovery and list_procedures hide it unless lifecycle is retired or all, new versions of it, new bindings and binding revisions of it and new references to it are refused, and graph nodes of it carry retirement while keeping their evidence. reactivate_procedure reverses it.
 Lists take limit and return next to continue after, with the same other arguments; list_procedures, list_bindings and list_toil_items also take snapshot to page a fixed snapshot. Tool errors carry an error object with a stable code (invalid_request, not_found, version_conflict, ...).`
 
-// NewHandler returns the MCP endpoint over svc. It applies the same
-// cross-origin protection as the HTTP API; wrap it with a loopback-host
-// check when listening on loopback.
+// NewHandler returns the full MCP endpoint over svc: every operation of the
+// HTTP API as a tool, and the resources. It applies the same cross-origin
+// protection as the HTTP API; wrap it with a loopback-host check when
+// listening on loopback.
 func NewHandler(svc *memory.Service, logger *slog.Logger) http.Handler {
-	server := newServer(svc, logger)
+	return handler(newServer(svc, logger), logger)
+}
+
+// NewAgentHandler returns the agent-mode MCP endpoint over svc (ADR-0043):
+// only the few tools everyday procedural-knowledge use needs, so a client
+// that connects to it never loads the full API's schemas.
+func NewAgentHandler(svc *memory.Service, logger *slog.Logger) http.Handler {
+	return handler(newAgentServer(svc, logger), logger)
+}
+
+func handler(server *sdk.Server, logger *slog.Logger) http.Handler {
 	h := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, &sdk.StreamableHTTPOptions{
 		Stateless:           true,
 		JSONResponse:        true,
@@ -55,7 +66,15 @@ func NewHandler(svc *memory.Service, logger *slog.Logger) http.Handler {
 }
 
 func newServer(svc *memory.Service, logger *slog.Logger) *sdk.Server {
-	s := sdk.NewServer(&sdk.Implementation{Name: "polaroid", Title: "Polaroid procedural memory", Version: "v1"}, &sdk.ServerOptions{
+	s := baseServer(instructions, logger)
+	t := &tools{svc: svc, logger: logger}
+	t.register(s)
+	t.registerResources(s)
+	return s
+}
+
+func baseServer(instructions string, logger *slog.Logger) *sdk.Server {
+	return sdk.NewServer(&sdk.Implementation{Name: "polaroid", Title: "Polaroid procedural memory", Version: "v1"}, &sdk.ServerOptions{
 		Instructions:              instructions,
 		Logger:                    logger,
 		Capabilities:              &sdk.ServerCapabilities{},
@@ -64,10 +83,6 @@ func newServer(svc *memory.Service, logger *slog.Logger) *sdk.Server {
 		// never serve a cached discover, list or read result (SEP-2549).
 		SetCacheable: func(_ context.Context, _ sdk.Request, c *sdk.Cacheable) { c.TTLMs = 0 },
 	})
-	t := &tools{svc: svc, logger: logger}
-	t.register(s)
-	t.registerResources(s)
-	return s
 }
 
 type tools struct {
