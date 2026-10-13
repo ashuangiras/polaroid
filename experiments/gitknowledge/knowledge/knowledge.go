@@ -89,8 +89,8 @@ type Store interface {
 var (
 	ErrNotFound = errors.New("not found")
 	// ErrConflict: the expected snapshot is no longer active.
-	ErrConflict    = errors.New("stale snapshot: active knowledge has changed")
-	ErrInvalid     = errors.New("invalid knowledge")
+	ErrConflict     = errors.New("stale snapshot: active knowledge has changed")
+	ErrInvalid      = errors.New("invalid knowledge")
 	ErrNonCanonical = errors.New("document is not in canonical form")
 )
 

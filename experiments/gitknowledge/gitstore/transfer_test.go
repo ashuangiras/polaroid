@@ -176,7 +176,9 @@ func evil(t *testing.T, dir, parent string, files map[string]file) string {
 		t.Fatal(err)
 	}
 	st := repo.Storer
-	put := func(o interface{ Encode(plumbing.EncodedObject) error }) plumbing.Hash {
+	put := func(o interface {
+		Encode(plumbing.EncodedObject) error
+	}) plumbing.Hash {
 		obj := st.NewEncodedObject()
 		if err := o.Encode(obj); err != nil {
 			t.Fatal(err)

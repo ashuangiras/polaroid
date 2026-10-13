@@ -54,6 +54,7 @@ func Run(t *testing.T, open Opener) {
 	t.Run("workflow", func(t *testing.T) { workflow(t, open) })
 	t.Run("concurrent", func(t *testing.T) { concurrent(t, open, false) })
 	t.Run("two handles", func(t *testing.T) { concurrent(t, open, true) })
+	t.Run("reads during publish", func(t *testing.T) { readsDuringPublish(t, open) })
 	t.Run("invalid", func(t *testing.T) { invalid(t, open) })
 }
 
@@ -214,6 +215,69 @@ func concurrent(t *testing.T, open Opener, twoHandles bool) {
 	}
 	if h := history(t, s); len(h) != 2 {
 		t.Fatalf("history = %q", h)
+	}
+}
+
+// readsDuringPublish: readers of the first snapshot and of active knowledge
+// run while another handle publishes; the old snapshot never changes and
+// every read is of some complete snapshot.
+func readsDuringPublish(t *testing.T, open Opener) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	w := open(t, dir)
+	defer w.Close()
+	r := open(t, dir)
+	defer r.Close()
+	s1, err := w.Publish(ctx, "", Initial(), note("initial"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := knowledge.Resolve(ctx, r, "go.module.verify", s1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	errs := make(chan error, 4)
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-done:
+					return
+				default:
+				}
+				got, err := knowledge.Resolve(ctx, r, "go.module.verify", s1)
+				if err == nil && describe(got) != describe(want) {
+					err = fmt.Errorf("old snapshot changed: %s", describe(got))
+				}
+				if err == nil {
+					var kn knowledge.Knowledge
+					if kn, err = r.ReadActive(ctx, "go.module.checks"); err == nil {
+						_, err = knowledge.Resolve(ctx, r, "go.module.verify", kn.Snapshot)
+					}
+				}
+				if err != nil {
+					errs <- err
+					return
+				}
+			}
+		}()
+	}
+	head := s1
+	for i := range 20 {
+		p := Proc("go.module.checks", fmt.Sprintf("Checks, revision %d", i), []string{"gate_commands", "module"}, guide)
+		if head, err = w.Publish(ctx, head, []knowledge.Change{{Key: "go.module.checks", Procedure: p}}, note("rev")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(done)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
 	}
 }
 

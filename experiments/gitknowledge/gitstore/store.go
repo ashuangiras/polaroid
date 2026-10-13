@@ -23,8 +23,10 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/cache"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
+	"github.com/go-git/go-git/v5/plumbing/format/packfile"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/storage/filesystem"
+	"github.com/go-git/go-git/v5/storage/memory"
 
 	"github.com/ashuangiras/polaroid/experiments/gitknowledge/knowledge"
 )
@@ -37,15 +39,17 @@ const (
 var hexPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 type Store struct {
-	dir   string
-	st    *filesystem.Storage
-	repo  *git.Repository
-	pol   knowledge.Policy
-	trust map[string]bool
-	cache *knowledge.Cache
+	dir    string
+	st     *lockedStorage
+	repo   *git.Repository
+	pol    knowledge.Policy
+	trust  map[string]bool
+	cache  *knowledge.Cache
+	noSync bool
+	packed bool
 
-	wmu       sync.Mutex // one in-process writer; flock covers other processes
-	mu        sync.Mutex // guards the caches below
+	wmu       sync.Mutex                   // one in-process writer; flock covers other processes
+	mu        sync.Mutex                   // guards the caches below
 	manif     map[string]map[string]string // snapshot -> key -> blob hash
 	reachable map[string]bool              // snapshots at or below active
 }
@@ -53,13 +57,18 @@ type Store struct {
 type Options struct {
 	Policy         knowledge.Policy
 	TrustedRemotes []string // remote names whose knowledge may be accepted
+	// UnsafeNoSync skips every fsync. Only for measuring what durability costs.
+	UnsafeNoSync bool
+	// PackPerPublish writes each publication as one packfile instead of
+	// loose objects: two files to write and fsync instead of one per object.
+	PackPerPublish bool
 }
 
 func Open(dir string, opt Options) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	st := filesystem.NewStorageWithOptions(osfs.New(dir), cache.NewObjectLRU(32<<20), filesystem.Options{})
+	st := &lockedStorage{Storage: filesystem.NewStorageWithOptions(osfs.New(dir), cache.NewObjectLRU(32<<20), filesystem.Options{KeepDescriptors: opt.PackPerPublish})}
 	repo, err := git.Open(st, nil)
 	if errors.Is(err, git.ErrRepositoryNotExists) {
 		if repo, err = git.Init(st, nil); err == nil {
@@ -69,7 +78,7 @@ func Open(dir string, opt Options) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{dir: dir, st: st, repo: repo, pol: opt.Policy, trust: map[string]bool{}, cache: knowledge.NewCache(1 << 16),
+	s := &Store{dir: dir, st: st, repo: repo, pol: opt.Policy, trust: map[string]bool{}, cache: knowledge.NewCache(1 << 16), noSync: opt.UnsafeNoSync, packed: opt.PackPerPublish,
 		manif: map[string]map[string]string{}, reachable: map[string]bool{}}
 	for _, r := range opt.TrustedRemotes {
 		s.trust[r] = true
@@ -171,13 +180,18 @@ func (s *Store) markReachable(from string) error {
 		if seen {
 			continue
 		}
-		c, err := object.GetCommit(s.st, h)
+		c, err := s.commitObject(h)
 		if err != nil {
 			return err
 		}
 		todo = append(todo, c.ParentHashes...)
 	}
 	return nil
+}
+
+// commitObject reads a commit through the locked storage.
+func (s *Store) commitObject(h plumbing.Hash) (*object.Commit, error) {
+	return object.GetCommit(s.st, h)
 }
 
 func (s *Store) blob(h string) (knowledge.Cached, error) {
@@ -222,7 +236,7 @@ func (s *Store) manifest(snapshot string) (map[string]string, error) {
 	if !hexPattern.MatchString(snapshot) {
 		return nil, fmt.Errorf("snapshot %q: %w", snapshot, knowledge.ErrNotFound)
 	}
-	c, err := object.GetCommit(s.st, plumbing.NewHash(snapshot))
+	c, err := s.commitObject(plumbing.NewHash(snapshot))
 	if errors.Is(err, plumbing.ErrObjectNotFound) {
 		return nil, fmt.Errorf("snapshot %s: %w", snapshot, knowledge.ErrNotFound)
 	}
@@ -343,7 +357,7 @@ func (s *Store) commit(ctx context.Context, expected, other string, changes []kn
 		if base, err = s.manifest(head); err != nil {
 			return "", err
 		}
-		c, err := object.GetCommit(s.st, plumbing.NewHash(head))
+		c, err := s.commitObject(plumbing.NewHash(head))
 		if err != nil {
 			return "", err
 		}
@@ -360,7 +374,10 @@ func (s *Store) commit(ctx context.Context, expected, other string, changes []kn
 		return "", err
 	}
 
-	w := &writer{st: s.st}
+	w := &writer{st: s.st, noSync: s.noSync}
+	if s.packed {
+		w.mem = memory.NewStorage()
+	}
 	edits := map[string]*plumbing.Hash{}
 	for i, c := range changes {
 		if c.Procedure == nil {
@@ -388,7 +405,7 @@ func (s *Store) commit(ctx context.Context, expected, other string, changes []kn
 	if err != nil {
 		return "", err
 	}
-	if err := w.sync(s.dir); err != nil {
+	if err := w.finish(s.dir); err != nil {
 		return "", err
 	}
 	if err := s.writeRef(activeRef, commit.String()); err != nil {
@@ -396,6 +413,23 @@ func (s *Store) commit(ctx context.Context, expected, other string, changes []kn
 	}
 	s.mu.Lock()
 	s.reachable[commit.String()] = true
+	// The new snapshot's index is the base index with the changes applied:
+	// no tree walk, which costs a file open per loose tree object in go-git.
+	next := make(map[string]string, len(base)+len(edits))
+	for k, h := range base {
+		next[k] = h
+	}
+	for _, c := range changes {
+		if h := edits[keyPath(c.Key)]; h != nil {
+			next[c.Key] = h.String()
+		} else {
+			delete(next, c.Key)
+		}
+	}
+	if len(s.manif) > 8 {
+		clear(s.manif)
+	}
+	s.manif[commit.String()] = next
 	s.mu.Unlock()
 	if other != "" {
 		if err := s.markReachable(other); err != nil {
@@ -436,7 +470,7 @@ func (s *Store) writeRef(name, hash string) error {
 		return err
 	}
 	defer os.Remove(tmp.Name())
-	if _, err := tmp.WriteString(hash + "\n"); err == nil {
+	if _, err := tmp.WriteString(hash + "\n"); err == nil && !s.noSync {
 		err = tmp.Sync()
 	}
 	if cerr := tmp.Close(); err == nil {
@@ -447,6 +481,9 @@ func (s *Store) writeRef(name, hash string) error {
 	}
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		return err
+	}
+	if s.noSync {
+		return nil
 	}
 	return syncDir(filepath.Dir(path))
 }
@@ -464,8 +501,10 @@ func syncDir(dir string) error {
 // the ref that makes them reachable moves: go-git writes loose objects by
 // temp file and rename, without fsync.
 type writer struct {
-	st      *filesystem.Storage
+	st      *lockedStorage
+	mem     *memory.Storage // pack mode: objects wait here for one pack
 	written []plumbing.Hash
+	noSync  bool
 }
 
 type encoder interface {
@@ -481,6 +520,13 @@ func (w *writer) put(o encoder) (plumbing.Hash, error) {
 }
 
 func (w *writer) store(obj plumbing.EncodedObject) (plumbing.Hash, error) {
+	if w.mem != nil {
+		h, err := w.mem.SetEncodedObject(obj)
+		if err == nil {
+			w.written = append(w.written, h)
+		}
+		return h, err
+	}
 	if w.st.HasEncodedObject(obj.Hash()) == nil {
 		return obj.Hash(), nil
 	}
@@ -568,7 +614,54 @@ func gitName(e object.TreeEntry) string {
 	return e.Name
 }
 
+// finish makes the written objects durable before any ref names them.
+func (w *writer) finish(dir string) error {
+	if w.mem == nil {
+		return w.sync(dir)
+	}
+	before, err := packFiles(dir)
+	if err != nil {
+		return err
+	}
+	pw, err := w.st.PackfileWriter()
+	if err != nil {
+		return err
+	}
+	if _, err := packfile.NewEncoder(pw, w.mem, false).Encode(w.written, 10); err != nil {
+		pw.Close()
+		return err
+	}
+	if err := pw.Close(); err != nil {
+		return err
+	}
+	if w.noSync {
+		return nil
+	}
+	after, err := packFiles(dir)
+	if err != nil {
+		return err
+	}
+	for p := range after {
+		if _, ok := before[p]; ok {
+			continue
+		}
+		f, err := os.Open(p)
+		if err != nil {
+			return err
+		}
+		err = f.Sync()
+		f.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return syncDir(filepath.Join(dir, "objects", "pack"))
+}
+
 func (w *writer) sync(dir string) error {
+	if w.noSync {
+		return nil
+	}
 	dirs := map[string]bool{}
 	for _, h := range w.written {
 		hs := h.String()

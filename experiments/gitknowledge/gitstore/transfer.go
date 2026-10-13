@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/go-git/go-billy/v5/osfs"
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -15,8 +16,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/plumbing/transport/client"
 	"github.com/go-git/go-git/v5/plumbing/transport/server"
-	"github.com/go-git/go-git/v5/storage/filesystem"
-	"github.com/go-git/go-billy/v5/osfs"
 
 	"github.com/ashuangiras/polaroid/experiments/gitknowledge/knowledge"
 )
@@ -81,7 +80,7 @@ func (s *Store) Fetch(ctx context.Context, remote, url string) (Incoming, error)
 	}
 	ref := "refs/polaroid/incoming/" + remote
 	seen := "refs/polaroid/seen/" + remote
-	fs := &fetchStorer{Storage: s.st}
+	fs := &fetchStorer{lockedStorage: s.st}
 	if h, err := s.st.Reference(plumbing.ReferenceName(seen)); err == nil {
 		fs.refs = append(fs.refs, h)
 	}
@@ -130,7 +129,7 @@ func (s *Store) Fetch(ctx context.Context, remote, url string) (Incoming, error)
 // server fails with "object not found" on a commit it lacks (a standard Git
 // server ignores it).
 type fetchStorer struct {
-	*filesystem.Storage
+	*lockedStorage
 	refs []*plumbing.Reference
 }
 
@@ -138,8 +137,10 @@ func (f *fetchStorer) IterReferences() (storer.ReferenceIter, error) {
 	return storer.NewReferenceSliceIter(f.refs), nil
 }
 
-func (s *Store) packs() (map[string]int64, error) {
-	dir := filepath.Join(s.dir, "objects", "pack")
+func (s *Store) packs() (map[string]int64, error) { return packFiles(s.dir) }
+
+func packFiles(root string) (map[string]int64, error) {
+	dir := filepath.Join(root, "objects", "pack")
 	ents, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return map[string]int64{}, nil
@@ -280,6 +281,9 @@ func (s *Store) isReachable(h string) bool {
 }
 
 func (s *Store) syncPacks() error {
+	if s.noSync {
+		return nil
+	}
 	all, err := s.packs()
 	if err != nil {
 		return err

@@ -21,7 +21,7 @@ import (
 )
 
 const schema = `
-CREATE TABLE IF NOT EXISTS blobs (hash TEXT PRIMARY KEY, body BLOB NOT NULL) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS blobs (id INTEGER PRIMARY KEY, hash TEXT NOT NULL UNIQUE, body BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS snapshots (
   seq INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, parent TEXT,
   author TEXT NOT NULL, message TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -42,16 +42,22 @@ CREATE TRIGGER IF NOT EXISTS changes_kept BEFORE DELETE ON changes BEGIN SELECT 
 // linear: a snapshot's state is the latest change of each key at or below
 // its sequence number, and head names the active one.
 type Store struct {
-	db     *sql.DB
-	pol    knowledge.Policy
-	cache  *knowledge.Cache
-	mu     sync.Mutex
-	manif  map[string]map[string]string // snapshot -> key -> hash, immutable
-	seqOf  map[string]int64
+	db    *sql.DB
+	pol   knowledge.Policy
+	cache *knowledge.Cache
+	mu    sync.Mutex
+	manif map[string]map[string]string // snapshot -> key -> hash, immutable
+	seqOf map[string]int64
 }
 
-func Open(path string, pol knowledge.Policy) (*Store, error) {
-	db, err := sql.Open("sqlite", "file:"+path+"?_txlock=immediate&_busy_timeout=5000&_foreign_keys=on&_journal_mode=wal&_synchronous=full")
+// Open opens or creates the store with Polaroid's production settings;
+// unsafeNoSync (synchronous=off) exists only to measure what durability costs.
+func Open(path string, pol knowledge.Policy, unsafeNoSync ...bool) (*Store, error) {
+	sync := "full"
+	if len(unsafeNoSync) > 0 && unsafeNoSync[0] {
+		sync = "off"
+	}
+	db, err := sql.Open("sqlite", "file:"+path+"?_txlock=immediate&_busy_timeout=5000&_foreign_keys=on&_journal_mode=wal&_synchronous="+sync)
 	if err != nil {
 		return nil, err
 	}
@@ -106,25 +112,19 @@ func (s *Store) ReadActive(ctx context.Context, key string) (knowledge.Knowledge
 }
 
 func (s *Store) ReadAt(ctx context.Context, key, snapshot string) (knowledge.Knowledge, error) {
-	seq, err := s.seq(ctx, s.db, snapshot)
+	m, err := s.manifest(ctx, snapshot)
 	if err != nil {
 		return knowledge.Knowledge{}, err
 	}
-	var hash sql.NullString
-	var body []byte
-	err = s.db.QueryRowContext(ctx, `SELECT c.hash, b.body FROM changes c LEFT JOIN blobs b ON b.hash = c.hash
-		WHERE c.key = ? AND c.seq <= ? ORDER BY c.seq DESC LIMIT 1`, key, seq).Scan(&hash, &body)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && !hash.Valid) {
+	hash, ok := m[key]
+	if !ok {
 		return knowledge.Knowledge{}, fmt.Errorf("%s at %s: %w", key, snapshot, knowledge.ErrNotFound)
 	}
+	p, err := s.load(ctx)(key, hash)
 	if err != nil {
 		return knowledge.Knowledge{}, err
 	}
-	p, err := s.decode(hash.String, body)
-	if err != nil {
-		return knowledge.Knowledge{}, err
-	}
-	return knowledge.Knowledge{Key: key, Snapshot: snapshot, Hash: hash.String, Procedure: p}, nil
+	return knowledge.Knowledge{Key: key, Snapshot: snapshot, Hash: hash, Procedure: p}, nil
 }
 
 func (s *Store) decode(hash string, body []byte) (*knowledge.Procedure, error) {
@@ -259,6 +259,24 @@ func (s *Store) Publish(ctx context.Context, expected string, changes []knowledg
 	if err := tx.Commit(); err != nil {
 		return "", err
 	}
+	next := make(map[string]string, len(base)+len(changes))
+	for k, h := range base {
+		next[k] = h
+	}
+	for i, c := range changes {
+		if c.Procedure != nil {
+			next[c.Key] = knowledge.Hash(bodies[i])
+		} else {
+			delete(next, c.Key)
+		}
+	}
+	s.mu.Lock()
+	if len(s.manif) > 8 {
+		clear(s.manif)
+	}
+	s.manif[id] = next
+	s.seqOf[id] = seq
+	s.mu.Unlock()
 	return id, nil
 }
 

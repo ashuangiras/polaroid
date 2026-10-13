@@ -27,6 +27,16 @@ func TestBehaviour(t *testing.T) {
 	storetest.Run(t, func(t *testing.T, dir string) knowledge.Store { return open(t, dir) })
 }
 
+func TestBehaviourPackPerPublish(t *testing.T) {
+	storetest.Run(t, func(t *testing.T, dir string) knowledge.Store {
+		s, err := gitstore.Open(dir, gitstore.Options{Policy: knowledge.DefaultPolicy, PackPerPublish: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	})
+}
+
 // A publish interrupted after writing objects but before moving the ref
 // leaves unreachable objects and a temp file; the active knowledge is the
 // previous one. A ref damaged outside Polaroid is an error, never "empty".
