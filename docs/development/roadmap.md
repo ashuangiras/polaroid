@@ -112,6 +112,10 @@ Second-repository adoption trials are paused while the existing features are pre
 3. [#118](https://github.com/ashuangiras/polaroid/issues/118) External ItsDangerous acceptance reports with their provenance: **done** (PR #119).
 4. [#120 Release `v1.0.1` and adopt it](https://github.com/ashuangiras/polaroid/issues/120): the #111 fix as a patch release.
 
+## Agent-facing context efficiency
+
+1. [#131 Reduce Polaroid's agent-facing context consumption (MCP token usage)](https://github.com/ashuangiras/polaroid/issues/131): **proposed, not yet implemented.** A benchmark harness and a measured baseline ([context-efficiency-baseline.md](context-efficiency-baseline.md)), and an additive architecture proposal ([context-efficiency-proposal.md](context-efficiency-proposal.md)): conditional fetch of immutable records, selective field projections, and a compact execution-plan projection of `resolve_binding`/`get_graph`. No endpoint, tool, schema or verification behavior changes in this item; implementation is a later, separate item.
+
 ## Later (unordered, not yet scoped)
 
 - **The #85 assessment's automation (proposed, not filed):** a committed tool that applies `dev.change.classify` rules mechanically. Its inputs, outputs and acceptance criteria are in the live toil item `polaroid.change-classification.manual` (`candidate`; [#89](https://github.com/ashuangiras/polaroid/issues/89)) ([status](status.md)). Filing it as an issue is a decision for the owner.

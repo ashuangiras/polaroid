@@ -2,6 +2,18 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
+**Agent-facing context efficiency ([#131](https://github.com/ashuangiras/polaroid/issues/131)), proposal and baseline only, as of 2026-10-13.**
+
+- Driving Polaroid's own development through its MCP tools was temporarily suspended for this one effort: its large request/response payloads were consuming too much of the coding agent's own context to measure and redesign from inside. This item used GitHub, git, and direct HTTP/CLI calls instead; Polaroid itself was exercised only by the new benchmark harness, never by routing its payloads through an LLM.
+- **Explicitly frozen, not touched by this item:** [#127](https://github.com/ashuangiras/polaroid/issues/127)/[PR #128](https://github.com/ashuangiras/polaroid/pull/128) and [#129](https://github.com/ashuangiras/polaroid/issues/129)/[PR #130](https://github.com/ashuangiras/polaroid/pull/130), both still open and unmerged.
+- Branch `131-context-efficient-interface`, off `main` at `c929222` (so this baseline reflects `dev.change.verify` v4 only, none of the unmerged work above).
+- **Benchmark harness:** [scripts/benchmark-context.py](../../scripts/benchmark-context.py) replays the `verify-change` workflow against an isolated `polaroidd`, capturing every request/response verbatim and sizing it (bytes and a local, deterministic token estimate), without an LLM in the loop.
+- **Baseline measured:** [context-efficiency-baseline.md](context-efficiency-baseline.md). One cold `verify-change` run is 9 calls, 33,556 response bytes (9,771 estimated tokens). 65% of that is immutable `contract`/`instructions` text re-sent every time a version is read; a confirmation `resolve_binding` call after recording repeats 99.48% of its own earlier response unchanged.
+- **Proposal written:** [context-efficiency-proposal.md](context-efficiency-proposal.md): conditional fetch (`ETag`/`If-None-Match`) of immutable records, a `fields` projection on version and execution reads, and a `format=plan` projection of `resolve_binding`/`get_graph`. Every piece is additive (new optional parameter or header; unchanged default response); storage semantics, immutability and verification derivation are untouched. Targets a ≥70% response-token reduction for a **warm** `verify-change` run (the realistic repeated case this repository's own history shows), measured the same way, against the same harness, before any implementation is reported as meeting it.
+- **Not done in this item:** no endpoint, MCP tool, schema or CLI command was added or changed; implementing the proposal is a later, separate work item with its own contract-impact statement, tests and full gate.
+
+Next action: file the implementation work item(s) from the proposal's suggested sequencing, starting with the `fields` projection (smallest change, 65% of the measured baseline cost); or gather the owner's review of the proposal first.
+
 **Maintenance release `v1.0.1` in progress ([#120](https://github.com/ashuangiras/polaroid/issues/120)), as of 2026-10-11.**
 
 - **Merged:**
