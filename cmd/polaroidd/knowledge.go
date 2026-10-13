@@ -50,24 +50,54 @@ func prepareKnowledgeParents(dir string) error {
 // never trusts binding to loopback alone, since other local processes can
 // reach a loopback-bound port too, so this token is always required.
 func loadOrCreateOperatorToken(path string) (string, error) {
-	b, err := os.ReadFile(path) //nolint:gosec // G304: path is the daemon's own configured token file, not user input.
-	if err == nil {
-		tok := strings.TrimSpace(string(b))
-		if tok == "" {
-			return "", fmt.Errorf("%s: is empty; remove it to generate a new token", path)
-		}
-		return tok, nil
-	}
+	tok, err := readOperatorToken(path)
 	if !errors.Is(err, fs.ErrNotExist) {
-		return "", fmt.Errorf("read operator token: %w", err)
+		return tok, err
 	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", fmt.Errorf("generate operator token: %w", err)
 	}
-	tok := hex.EncodeToString(raw)
-	if err := os.WriteFile(path, []byte(tok+"\n"), 0o600); err != nil {
+	tok = hex.EncodeToString(raw)
+	// Written in full beside path, then linked into place: a link never
+	// replaces an existing file, so concurrent first starts agree on one
+	// token and no reader sees a partial file.
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
 		return "", fmt.Errorf("write operator token: %w", err)
+	}
+	tmp := f.Name()
+	defer func() { _ = os.Remove(tmp) }()
+	_, err = f.WriteString(tok + "\n")
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return "", fmt.Errorf("write operator token: %w", err)
+	}
+	if err := os.Link(tmp, path); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return readOperatorToken(path)
+		}
+		return "", fmt.Errorf("write operator token: %w", err)
+	}
+	return tok, nil
+}
+
+func readOperatorToken(path string) (string, error) {
+	b, err := os.ReadFile(path) //nolint:gosec // G304: path is the daemon's own configured token file, not user input.
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+	if err != nil {
+		return "", fmt.Errorf("read operator token: %w", err)
+	}
+	tok := strings.TrimSpace(string(b))
+	if tok == "" {
+		return "", fmt.Errorf("%s: is empty; remove it to generate a new token", path)
 	}
 	return tok, nil
 }
