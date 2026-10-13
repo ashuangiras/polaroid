@@ -13,12 +13,14 @@ import (
 	_ "github.com/ashuangiras/polaroid/internal/gitcore"
 	_ "github.com/ashuangiras/polaroid/internal/knowledge"
 	_ "github.com/ashuangiras/polaroid/internal/knowledge/gitstore"
+	_ "github.com/ashuangiras/polaroid/internal/knowledgeops"
 	_ "github.com/ashuangiras/polaroid/internal/knowledgesync"
 	_ "github.com/ashuangiras/polaroid/internal/lifecycle"
 	_ "github.com/ashuangiras/polaroid/internal/memory"
 	_ "github.com/ashuangiras/polaroid/internal/recovery"
 	_ "github.com/ashuangiras/polaroid/internal/storage/sqlite"
 	_ "github.com/ashuangiras/polaroid/internal/transport/http"
+	_ "github.com/ashuangiras/polaroid/internal/transport/httpops"
 	_ "github.com/ashuangiras/polaroid/internal/transport/mcp"
 	_ "github.com/ashuangiras/polaroid/internal/transport/wire"
 )
@@ -32,40 +34,57 @@ func TestPackageBoundaries(t *testing.T) {
 	// The Git-native knowledge path (ADR-0045, ADR-0046) is reachable from no
 	// legacy package: nothing writes knowledge to both stores.
 	knowledge := []string{module + "/internal/knowledge", module + "/internal/knowledgesync", module + "/internal/gitcore"}
+	// knowledgeAll also forbids the orchestration layer above the knowledge
+	// path (ADR-0048): a package that must not reach Git-core or the kernel
+	// directly must not reach it through knowledgeops either.
+	knowledgeAll := append(slices.Clone(knowledge), module+"/internal/knowledgeops")
 	rules := []struct {
 		pkg       string
 		forbidden []string
 	}{
-		{"internal/memory", slices.Concat(knowledge, []string{"net/http", "database/sql", "modernc.org/sqlite",
+		{"internal/memory", slices.Concat(knowledgeAll, []string{"net/http", "database/sql", "modernc.org/sqlite",
 			module + "/internal/storage", module + "/internal/transport", module + "/cmd"})},
-		{"internal/storage/sqlite", slices.Concat(knowledge, []string{"net/http", module + "/internal/transport", module + "/cmd"})},
+		{"internal/storage/sqlite", slices.Concat(knowledgeAll, []string{"net/http", module + "/internal/transport", module + "/cmd"})},
 		// The knowledge domain sees storage only through its Store port: no
 		// Git, no SQL, no transport, no legacy records.
 		{"internal/knowledge", slices.Concat(storage, []string{"net/http", module + "/internal/gitcore", "github.com/go-git",
-			module + "/internal/knowledge/gitstore", module + "/internal/knowledgesync", module + "/internal/memory", module + "/internal/transport",
+			module + "/internal/knowledge/gitstore", module + "/internal/knowledgesync", module + "/internal/knowledgeops", module + "/internal/memory", module + "/internal/transport",
 			module + "/internal/recovery", module + "/internal/lifecycle"})},
 		// The adapter joins the domain to Git-core and nothing else.
-		{"internal/knowledge/gitstore", slices.Concat(storage, []string{module + "/internal/memory", module + "/internal/knowledgesync",
+		{"internal/knowledge/gitstore", slices.Concat(storage, []string{module + "/internal/memory", module + "/internal/knowledgesync", module + "/internal/knowledgeops",
 			module + "/internal/transport", module + "/internal/recovery", module + "/internal/lifecycle"})},
 		// Synchronisation joins the kernel, its adapter and Git-core; no agent
 		// interface, legacy record or SQL reaches it (ADR-0046).
-		{"internal/knowledgesync", slices.Concat(storage, []string{module + "/internal/memory", module + "/internal/transport",
+		{"internal/knowledgesync", slices.Concat(storage, []string{module + "/internal/memory", module + "/internal/knowledgeops", module + "/internal/transport",
 			module + "/internal/recovery", module + "/internal/lifecycle", "github.com/modelcontextprotocol"})},
 		// Git-core stores files and snapshots; it knows no procedures, records or agent interfaces.
-		{"internal/gitcore", slices.Concat(storage, []string{module + "/internal/memory", module + "/internal/knowledge", module + "/internal/knowledgesync",
+		{"internal/gitcore", slices.Concat(storage, []string{module + "/internal/memory", module + "/internal/knowledge", module + "/internal/knowledgesync", module + "/internal/knowledgeops",
 			module + "/internal/transport", module + "/internal/recovery", module + "/internal/lifecycle"})},
-		{"internal/transport/wire", slices.Concat(storage, knowledge, []string{module + "/internal/transport/http", module + "/internal/transport/mcp", "github.com/modelcontextprotocol"})},
-		{"internal/transport/http", slices.Concat(storage, knowledge, []string{module + "/internal/transport/mcp", "github.com/modelcontextprotocol"})},
-		{"internal/transport/mcp", slices.Concat(storage, knowledge, []string{module + "/internal/transport/http"})},
+		// knowledgeops orchestrates the knowledge path for the agent and
+		// operator interfaces (ADR-0048); it has no storage, versioning or
+		// transport of its own, and no transport reaches it except through
+		// cmd/polaroidd's composition (transport/httpops is the one exception,
+		// since exposing it is httpops's whole purpose).
+		{"internal/knowledgeops", slices.Concat(storage, []string{module + "/internal/transport/http", module + "/internal/transport/mcp",
+			module + "/internal/recovery", module + "/internal/lifecycle", "github.com/modelcontextprotocol"})},
+		{"internal/transport/wire", slices.Concat(storage, knowledgeAll, []string{module + "/internal/transport/http", module + "/internal/transport/httpops", module + "/internal/transport/mcp", "github.com/modelcontextprotocol"})},
+		{"internal/transport/http", slices.Concat(storage, knowledgeAll, []string{module + "/internal/transport/mcp", module + "/internal/transport/httpops", "github.com/modelcontextprotocol"})},
+		{"internal/transport/mcp", slices.Concat(storage, knowledgeAll, []string{module + "/internal/transport/http", module + "/internal/transport/httpops"})},
+		// The operator HTTP surface reaches the knowledge path only through
+		// knowledgeops, never storage, the legacy API, or MCP directly.
+		{"internal/transport/httpops", slices.Concat(storage, []string{module + "/internal/transport/http", module + "/internal/transport/mcp", "github.com/modelcontextprotocol"})},
 		// Lifecycle code manages files, a service manager and processes,
 		// never procedures or their storage (ADR-0026).
-		{"internal/lifecycle", slices.Concat(storage, knowledge, []string{"net/http/httptest", module + "/internal/memory", module + "/internal/transport", module + "/internal/recovery"})},
+		{"internal/lifecycle", slices.Concat(storage, knowledgeAll, []string{"net/http/httptest", module + "/internal/memory", module + "/internal/transport", module + "/internal/recovery"})},
 		// Backup and restore use storage and lifecycle, never the API (ADR-0030).
-		{"internal/recovery", slices.Concat(knowledge, []string{"net/http/httptest", module + "/internal/transport", module + "/cmd"})},
+		{"internal/recovery", slices.Concat(knowledgeAll, []string{"net/http/httptest", module + "/internal/transport", module + "/cmd"})},
 		// The CLI reaches storage only through internal/recovery; see
 		// TestCLIReachesStorageOnlyThroughRecovery.
-		{"cmd/polaroid", slices.Concat(knowledge, []string{module + "/internal/transport"})},
-		{"cmd/polaroidd", knowledge},
+		{"cmd/polaroid", slices.Concat(knowledgeAll, []string{module + "/internal/transport"})},
+		// cmd/polaroidd is the composition root for both the legacy and the
+		// Git-native knowledge paths (ADR-0048): it is the only place that may
+		// wire knowledge, knowledgesync, gitcore and knowledgeops in, so it is
+		// unrestricted here.
 	}
 	for _, rule := range rules {
 		deps := goList(t, root, "-deps", "-f", "{{.ImportPath}}", module+"/"+rule.pkg)

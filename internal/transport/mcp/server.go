@@ -48,11 +48,14 @@ func NewHandler(svc *memory.Service, logger *slog.Logger) http.Handler {
 	return handler(newServer(svc, logger), logger)
 }
 
-// NewAgentHandler returns the agent-mode MCP endpoint over svc (ADR-0043):
-// only the few tools everyday procedural-knowledge use needs, so a client
-// that connects to it never loads the full API's schemas.
-func NewAgentHandler(svc *memory.Service, logger *slog.Logger) http.Handler {
-	return handler(newAgentServer(svc, logger), logger)
+// NewAgentHandler returns the agent-mode MCP endpoint over agent (ADR-0043,
+// ADR-0048): only the few tools everyday procedural-knowledge use needs, so
+// a client that connects to it never loads the full API's schemas. It is
+// backed by Git-native living knowledge, named only by canonical key and
+// snapshot token: no procedure version, binding or evidence-based
+// selection ever appears here.
+func NewAgentHandler(agent AgentKnowledge, logger *slog.Logger) http.Handler {
+	return handler(newAgentServer(agent, logger), logger)
 }
 
 func handler(server *sdk.Server, logger *slog.Logger) http.Handler {
@@ -86,7 +89,9 @@ func baseServer(instructions string, logger *slog.Logger) *sdk.Server {
 }
 
 type tools struct {
-	svc    *memory.Service
+	svc *memory.Service
+	// agent is set only for the agent-mode server; full mode never reads it.
+	agent  AgentKnowledge
 	logger *slog.Logger
 }
 

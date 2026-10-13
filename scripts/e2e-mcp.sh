@@ -483,18 +483,27 @@ show 'curl -sS -o /dev/null -w "%{http_code}\n" -X POST "$URL/mcp" -H "Sec-Fetch
 check "a cross-site browser request: 403" equal "$LAST" 403
 
 ########################################################################
-section "Agent mode: discover, read, feedback" \
-	"\`/mcp/agent\` (ADR-0043) serves only the three tools everyday procedural-knowledge use needs, so an agent never loads the full API's schemas. \`read\` returns executable guidance without history; nothing records executions, and following a procedure verifies nothing by itself. Only a finding about the procedure itself becomes classified \`feedback\`; product defects, environment problems and transient failures are refused." \
-	"Point an MCP client at \`http://127.0.0.1:7417/mcp/agent\`."
+section "Agent mode: Git-native knowledge (ADR-0048)" \
+	"\`/mcp/agent\` (ADR-0043, finalized on Git-native living knowledge by ADR-0048) serves only the three tools everyday procedural-knowledge use needs, named only by canonical key and an opaque snapshot token: no procedure version, binding or evidence-based selection anywhere. It shares no record with the legacy catalog above: the knowledge path starts empty. Publishing is an explicit, token-guarded operator operation at \`/v1/knowledge/*\`, never reachable from agent mode." \
+	"Point an MCP client at \`http://127.0.0.1:7417/mcp/agent\`; operate the knowledge path at \`/v1/knowledge/*\` with the token the daemon generated at \`<knowledge-dir>-operator-token\`."
 RUNS_BEFORE="$(tool list_executions '{}' | text)"
+TOKEN="$(cat "$WORK/home/.polaroid/data/knowledge-operator-token")"
 LAST="$(MCP_PATH=/mcp/agent post tools/list "" "" | jq -c '[.result.tools[].name] | sort')"
 md '```text' 'tools/list at /mcp/agent' "$LAST" '```'
 check "agent mode lists exactly discover, feedback and read" equal "$LAST" '["discover","feedback","read"]'
-MCP_PATH=/mcp/agent step read "{\"procedure_id\":\"$LEAF\"}" '{version, philosophy: has("philosophy"), contract: has("contract"), instructions: has("instructions")}'
-check "read returns guidance without philosophy or history" json_has '.philosophy == false and .contract and .instructions'
-MCP_PATH=/mcp/agent step feedback "{\"procedure_id\":\"$LEAF\",\"version\":1,\"classification\":\"environment_problem\",\"summary\":\"s\",\"details\":\"d\",\"reporter\":\"manual.agent\"}" '.error.code'
+MCP_PATH=/mcp/agent step discover "{\"task\":\"tidy a go module\"}" '{empty}'
+check "discover before any knowledge is published is an explicit, well-formed empty result" json_has '. == {"empty":true}'
+PUB_BODY='{"base":"","changes":[{"key":"go.module.tidy","goal":"Tidy a Go module dependencies.","philosophy":"Keep dependencies minimal.","method":"Run go mod tidy.","contract":{"inputs":{"module":"path"}},"instructions":{"steps":["go mod tidy"]}}],"author":"operator.e2e","summary":"seed","rationale":"e2e fixture"}'
+show 'curl -sS -X POST "$URL/v1/knowledge/publications" -H "Content-Type: application/json" -H "Polaroid-Operator-Token: $TOKEN" --data-binary "$PUB_BODY" | jq -c .'
+SNAP="$(jq -r .snapshot <<<"$LAST")"
+check "publishing through the operator surface returns a snapshot" test -n "$SNAP"
+show 'curl -sS "$URL/v1/knowledge/status" -H "Polaroid-Operator-Token: $TOKEN" | jq -c .'
+check "operator status reports the published knowledge" json_has '.empty == false and .keys == 1'
+MCP_PATH=/mcp/agent step read "{\"key\":\"go.module.tidy\",\"snapshot\":\"$SNAP\"}" '{key, method, philosophy: has("philosophy")}'
+check "read returns guidance by key and snapshot, without philosophy by default" json_has '.key == "go.module.tidy" and .method == "Run go mod tidy." and .philosophy == false'
+MCP_PATH=/mcp/agent step feedback "{\"key\":\"go.module.tidy\",\"snapshot\":\"$SNAP\",\"classification\":\"environment_problem\",\"summary\":\"s\",\"details\":\"d\",\"reporter\":\"manual.agent\"}" '.error.code'
 check "an environment problem is not procedural feedback: invalid_request" json_has '. == "invalid_request"'
-MCP_PATH=/mcp/agent step feedback "{\"procedure_id\":\"$LEAF\",\"version\":1,\"classification\":\"missing_precondition\",\"summary\":\"Needs a toolchain check\",\"details\":\"The contract names no Go version.\",\"reporter\":\"manual.agent\"}" '{classification}'
+MCP_PATH=/mcp/agent step feedback "{\"key\":\"go.module.tidy\",\"snapshot\":\"$SNAP\",\"classification\":\"missing_precondition\",\"summary\":\"Needs a toolchain check\",\"details\":\"The contract names no Go version.\",\"reporter\":\"manual.agent\"}" '{classification}'
 check "a missing precondition is stored as classified feedback" json_has '. == {"classification":"missing_precondition"}'
 check "agent mode wrote no execution" equal "$(tool list_executions '{}' | text)" "$RUNS_BEFORE"
 

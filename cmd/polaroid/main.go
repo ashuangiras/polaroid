@@ -41,7 +41,7 @@ type command struct {
 // queryCommands take trailing NAME=VALUE query parameters, such as filters,
 // limit and after (ADR-0021); run receives them in client.query, and min
 // and max count only the other arguments.
-var queryCommands = map[string]bool{"list": true, "discover": true, "bindings": true, "executions": true, "feedbacks": true, "repositories": true, "toil-items": true}
+var queryCommands = map[string]bool{"list": true, "discover": true, "bindings": true, "executions": true, "feedbacks": true, "repositories": true, "toil-items": true, "knowledge-activations": true}
 
 var commands = []command{
 	{"health", "", "check that the daemon and its storage are available", 0, 0,
@@ -234,6 +234,40 @@ var commands = []command{
 		func(c *client, args []string) error {
 			return c.send(http.MethodPost, toilPath(args[0])+"/revisions", args[1:])
 		}},
+	// The knowledge-* commands are the operator surface of Git-native living
+	// knowledge (ADR-0048): explicit status, publish, fetch, validate,
+	// activate, push, activations and reconcile. Every request needs the
+	// token configured on the daemon, given here as $POLAROID_KNOWLEDGE_TOKEN.
+	{"knowledge-status", "", "show Git-native knowledge: the active snapshot, its procedure count, and configured sources", 0, 0,
+		func(c *client, _ []string) error { return c.do(http.MethodGet, "/v1/knowledge/status", nil) }},
+	{"knowledge-publish", "[FILE]", "publish knowledge changes from request JSON (base, changes, author, summary, rationale, finding, validation) in FILE or stdin", 0, 1,
+		func(c *client, args []string) error {
+			return c.send(http.MethodPost, "/v1/knowledge/publications", args)
+		}},
+	{"knowledge-fetch", "SOURCE [FILE]", "fetch a source's knowledge into quarantine, with optional credentials JSON in FILE or stdin", 1, 2,
+		func(c *client, args []string) error {
+			return c.sendOptional(http.MethodPost, knowledgeSourcePath(args[0])+"/fetch", args[1:])
+		}},
+	{"knowledge-validate", "SOURCE", "validate the source's fetched candidate: Git integrity, trust policy, complete catalog", 1, 1,
+		func(c *client, args []string) error {
+			return c.do(http.MethodPost, knowledgeSourcePath(args[0])+"/validation", nil)
+		}},
+	{"knowledge-activate", "SOURCE [FILE]", "activate the source's validated candidate, from decision JSON (author, summary, rationale, finding, validation) in FILE or stdin", 1, 2,
+		func(c *client, args []string) error {
+			return c.send(http.MethodPost, knowledgeSourcePath(args[0])+"/activation", args[1:])
+		}},
+	{"knowledge-push", "SOURCE [FILE]", "push the active knowledge to a source the policy permits, with optional credentials JSON in FILE or stdin", 1, 2,
+		func(c *client, args []string) error {
+			return c.sendOptional(http.MethodPost, knowledgeSourcePath(args[0])+"/push", args[1:])
+		}},
+	{"knowledge-activations", "[NAME=VALUE...]", "list accepted activations, newest first; NAME is limit", 0, 0,
+		func(c *client, _ []string) error {
+			return c.do(http.MethodGet, c.path("/v1/knowledge/activations", nil), nil)
+		}},
+	{"knowledge-reconcile", "FINDING_ID", "resolve a feedback report as addressed once a local publication addresses it, or report that none has yet", 1, 1,
+		func(c *client, args []string) error {
+			return c.do(http.MethodPost, "/v1/knowledge/reconciliations/"+url.PathEscape(args[0]), nil)
+		}},
 }
 
 func usage() string {
@@ -268,6 +302,9 @@ type client struct {
 	stdin  io.Reader
 	stdout io.Writer
 	query  url.Values
+	// token is sent as Polaroid-Operator-Token on every request, when set:
+	// it guards the knowledge-* commands (ADR-0048). It is never logged.
+	token string
 }
 
 // path returns path with the command's own parameters and the NAME=VALUE
@@ -341,7 +378,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 		return runLocal(fs.Arg(0), fs.Args()[1:], stdout, stderr, getenv)
 	}
 
-	err := dispatch(server, *timeout, fs.Arg(0), fs.Args()[1:], stdin, stdout)
+	err := dispatch(server, *timeout, getenv("POLAROID_KNOWLEDGE_TOKEN"), fs.Arg(0), fs.Args()[1:], stdin, stdout)
 	var invalid usageError
 	switch {
 	case err == nil:
@@ -355,7 +392,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 	}
 }
 
-func dispatch(server string, timeout time.Duration, name string, args []string, stdin io.Reader, stdout io.Writer) error {
+func dispatch(server string, timeout time.Duration, token, name string, args []string, stdin io.Reader, stdout io.Writer) error {
 	u, err := url.Parse(server)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
 		return usageError(fmt.Sprintf("invalid server URL %q: want http://host:port", server))
@@ -374,7 +411,7 @@ func dispatch(server string, timeout time.Duration, name string, args []string, 
 		if len(args) < cmd.min || len(args) > cmd.max {
 			return usageError(strings.TrimSpace("usage: polaroid " + cmd.name + " " + cmd.args))
 		}
-		c := &client{base: strings.TrimRight(server, "/"), http: &http.Client{Timeout: timeout}, stdin: stdin, stdout: stdout, query: query}
+		c := &client{base: strings.TrimRight(server, "/"), http: &http.Client{Timeout: timeout}, stdin: stdin, stdout: stdout, query: query, token: token}
 		return cmd.run(c, args)
 	}
 	return usageError(fmt.Sprintf("unknown command %q", name))
@@ -388,6 +425,16 @@ func (c *client) send(method, path string, args []string) error {
 		return err
 	}
 	return c.do(method, path, body)
+}
+
+// sendOptional is send, but a truly absent FILE sends no body at all
+// (never reading stdin): for a request whose body is entirely optional,
+// such as credentials.
+func (c *client) sendOptional(method, path string, args []string) error {
+	if len(args) == 0 {
+		return c.do(method, path, nil)
+	}
+	return c.send(method, path, args)
 }
 
 func (c *client) readRequest(args []string) ([]byte, error) {
@@ -424,6 +471,9 @@ func (c *client) do(method, path string, body []byte) error {
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if c.token != "" {
+		req.Header.Set("Polaroid-Operator-Token", c.token)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -467,4 +517,8 @@ func bindingPath(id string) string {
 
 func toilPath(id string) string {
 	return "/v1/toil-items/" + url.PathEscape(id)
+}
+
+func knowledgeSourcePath(name string) string {
+	return "/v1/knowledge/sources/" + url.PathEscape(name)
 }
