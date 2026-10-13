@@ -169,7 +169,7 @@ func (b *syncBuffer) String() string {
 var (
 	readTools = []string{"discover_procedures", "get_binding", "get_binding_revision", "get_catalog_statistics", "get_execution", "get_execution_invalidation", "get_feedback", "get_graph", "get_procedure",
 		"get_procedure_lifecycle", "get_repository", "get_toil_item", "get_toil_revision", "get_verification", "get_version",
-		"list_bindings", "list_executions", "list_feedback", "list_procedures", "list_repositories", "list_toil_items", "list_verifications", "resolve_binding", "suggest_duplicates"}
+		"list_bindings", "list_executions", "list_feedback", "list_procedures", "list_repositories", "list_toil_items", "list_verifications", "prepare_execution", "resolve_binding", "suggest_duplicates"}
 	writeTools = []string{"add_repository_alias", "create_binding", "create_procedure", "create_toil_item", "invalidate_execution", "reactivate_procedure",
 		"record_execution", "record_procedure_origin", "register_repository", "report_feedback", "retire_procedure", "revise_binding", "revise_procedure", "revise_toil_item"}
 )
