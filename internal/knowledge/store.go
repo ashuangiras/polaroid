@@ -29,6 +29,13 @@ type Store interface {
 	Advance(ctx context.Context, a Advance) error
 	// Activations lists the recorded activations, newest first.
 	Activations(ctx context.Context, limit int) ([]ActivationEntry, error)
+	// Instance identifies this store among the instances exchanging
+	// knowledge; it authenticates nothing.
+	Instance(ctx context.Context) (string, error)
+	// Imported reports whether a published snapshot arrived through an
+	// activation, judged from the activation record alone; ErrNotFound for
+	// a snapshot that is not published.
+	Imported(ctx context.Context, s Snapshot) (bool, error)
 }
 
 // Files is a read view of one snapshot's tree.

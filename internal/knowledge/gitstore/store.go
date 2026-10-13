@@ -167,3 +167,10 @@ func (s *Store) Activations(ctx context.Context, limit int) ([]knowledge.Activat
 	}
 	return out, nil
 }
+
+func (s *Store) Instance(context.Context) (string, error) { return s.repo.Instance(), nil }
+
+func (s *Store) Imported(ctx context.Context, snap knowledge.Snapshot) (bool, error) {
+	imported, err := s.repo.Imported(ctx, gitcore.Snapshot(snap))
+	return imported, mapErr(err)
+}

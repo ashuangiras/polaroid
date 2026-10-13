@@ -25,6 +25,7 @@ type memSnap struct {
 	files     map[string][]byte
 	entry     knowledge.LogEntry
 	published bool // active, or an ancestor of the active snapshot
+	imported  bool // made published by an activation
 }
 
 func NewMemoryStore() *MemoryStore { return &MemoryStore{snaps: map[knowledge.Snapshot]memSnap{}} }
@@ -149,7 +150,7 @@ func (m *MemoryStore) Advance(_ context.Context, a knowledge.Advance) error {
 	}
 	for _, s := range chain {
 		sn := m.snaps[s]
-		sn.published = true
+		sn.published, sn.imported = true, true
 		m.snaps[s] = sn
 	}
 	m.activations = append(m.activations, knowledge.ActivationEntry{Target: a.Target, Previous: m.active, Author: a.Author,
@@ -184,4 +185,16 @@ func (m *MemoryStore) Log(_ context.Context, from knowledge.Snapshot, limit int)
 		}
 	}
 	return out, nil
+}
+
+func (m *MemoryStore) Instance(context.Context) (string, error) { return "memory-instance", nil }
+
+func (m *MemoryStore) Imported(_ context.Context, s knowledge.Snapshot) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sn, ok := m.snaps[s]
+	if !ok || !sn.published {
+		return false, fmt.Errorf("snapshot %q: %w", s, knowledge.ErrNotFound)
+	}
+	return sn.imported, nil
 }

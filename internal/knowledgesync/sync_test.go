@@ -44,7 +44,12 @@ type instance struct {
 
 func newInstance(t *testing.T, p knowledgesync.Policy) *instance {
 	t.Helper()
-	dir := t.TempDir()
+	return newInstanceAt(t, t.TempDir(), p)
+}
+
+// newInstanceAt opens the instance in dir, as a restarted daemon would.
+func newInstanceAt(t *testing.T, dir string, p knowledgesync.Policy) *instance {
+	t.Helper()
 	repo, err := gitcore.Open(dir, gitcore.Options{})
 	if err != nil {
 		t.Fatal(err)
