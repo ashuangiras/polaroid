@@ -117,7 +117,7 @@ Second-repository adoption trials are paused while the existing features are pre
 One integration branch, `git-core`, and at most one production PR. Each milestone ends with executable acceptance tests.
 
 1. **A — Production Git-core: done on the branch.** `internal/gitcore`: durable, atomic publication under one active ref, concurrency across processes, crash, damage and recovery tests, Git CLI interoperability.
-2. **B — Knowledge kernel on Git-core (planned):** stable keys, active knowledge, references, validation and publication policy, independent of Git types; current APIs kept compatible where practical.
+2. **B — Knowledge kernel on Git-core: done on the branch ([ADR-0045](../architecture/decisions/0045-living-knowledge-kernel.md)).** `internal/knowledge` and `internal/knowledge/gitstore`: stable keys, canonical documents, snapshot catalogs and compositions, whole-catalog validation, publication with provenance, rollback, deterministic discovery and recovery from the repository alone, independent of Git types. The daemon and its APIs still serve only the legacy SQLite path.
 3. **C — Remote synchronisation (planned):** configured remotes (HTTPS and SSH credentials kept out of knowledge, logs and responses), fetch, explicit validation and authorised activation, fast-forward only, explicit divergence, configurable branches per instance, no forced pushes.
 4. **D — Agent interface (planned):** `discover`, `read` and `feedback` on the Git-backed kernel with one snapshot per task; depends on the disposition of PR #132.
 5. **E — Migration and recovery (planned):** a controlled, non-destructive path from the SQLite catalog with audit mapping, recovery and rollback.

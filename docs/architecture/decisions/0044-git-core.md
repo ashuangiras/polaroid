@@ -1,6 +1,6 @@
 # 0044. Git-core: a Git repository as the durable store of living knowledge
 
-**Status:** Accepted (owner direction, 2026-10-13). Milestone A implemented; milestones B–E planned. Until milestone B connects it, Polaroid's behaviour, APIs and SQLite catalog are unchanged.
+**Status:** Accepted (owner direction, 2026-10-13). Milestones A and B implemented (B: [ADR-0045](0045-living-knowledge-kernel.md)); milestones C–E planned. Polaroid's behaviour, APIs and SQLite catalog are unchanged until milestone D connects the kernel.
 **Date:** 2026-10-13
 
 ## Context

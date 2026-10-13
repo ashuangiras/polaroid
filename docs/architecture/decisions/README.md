@@ -43,6 +43,7 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0037](0037-size-limits-on-new-writes.md) | Size limits on new writes | Accepted |
 | [0038](0038-stable-releases-and-compatibility.md) | Stable releases and the compatibility policy | Accepted |
 | [0039](0039-read-only-snapshot-transactions.md) | Multi-statement reads use read-only snapshot transactions | Accepted |
-| [0044](0044-git-core.md) | Git-core: a Git repository as the durable store of living knowledge | Accepted (milestone A) |
+| [0044](0044-git-core.md) | Git-core: a Git repository as the durable store of living knowledge | Accepted (milestones A–B) |
+| [0045](0045-living-knowledge-kernel.md) | The living knowledge kernel on Git-core | Accepted (milestone B) |
 
 Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.
