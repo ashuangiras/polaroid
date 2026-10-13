@@ -11,6 +11,8 @@ import (
 	// Importing the checked packages makes `go test` re-run this test
 	// whenever they change, instead of reusing a cached pass.
 	_ "github.com/ashuangiras/polaroid/internal/gitcore"
+	_ "github.com/ashuangiras/polaroid/internal/knowledge"
+	_ "github.com/ashuangiras/polaroid/internal/knowledge/gitstore"
 	_ "github.com/ashuangiras/polaroid/internal/lifecycle"
 	_ "github.com/ashuangiras/polaroid/internal/memory"
 	_ "github.com/ashuangiras/polaroid/internal/recovery"
@@ -26,27 +28,39 @@ import (
 func TestPackageBoundaries(t *testing.T) {
 	root, module := moduleRootAndPath(t)
 	storage := []string{"database/sql", "modernc.org/sqlite", module + "/internal/storage", module + "/cmd"}
+	// The Git-native knowledge path (ADR-0045) is reachable from no legacy
+	// package: nothing writes knowledge to both stores.
+	knowledge := []string{module + "/internal/knowledge", module + "/internal/gitcore"}
 	rules := []struct {
 		pkg       string
 		forbidden []string
 	}{
-		{"internal/memory", []string{"net/http", "database/sql", "modernc.org/sqlite",
-			module + "/internal/storage", module + "/internal/transport", module + "/internal/gitcore", module + "/cmd"}},
-		{"internal/storage/sqlite", []string{"net/http", module + "/internal/transport", module + "/cmd"}},
+		{"internal/memory", slices.Concat(knowledge, []string{"net/http", "database/sql", "modernc.org/sqlite",
+			module + "/internal/storage", module + "/internal/transport", module + "/cmd"})},
+		{"internal/storage/sqlite", slices.Concat(knowledge, []string{"net/http", module + "/internal/transport", module + "/cmd"})},
+		// The knowledge domain sees storage only through its Store port: no
+		// Git, no SQL, no transport, no legacy records.
+		{"internal/knowledge", slices.Concat(storage, []string{"net/http", module + "/internal/gitcore", "github.com/go-git",
+			module + "/internal/knowledge/gitstore", module + "/internal/memory", module + "/internal/transport",
+			module + "/internal/recovery", module + "/internal/lifecycle"})},
+		// The adapter joins the domain to Git-core and nothing else.
+		{"internal/knowledge/gitstore", slices.Concat(storage, []string{"net/http", module + "/internal/memory",
+			module + "/internal/transport", module + "/internal/recovery", module + "/internal/lifecycle"})},
 		// Git-core stores files and snapshots; it knows no procedures, records or transports.
 		{"internal/gitcore", slices.Concat(storage, []string{module + "/internal/memory", module + "/internal/transport", module + "/internal/recovery",
 			module + "/internal/lifecycle"})},
-		{"internal/transport/wire", slices.Concat(storage, []string{module + "/internal/transport/http", module + "/internal/transport/mcp", "github.com/modelcontextprotocol"})},
-		{"internal/transport/http", slices.Concat(storage, []string{module + "/internal/transport/mcp", "github.com/modelcontextprotocol"})},
-		{"internal/transport/mcp", slices.Concat(storage, []string{module + "/internal/transport/http"})},
+		{"internal/transport/wire", slices.Concat(storage, knowledge, []string{module + "/internal/transport/http", module + "/internal/transport/mcp", "github.com/modelcontextprotocol"})},
+		{"internal/transport/http", slices.Concat(storage, knowledge, []string{module + "/internal/transport/mcp", "github.com/modelcontextprotocol"})},
+		{"internal/transport/mcp", slices.Concat(storage, knowledge, []string{module + "/internal/transport/http"})},
 		// Lifecycle code manages files, a service manager and processes,
 		// never procedures or their storage (ADR-0026).
-		{"internal/lifecycle", slices.Concat(storage, []string{"net/http/httptest", module + "/internal/memory", module + "/internal/transport", module + "/internal/recovery"})},
+		{"internal/lifecycle", slices.Concat(storage, knowledge, []string{"net/http/httptest", module + "/internal/memory", module + "/internal/transport", module + "/internal/recovery"})},
 		// Backup and restore use storage and lifecycle, never the API (ADR-0030).
-		{"internal/recovery", []string{"net/http/httptest", module + "/internal/transport", module + "/cmd"}},
+		{"internal/recovery", slices.Concat(knowledge, []string{"net/http/httptest", module + "/internal/transport", module + "/cmd"})},
 		// The CLI reaches storage only through internal/recovery; see
 		// TestCLIReachesStorageOnlyThroughRecovery.
-		{"cmd/polaroid", []string{module + "/internal/transport"}},
+		{"cmd/polaroid", slices.Concat(knowledge, []string{module + "/internal/transport"})},
+		{"cmd/polaroidd", knowledge},
 	}
 	for _, rule := range rules {
 		deps := goList(t, root, "-deps", "-f", "{{.ImportPath}}", module+"/"+rule.pkg)
