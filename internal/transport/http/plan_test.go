@@ -27,13 +27,14 @@ type versionProjectionJSON struct {
 }
 
 type planStepJSON struct {
-	Path              string `json:"path"`
-	ProcedureID       string `json:"procedure_id"`
-	Version           int    `json:"version"`
-	SelectedBy        string `json:"selected_by"`
-	Decision          string `json:"decision"`
-	Status            string `json:"status"`
-	LatestExecutionID string `json:"latest_execution_id"`
+	Path              string         `json:"path"`
+	ProcedureID       string         `json:"procedure_id"`
+	Version           int            `json:"version"`
+	SelectedBy        string         `json:"selected_by"`
+	Decision          string         `json:"decision"`
+	Status            string         `json:"status"`
+	Inputs            jsontext.Value `json:"inputs"`
+	LatestExecutionID string         `json:"latest_execution_id"`
 }
 
 type planJSON struct {
@@ -166,6 +167,11 @@ func TestResolveBindingPlanAndPrepareExecution(t *testing.T) {
 	if p.NextAction == nil {
 		t.Fatalf("next_action should name the first step needing attention")
 	}
+	// #132 review finding 4: enough to act on the next step without a
+	// second call -- its effective inputs, not just its identity.
+	if got := string(byPath[*p.NextAction].Inputs); got != `{"module":"modernc.org/sqlite"}` {
+		t.Fatalf("next_action %q inputs = %s, want the canonical effective inputs", *p.NextAction, got)
+	}
 
 	// prepare_execution is the same projection, with its target required.
 	prep := s.call(t, http.MethodGet, "/v1/bindings/"+w.binding+"/preparation?"+w.target("").Encode(), "")
@@ -217,6 +223,12 @@ func TestResolveBindingPlanAndPrepareExecution(t *testing.T) {
 		}
 		if node.TargetVerification != nil && step.LatestExecutionID != node.TargetVerification.LatestExecutionID {
 			t.Fatalf("step %q: latest_execution_id = %q, want %q", step.Path, step.LatestExecutionID, node.TargetVerification.LatestExecutionID)
+		}
+		// #132 review finding 4: a step's effective inputs must equal the
+		// identical combination inputs the full graph already computed,
+		// never a second derivation.
+		if node.TargetVerification != nil && string(step.Inputs) != string(node.TargetVerification.Combination.Inputs) {
+			t.Fatalf("step %q: inputs = %s, want the full graph's combination inputs %s", step.Path, step.Inputs, node.TargetVerification.Combination.Inputs)
 		}
 	}
 	if byStatus := plan.Steps; byStatus[0].Status != "verified" || byStatus[1].Status != "skipped" || byStatus[2].Status != "verified" {

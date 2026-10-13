@@ -70,6 +70,11 @@ func TestGraphAndResolveBindingPlanFormatOverMCP(t *testing.T) {
 	if prep != want {
 		t.Fatalf("prepare_execution must equal resolve_binding format=plan at the same target:\n%s\nwant\n%s", prep, want)
 	}
+	// #132 review finding 4: a step carries its effective inputs, not just
+	// its identity.
+	if !strings.Contains(prep, `"inputs":{}`) {
+		t.Fatalf("prepare_execution = %s, want each step's effective inputs", prep)
+	}
 	e := h.fail(t, "prepare_execution", `{"binding_id":"`+binding+`","environment":"ci.test"}`, "invalid_request")
 	if got := e.fields(); len(got) == 0 {
 		t.Fatalf("prepare_execution without a target must name the missing field(s): %+v", e)

@@ -180,17 +180,18 @@ The graph and resolution endpoints accept `format=plan` (default `format=full`, 
 ```json
 {"binding_id":"…","binding_revision":2,"repository":"github.com/ashuangiras/polaroid","environment":{"name":"ci.ubuntu-latest"},
  "steps":[
-   {"path":"build","procedure_id":"…","version":3,"selected_by":"latest","status":"verified","latest_execution_id":"…"},
-   {"path":"checks","procedure_id":"…","version":4,"selected_by":"evidence","status":"pending"},
+   {"path":"build","procedure_id":"…","version":3,"selected_by":"latest","status":"verified","inputs":{"build_command":"make build"},"latest_execution_id":"…"},
+   {"path":"checks","procedure_id":"…","version":4,"selected_by":"evidence","status":"pending","inputs":{"gate_commands":["make check"]}},
    {"path":"hosted-ci","procedure_id":"…","version":1,"decision":"not_applicable","status":"skipped"},
-   {"path":"","procedure_id":"…","version":4,"selected_by":"evidence","status":"pending"}],
+   {"path":"","procedure_id":"…","version":4,"selected_by":"evidence","status":"pending","inputs":{"build_command":"make build","gate_commands":["make check"]}}],
  "next_action":"checks"}
 ```
 
 - **One step per node, flattened and dependency-ordered**: a node's own references (in the version's declared order) are listed before the node itself, so every step's dependencies already appear earlier in `steps` — the same order the referenced procedures' own `instructions` already document running them in. `path` is the reference names from the root joined by `/`, `""` for the root itself.
 - **No `canonical_key`, `scope`, `applicability` or nested `node`**: a step gives `procedure_id` and `version`, enough to fetch the complete version (`GET .../versions/{n}`, optionally with `fields`) when it is actually needed.
+- **`inputs`** is the step's effective inputs at the target — the identical canonical value `target_verification.combination.inputs` already computes for that node in the full graph, reused, never re-derived — present whenever a target was given, whatever the step's status (so even a `decision_required` step already shows what it would run with). Absent without a target.
 - **`status`** is `selected` (no target was given), `decision_required` (a conditional reference's applicability is undecided for this target), `skipped` (a conditional reference was decided not applicable), `verified` (the selected combination is verified at the target) or `pending` (a target was given and it is not verified there yet). `decision` is present only for a conditional reference with a target, as in the full graph.
-- **`next_action`** names the `path` of the first step, in dependency order, still `decision_required` or `pending`; it is absent when every step is already `verified` or `skipped`, meaning nothing is left to do for this exact target.
+- **`next_action`** names the `path` of one step still needing attention: any `decision_required` step first, in dependency order — deciding a conditional reference's applicability always precedes running anything, as the procedures these bindings compose already document (for example `dev.change.verify`'s own `decide` step, before `children`) — and only once none remain does the first `pending` step qualify. Absent when every step is already `verified` or `skipped`, meaning nothing is left to do for this exact target.
 - **Never evidence by itself.** A `verified` step reads the same derived verification `GET /v1/executions/{id}/verification` does; the plan is a read, and claims nothing that a fresh resolution of the identical target would not also report.
 - **`GET /v1/bindings/{id}/preparation`** additionally requires `commit` and `inputs` (each a `400 invalid_request` naming the missing field if absent) and is otherwise exactly `resolve_binding?format=plan` at that target: same identity, same steps, same errors.
 

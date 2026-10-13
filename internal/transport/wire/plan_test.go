@@ -114,3 +114,49 @@ func TestPlanRootPathIsEmptyStringNotOmitted(t *testing.T) {
 		t.Fatalf("next_action = %v, want a pointer to \"\" (the root itself needs a run)", p.NextAction)
 	}
 }
+
+// TestNextActionPrefersDecisionRequiredOverEarlierPending (#132 review
+// finding 5): a decision_required step must win even when a pending step
+// comes first in dependency order, because deciding a conditional
+// reference's applicability always precedes running anything (ADR-0029;
+// dev.change.verify's own "decide" step precedes its "children" step).
+func TestNextActionPrefersDecisionRequiredOverEarlierPending(t *testing.T) {
+	pending := &memory.CombinationStatus{Verified: false}
+	root := memory.GraphNode{ProcedureID: "root", Version: 1, Target: pending, Edges: []memory.GraphEdge{
+		// Declared, and so emitted, first: a required reference that is
+		// merely pending (it just has not run yet).
+		{Reference: memory.Reference{Name: "checks"}, SelectedBy: memory.SelectedByLatest, Node: leafNode("checks", 1, pending)},
+		// Declared second, but its applicability is still undecided.
+		{Reference: memory.Reference{Name: "hosted-ci"}, SelectedBy: memory.SelectedByLatest, Decision: memory.DecisionUndecided, Node: leafNode("hosted-ci", 1, nil)},
+	}}
+	p := wire.NewGraphPlan(root)
+	if p.Steps[0].Path != "checks" || p.Steps[0].Status != "pending" {
+		t.Fatalf("checks (first in order) = %+v, want pending", p.Steps[0])
+	}
+	if p.Steps[1].Path != "hosted-ci" || p.Steps[1].Status != "decision_required" {
+		t.Fatalf("hosted-ci (second in order) = %+v, want decision_required", p.Steps[1])
+	}
+	if p.NextAction == nil || *p.NextAction != "hosted-ci" {
+		t.Fatalf("next_action = %v, want hosted-ci: a decision_required step outranks an earlier pending one", p.NextAction)
+	}
+}
+
+// TestPlanStepCarriesEffectiveInputsWithATarget (#132 review finding 4): a
+// step's effective inputs at the target are available directly on the
+// step, reusing the identical canonical value target_verification.
+// combination.inputs already computes in the full graph -- never
+// re-derived, and absent without a target.
+func TestPlanStepCarriesEffectiveInputsWithATarget(t *testing.T) {
+	withTarget := &memory.CombinationStatus{Verified: false, Combination: memory.Combination{Inputs: []byte(`{"build_command":"make build"}`)}}
+	root := memory.GraphNode{ProcedureID: "root", Version: 1, Target: withTarget}
+	p := wire.NewGraphPlan(root)
+	if string(p.Steps[0].Inputs) != `{"build_command":"make build"}` {
+		t.Fatalf("inputs = %s, want the target's combination inputs", p.Steps[0].Inputs)
+	}
+
+	noTarget := memory.GraphNode{ProcedureID: "root", Version: 1}
+	p2 := wire.NewGraphPlan(noTarget)
+	if p2.Steps[0].Inputs != nil {
+		t.Fatalf("inputs = %s, want absent without a target", p2.Steps[0].Inputs)
+	}
+}

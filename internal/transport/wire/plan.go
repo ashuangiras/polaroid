@@ -1,6 +1,10 @@
 package wire
 
-import "github.com/ashuangiras/polaroid/internal/memory"
+import (
+	"encoding/json/jsontext"
+
+	"github.com/ashuangiras/polaroid/internal/memory"
+)
 
 // PlanStep is one node of a composition graph, projected to only what an
 // agent needs to decide what to do next (format=plan, prepare_execution;
@@ -9,7 +13,12 @@ import "github.com/ashuangiras/polaroid/internal/memory"
 // fetch its full record (get_version, get_procedure) when actually needed.
 // path is the reference names from the root joined by "/", "" for the root
 // itself. decision is present only for a conditional reference with a
-// target (ADR-0029), empty for a required reference or without one.
+// target (ADR-0029), empty for a required reference or without one. inputs
+// is the step's effective inputs at the target — the same canonical value
+// already computed for target_verification.combination.inputs in the full
+// graph, reused here, never re-derived — present only with a target, so an
+// agent can see what a pending or decision_required step would run with
+// without a second call.
 //
 // status is one of:
 //   - "selected": no target was given, so nothing has been checked against one.
@@ -23,21 +32,25 @@ import "github.com/ashuangiras/polaroid/internal/memory"
 // A "verified" step is the only one that is evidence of a successful run;
 // the others are what to do, never a claim that it already happened.
 type PlanStep struct {
-	Path              string `json:"path"`
-	ProcedureID       string `json:"procedure_id"`
-	Version           int    `json:"version"`
-	SelectedBy        string `json:"selected_by"`
-	Decision          string `json:"decision,omitzero"`
-	Status            string `json:"status"`
-	LatestExecutionID string `json:"latest_execution_id,omitzero"`
+	Path              string         `json:"path"`
+	ProcedureID       string         `json:"procedure_id"`
+	Version           int            `json:"version"`
+	SelectedBy        string         `json:"selected_by"`
+	Decision          string         `json:"decision,omitzero"`
+	Status            string         `json:"status"`
+	Inputs            jsontext.Value `json:"inputs,omitzero"`
+	LatestExecutionID string         `json:"latest_execution_id,omitzero"`
 }
 
 // Plan is a flattened, dependency-ordered projection of a composition
 // graph: every step's dependencies appear earlier in steps (a node's
 // children before the node itself), the order the referenced procedures'
-// own instructions already document running them in. next_action names the
-// path of the first step still needing a decision or a run (status
-// decision_required or pending, in that order), omitted when every step is
+// own instructions already document running them in. next_action names a
+// step that needs attention: any decision_required step first (deciding
+// applicability always precedes running, per the procedures these binding
+// compose document, for example dev.change.verify's own "decide" step
+// coming before its "children" step), in dependency order; only once none
+// remain does the first pending step qualify. Omitted when every step is
 // already verified or skipped: there is nothing left to do for this target.
 // A Plan is never evidence by itself; get_verification (or a step's own
 // "verified" status, which reads the same derived verification) is.
@@ -63,8 +76,10 @@ func appendPlanSteps(steps []PlanStep, path string, n memory.GraphNode, selected
 		steps = appendPlanSteps(steps, joinPlanPath(path, e.Reference.Name), e.Node, string(e.SelectedBy), string(e.Decision), e.SkippedBy)
 	}
 	var latest string
+	var inputs jsontext.Value
 	if n.Target != nil {
 		latest = n.Target.LatestExecutionID
+		inputs = n.Target.Combination.Inputs
 	}
 	return append(steps, PlanStep{
 		Path:              path,
@@ -73,6 +88,7 @@ func appendPlanSteps(steps []PlanStep, path string, n memory.GraphNode, selected
 		SelectedBy:        selectedBy,
 		Decision:          decision,
 		Status:            planStatus(decision, n.Target),
+		Inputs:            inputs,
 		LatestExecutionID: latest,
 	})
 }
@@ -100,9 +116,21 @@ func joinPlanPath(path, name string) string {
 	return path + "/" + name
 }
 
+// nextAction picks the step an agent should address next. A decision_required
+// step always outranks a pending one, whatever their relative dependency
+// order: an undecided conditional reference blocks deciding what even needs
+// to run next to it, and the procedures these bindings compose already
+// document deciding before running (ADR-0029). Within one status, the
+// first in dependency order wins.
 func nextAction(steps []PlanStep) *string {
 	for _, s := range steps {
-		if s.Status == "pending" || s.Status == "decision_required" {
+		if s.Status == "decision_required" {
+			path := s.Path
+			return &path
+		}
+	}
+	for _, s := range steps {
+		if s.Status == "pending" {
 			path := s.Path
 			return &path
 		}
