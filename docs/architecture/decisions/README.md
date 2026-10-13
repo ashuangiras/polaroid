@@ -46,11 +46,12 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0040](0040-feedback-resolution.md) | Feedback resolution: an append-only record of how a report was handled | Accepted |
 | [0041](0041-verification-artifacts.md) | Verification artifacts: a lightweight, local, gitignored build for independent review, never implying a release | Accepted |
 | [0042](0042-context-efficient-projections.md) | Context-efficient projections: `fields` on a version read, `format=plan` and `prepare_execution` | Accepted |
-| [0043](0043-knowledge-first-agent-mode.md) | Knowledge-first agent mode at `/mcp/agent`: discover, read, feedback; execution recording optional | Accepted (experimental endpoint) |
+| [0043](0043-knowledge-first-agent-mode.md) | Knowledge-first agent mode at `/mcp/agent`: discover, read, feedback; execution recording optional | Accepted (finalized by ADR-0049) |
 | [0044](0044-git-core.md) | Git-core: a Git repository as the durable store of living knowledge | Accepted (milestones A–C) |
 | [0045](0045-living-knowledge-kernel.md) | The living knowledge kernel on Git-core | Accepted (milestone B) |
 | [0046](0046-git-knowledge-synchronisation.md) | Git-native knowledge synchronisation | Accepted (milestone C) |
 | [0047](0047-knowledge-identities-and-origin.md) | Knowledge identities and origin, the foundations of the Git-backed agent interface | Accepted (milestone D foundations) |
-| [0048](0048-git-native-agent-interface.md) | Git-native agent interface, finalized: `/mcp/agent` on living knowledge, and an explicit operator surface at `/v1/knowledge` | Accepted (milestone D); `/mcp/agent` still experimental |
+| [0048](0048-git-native-agent-interface.md) | Git-native agent interface, finalized: `/mcp/agent` on living knowledge, and an explicit operator surface at `/v1/knowledge` | Accepted (milestone D; finalized by ADR-0049) |
+| [0049](0049-agent-mode-finalized-no-migration.md) | `/mcp/agent` finalized under ADR-0038's v1 guarantee; milestone E does not migrate the legacy SQLite catalog | Accepted (milestone E) |
 
 Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.

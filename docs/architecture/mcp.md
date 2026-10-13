@@ -80,7 +80,7 @@ Field names in `fields` are the flat argument names. For example, a missing `phi
 
 ## Agent mode (`/mcp/agent`)
 
-**Experimental.** This endpoint is outside the v1 compatibility guarantee ([ADR-0038](decisions/0038-stable-releases-and-compatibility.md), amended by [ADR-0043](decisions/0043-knowledge-first-agent-mode.md), finalized on Git-native living knowledge by [ADR-0048](decisions/0048-git-native-agent-interface.md)). Use `/mcp` where a stable contract is needed.
+**Finalized, under the v1 compatibility guarantee** ([ADR-0038](decisions/0038-stable-releases-and-compatibility.md), amended by [ADR-0043](decisions/0043-knowledge-first-agent-mode.md), built on Git-native living knowledge by [ADR-0048](decisions/0048-git-native-agent-interface.md), finalized by [ADR-0049](decisions/0049-agent-mode-finalized-no-migration.md)): the same stability promise as `/mcp` applies to its three tools, their arguments and their result shapes.
 
 A second endpoint on the same listener, with the same transport rules, serves only the three tools everyday procedural-knowledge use needs ([ADR-0043](decisions/0043-knowledge-first-agent-mode.md)). A client connected to it never loads the full API's schemas, and nothing it does records an execution. It is backed solely by living knowledge in a separate, Git-native store ([ADR-0045](decisions/0045-living-knowledge-kernel.md)), named only by canonical key and an opaque snapshot token: there is no procedure version, binding, or evidence-based selection anywhere in this mode, and it shares no record with `/mcp`'s procedures, versions, bindings, executions or verifications.
 
@@ -95,7 +95,7 @@ A second endpoint on the same listener, with the same transport rules, serves on
 - A read with `repository` set and the procedure's applicability local to another repository is `not_applicable`.
 - Errors use the same envelope as the full API's tool errors, with these codes: `invalid_request`, `not_found`, `not_applicable`.
 - **Publishing, synchronising and reconciling knowledge is an explicit operator operation**, through `/v1/knowledge/*` ([http-api.md](http-api.md#git-native-knowledge-operator-api)) or `polaroid knowledge-*`, never through agent mode: there is no scheduler, and an agent only discovers, reads and reports feedback.
-- **Migrating an agent:** point it at `http://127.0.0.1:7417/mcp/agent` instead of `/mcp`. Keep `/mcp` for administration, execution and verification records, and audit workflows; its 40 tools are unchanged.
+- **Migrating an agent:** point it at `http://127.0.0.1:7417/mcp/agent` instead of `/mcp`. Keep `/mcp` for administration, execution and verification records, and audit workflows; its 40 tools are unchanged. No legacy SQLite procedure is migrated into Git-native knowledge ([ADR-0049](decisions/0049-agent-mode-finalized-no-migration.md)): the two catalogs are populated independently.
 
 ## Resources
 

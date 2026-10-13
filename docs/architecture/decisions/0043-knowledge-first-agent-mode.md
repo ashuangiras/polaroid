@@ -1,6 +1,6 @@
 # 0043. Knowledge-first agent mode: procedural knowledge without routine execution records
 
-**Status:** Accepted; `/mcp/agent` is **experimental**. It is outside [ADR-0038](0038-stable-releases-and-compatibility.md)'s v1 compatibility guarantee until its Git-backed interface (milestone D of ADR-0044, on branch `git-core`) is final. That interface reads knowledge by key from a snapshot: `read` and `feedback` lose `procedure_id`, `version`, `binding`, `selected_by` and `latest_version`. `/mcp` is unaffected and stays under the guarantee.
+**Status:** Accepted. `/mcp/agent` was experimental, outside [ADR-0038](0038-stable-releases-and-compatibility.md)'s v1 compatibility guarantee, until its Git-backed interface (milestone D of ADR-0044, on branch `git-core`) was final; [ADR-0049](0049-agent-mode-finalized-no-migration.md) finalizes it into that guarantee. That interface reads knowledge by key from a snapshot: `read` and `feedback` lose `procedure_id`, `version`, `binding`, `selected_by` and `latest_version`. `/mcp` is unaffected and stays under the guarantee.
 **Date:** 2026-10-13
 
 ## Context

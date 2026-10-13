@@ -1,6 +1,6 @@
 # 0048. Git-native agent interface, finalized: `/mcp/agent` on living knowledge, and an explicit operator surface
 
-**Status:** Accepted; `/mcp/agent` remains **experimental** (ADR-0043), now on its Git-native form. `/mcp` is unaffected and stays under ADR-0038's v1 compatibility guarantee: unchanged, still 40 tools (25 read-only, 15 write).
+**Status:** Accepted; `/mcp/agent` was still experimental here (ADR-0043), on its Git-native form. [ADR-0049](0049-agent-mode-finalized-no-migration.md) finalizes it into ADR-0038's v1 compatibility guarantee. `/mcp` is unaffected and stays under that guarantee: unchanged, still 40 tools (25 read-only, 15 write).
 **Date:** 2026-10-13
 
 ## Context
