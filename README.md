@@ -39,6 +39,7 @@ Polaroid does not run an LLM, and it does not execute instructions. Its code man
 - Back up, inspect and restore the catalog with the packaged binaries alone: `polaroid backup` takes a consistent snapshot while the service runs, `polaroid inspect-backup` validates one, and `polaroid restore` plans, then replaces a catalog with a recovery backup and rollback ([ADR-0030](docs/architecture/decisions/0030-catalog-backup-and-restore.md), [below](#back-up-and-restore-the-catalog)).
 - `GET /healthz`, a JSON HTTP API ([contract](docs/architecture/http-api.md)) and a generic CLI.
 - An MCP server at `/mcp` ([contract](docs/architecture/mcp.md)): 39 tools with the same operations, records and error codes as the HTTP API, plus read-only resources for procedures, versions and bindings. It speaks stateless streamable HTTP, protocol revisions 2026-07-28 and 2025-11-25.
+- An agent mode at `/mcp/agent` ([ADR-0043](docs/architecture/decisions/0043-knowledge-first-agent-mode.md)): three tools, `discover`, `read` and `feedback`, for everyday procedural-knowledge use without loading the full API or recording executions.
 
 ## Prerequisites
 

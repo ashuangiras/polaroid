@@ -44,5 +44,6 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0038](0038-stable-releases-and-compatibility.md) | Stable releases and the compatibility policy | Accepted |
 | [0039](0039-read-only-snapshot-transactions.md) | Multi-statement reads use read-only snapshot transactions | Accepted |
 | [0042](0042-context-efficient-projections.md) | Context-efficient projections: `fields` on a version read, `format=plan` and `prepare_execution` | Accepted |
+| [0043](0043-knowledge-first-agent-mode.md) | Knowledge-first agent mode at `/mcp/agent`: discover, read, feedback; execution recording optional | Accepted |
 
 Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.

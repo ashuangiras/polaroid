@@ -56,12 +56,35 @@ This is deliberately a small, fast gate (two commands, not the full `make check`
 - **`optimized-warm` is a conditional projection**, not a verified session saving, until conditional fetch (`ETag`/`If-None-Match`) exists to make the underlying assumption checkable. Treat 75.8% as "if a client can safely skip these reads, this is what it would cost", not as a reported fact about any actual Copilot session.
 - **Scope of this baseline.** Only `verify-change` is measured here. Discovery, feedback and toil workflows are not, and should be benchmarked the same way before generalizing any conclusion to them.
 
+## Knowledge-first workflow (ADR-0043)
+
+The sections above measure the execution-recording workflow, kept as a regression benchmark. [scripts/benchmark-knowledge.py](../../scripts/benchmark-knowledge.py) measures the knowledge-first workflow of [ADR-0043](../architecture/decisions/0043-knowledge-first-agent-mode.md) — discover → read → execute locally → verify locally → finish — against the legacy full-mode workflow, on the same small real gate (`gofmt -l .`, `go vet ./...`, run for real at the checkout's HEAD from the inputs the reads return). **Totals include session setup** (the mode's `server/discover` instructions plus its `tools/list` schemas, paid once per connection) so the comparison counts everything an agent sees. Same deterministic token estimate as above; not measured Copilot billing.
+
+| Mode | Tools | Schema tokens | Instructions tokens |
+| --- | ---: | ---: | ---: |
+| full (`/mcp`) | 39 | 14,433 | 1,163 |
+| agent (`/mcp/agent`) | 3 | 977 | 324 |
+
+| Scenario | Calls | Request | Response | Setup | **Total** |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| legacy-full: resolve, read ×2, record ×2, verify, resolve | 7 | 1,445 | 7,757 | 15,596 | **24,798** |
+| knowledge-cold, `dev.change.verify` v4 unchanged: discover, read binding, read checks | 3 | 437 | 4,554 | 1,301 | **6,292** (−74.6%) |
+| knowledge-cold-shared, `dev.change.check` + `agent.guidance.shared`: as above + shared guidance once | 4 | 568 | 3,094 | 1,301 | **4,963** (−80.0%) |
+| knowledge-gap: knowledge-cold-shared + one classified `feedback` | 5 | 812 | 3,141 | 1,301 | **5,254** (−78.8%) |
+| knowledge-warm, v4 (*conditional*): read binding only | 1 | 133 | 3,019 | 1,301 | 4,453 |
+| knowledge-warm-shared (*conditional*): read binding only | 1 | 135 | 942 | 1,301 | 2,378 |
+
+**Correctness, asserted before any number is printed:** both modes report 39 and 3 tools; every read root has `inputs`, `preconditions`, `expected_outcome`, `verification` and `boundaries` in its contract and non-empty instructions; the shared guidance has all its rules; the `checks` child's mapped inputs equal the full API's own derivation (`prepare_execution`); the real gate passes; the legacy run is verified; no knowledge scenario writes an execution; the feedback is stored with its classification. The knowledge-gap finding is scripted, and labelled as such in the stored report.
+
+**Shared guidance (section 8 of the brief):** reading `dev.change.check` v1 plus `agent.guidance.shared` v1 once costs less than reading `dev.change.verify` v4 alone, while the contract sections above stay present; whether every rule of v4 that matters for a run that records nothing survives is a reviewer's judgment, and the rules moved are listed in [examples/README.md](../../examples/README.md#knowledge-first-example). The warm rows are conditional on a session that already holds the child and shared guidance (immutable versions); they are not measured savings.
+
 ## Reproducing
 
 ```sh
 make build
 python3 scripts/benchmark-context.py        # token benchmark, synthetic evidence, four variants
 python3 scripts/verify-change-real-check.py # real, small, fast correctness check
+python3 scripts/benchmark-knowledge.py      # knowledge-first vs legacy, real gate, both MCP modes
 ```
 
 The first prints a compact table and the path to `summary.json`; per-call request/response bodies, `manifest.json` and `tools_list.json` sit beside it, under `bin/benchmark/<timestamp>/` (git-ignored). The figures above are one such run's `summary.json`, copied in by hand.

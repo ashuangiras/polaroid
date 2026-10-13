@@ -75,6 +75,21 @@ A failed call is a tool error (`isError: true`). It carries the HTTP API's error
 
 Field names in `fields` are the flat argument names. For example, a missing `philosophy` is reported as `philosophy`, not `version.philosophy`, and a reference to a retired procedure as `references[0].procedure_id`. A reference is still reported as `references[i]…`. An unexpected failure is logged, and only `internal` is returned.
 
+## Agent mode (`/mcp/agent`)
+
+A second endpoint on the same listener, with the same transport rules, serves only the three tools everyday procedural-knowledge use needs ([ADR-0043](decisions/0043-knowledge-first-agent-mode.md)). A client connected to it never loads the full API's schemas, and nothing it does records an execution.
+
+| Tool | Read-only | Arguments | Result |
+| --- | --- | --- | --- |
+| `discover` | yes | `task`; `repository` and `limit` (1 to 50, default 5) optional | `{"candidates":[{procedure_id, canonical_key, version, scope, goal}]}`, best first; with `repository`, also `bindings` `[{name, procedure_id}]` of those candidates there |
+| `read` | yes | exactly one of `procedure_id`, `canonical_key`, or `repository` with `binding`; `version` (default latest) and `inputs` (an object) only without `binding`; `full` optional | guidance: `procedure_id`, `canonical_key`, `version`, `latest_version`, `retired` (when retired), `scope`, `goal`, `method`, `binding` and `inputs` (from the binding's latest revision), `contract`, `instructions`, `references` `[{name, procedure_id, version, condition, inputs or input_mapping}]`; with `full`, also `philosophy`, `applicability`, `revision_reason`, `created_at` |
+| `feedback` | no | `procedure_id`, `version`, `classification`, `summary`, `details`, `reporter`; `repository` and `evidence` (an object) optional | `{id, classification, created_at}`; the stored report is an ordinary [feedback report](http-api.md#feedback) with `context` `{classification, evidence}` and the procedure version as subject |
+
+- A reference's child version is its pin, or the latest version for a contextual policy; evidence-based selection is the full API's. Its `inputs` are the parent's effective inputs mapped by the reference (ADR-0024), present when the read has inputs (a binding, or `inputs`); otherwise `input_mapping` is the mapping itself.
+- `feedback` classifications: `incorrect_applicability`, `missing_precondition`, `incorrect_instruction`, `inadequate_verification` (kind `problem`) and `improved_method` (kind `suggestion`). `product_defect`, `environment_problem` and `transient_failure` are `invalid_request`: they are not procedural knowledge.
+- Errors are the full API's tool errors and codes.
+- **Migrating an agent:** point it at `http://127.0.0.1:7417/mcp/agent` instead of `/mcp`. Keep `/mcp` for administration, execution and verification records, and audit workflows; its 39 tools are unchanged.
+
 ## Resources
 
 All resources are read-only and returned as `application/json`, with the same body as the matching tool.
