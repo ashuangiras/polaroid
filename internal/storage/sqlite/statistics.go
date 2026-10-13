@@ -29,6 +29,7 @@ UNION ALL SELECT 'execution_children', COUNT(*), 0, 0 FROM execution_children
 UNION ALL SELECT 'execution_decisions', COUNT(*), 0, 0 FROM execution_decisions
 UNION ALL SELECT 'execution_invalidations', COUNT(*), 0, 0 FROM execution_invalidations
 UNION ALL SELECT 'feedback', COUNT(*), 0, 0 FROM feedback
+UNION ALL SELECT 'feedback_resolutions', COUNT(*), 0, 0 FROM feedback_resolutions
 UNION ALL SELECT 'toil_items', COUNT(*), 0, 0 FROM toil_items
 UNION ALL SELECT 'toil_revisions', COUNT(*), 0, 0 FROM toil_revisions
 UNION ALL SELECT 'toil_revision_sources', COUNT(*), 0, 0 FROM toil_revision_sources
@@ -50,6 +51,10 @@ UNION ALL SELECT 'executions.valid_with_invalidated_child', COUNT(DISTINCT c.par
 UNION ALL SELECT 'toil.' || r.status, COUNT(*), 0, 0 FROM toil_revisions AS r
 	WHERE r.revision = (SELECT MAX(r2.revision) FROM toil_revisions AS r2 WHERE r2.toil_item_id = r.toil_item_id)
 	GROUP BY r.status
+UNION ALL SELECT 'feedback.' || status, COUNT(*), 0, 0
+	FROM (SELECT CASE WHEN fr.feedback_id IS NULL THEN 'open' ELSE 'resolved' END AS status
+	      FROM feedback AS f LEFT JOIN feedback_resolutions AS fr ON fr.feedback_id = f.id)
+	GROUP BY status
 UNION ALL SELECT 'payload.procedure_contracts', COUNT(contract), COALESCE(SUM(octet_length(contract)), 0),
 	COALESCE(MAX(octet_length(contract)), 0) FROM procedure_versions
 UNION ALL SELECT 'payload.procedure_instructions', COUNT(instructions), COALESCE(SUM(octet_length(instructions)), 0),
@@ -99,7 +104,7 @@ func (s *Store) snapshotStatistics(ctx context.Context) (memory.Statistics, erro
 		"repositories": &r.Repositories, "repository_aliases": &r.RepositoryAliases,
 		"bindings": &r.Bindings, "binding_revisions": &r.BindingRevisions,
 		"executions": &r.Executions, "execution_children": &r.ExecutionChildren, "execution_decisions": &r.ExecutionDecisions,
-		"execution_invalidations": &r.ExecutionInvalidations, "feedback": &r.Feedback,
+		"execution_invalidations": &r.ExecutionInvalidations, "feedback": &r.Feedback, "feedback_resolutions": &r.FeedbackResolutions,
 		"toil_items": &r.ToilItems, "toil_revisions": &r.ToilRevisions, "toil_revision_sources": &r.ToilRevisionSources,
 		"toil_revision_executions": &r.ToilRevisionExecutions,
 		"lifecycle.active":         &st.Procedures.Active, "lifecycle.retired": &st.Procedures.Retired,
@@ -107,6 +112,7 @@ func (s *Store) snapshotStatistics(ctx context.Context) (memory.Statistics, erro
 		"executions.valid.succeeded": &e.ValidSucceeded, "executions.valid.failed": &e.ValidFailed,
 		"executions.invalidated.succeeded": &e.InvalidatedSucceeded, "executions.invalidated.failed": &e.InvalidatedFailed,
 		"executions.valid_with_invalidated_child": &e.ValidWithInvalidatedChild,
+		"feedback.open": &st.Feedback.Open, "feedback.resolved": &st.Feedback.Resolved,
 		"toil.observed": &st.ToilItems.Observed, "toil.candidate": &st.ToilItems.Candidate, "toil.implemented": &st.ToilItems.Implemented,
 		"toil.validated": &st.ToilItems.Validated, "toil.retired": &st.ToilItems.Retired,
 		"storage.schema_version": &st.Storage.SchemaVersion, "storage.page_size": &st.Storage.PageSize,

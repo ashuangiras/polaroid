@@ -184,7 +184,7 @@ var commands = []command{
 		}},
 	{"feedback", "[FILE]", "report a problem with Polaroid, or a suggestion, from request JSON in FILE or stdin", 0, 1,
 		func(c *client, args []string) error { return c.send(http.MethodPost, "/v1/feedback", args) }},
-	{"feedbacks", "[KIND] [NAME=VALUE...]", "list feedback reports, optionally only KIND (problem or suggestion); NAME is subject_type, subject_id, subject_version, repository, limit or after", 0, 1,
+	{"feedbacks", "[KIND] [NAME=VALUE...]", "list feedback reports, optionally only KIND (problem or suggestion); NAME is subject_type, subject_id, subject_version, repository, status (open or resolved), limit or after", 0, 1,
 		func(c *client, args []string) error {
 			query := url.Values{}
 			if len(args) == 1 {
@@ -195,6 +195,10 @@ var commands = []command{
 	{"get-feedback", "ID", "show one feedback report", 1, 1,
 		func(c *client, args []string) error {
 			return c.do(http.MethodGet, "/v1/feedback/"+url.PathEscape(args[0]), nil)
+		}},
+	{"resolve-feedback", "ID [FILE]", "record how a feedback report was handled, permanently, from request JSON (outcome, reason, actor, references?) in FILE or stdin; the report is kept unchanged", 1, 2,
+		func(c *client, args []string) error {
+			return c.send(http.MethodPost, "/v1/feedback/"+url.PathEscape(args[0])+"/resolution", args[1:])
 		}},
 	{"register", "[FILE]", "register a repository from request JSON in FILE or stdin", 0, 1,
 		func(c *client, args []string) error { return c.send(http.MethodPost, "/v1/repositories", args) }},

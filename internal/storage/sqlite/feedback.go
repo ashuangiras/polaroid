@@ -48,8 +48,16 @@ func (s *Store) CreateFeedback(ctx context.Context, f *memory.Feedback) error {
 	})
 }
 
+// feedbackColumns end with the report's resolution (ADR-0040): outcome,
+// reason, actor, declared references and created_at, all NULL for an open
+// report. Queries using them read FROM feedback without an alias.
 const feedbackColumns = `id, kind, summary, details, reporter, context,
-	subject_type, subject_id, subject_version, repository, execution_id, created_at`
+	subject_type, subject_id, subject_version, repository, execution_id, created_at,
+	(SELECT fr.outcome FROM feedback_resolutions AS fr WHERE fr.feedback_id = feedback.id),
+	(SELECT fr.reason FROM feedback_resolutions AS fr WHERE fr.feedback_id = feedback.id),
+	(SELECT fr.actor FROM feedback_resolutions AS fr WHERE fr.feedback_id = feedback.id),
+	(SELECT fr.references_json FROM feedback_resolutions AS fr WHERE fr.feedback_id = feedback.id),
+	(SELECT fr.created_at FROM feedback_resolutions AS fr WHERE fr.feedback_id = feedback.id)`
 
 // Feedback implements memory.Store.
 func (s *Store) Feedback(ctx context.Context, id string) (memory.Feedback, error) {
@@ -82,11 +90,13 @@ func (s *Store) ListFeedback(ctx context.Context, f memory.FeedbackFilter) ([]me
 		  AND (? = 0 OR subject_version = ?)
 		  AND (? IS NULL OR repository IN (SELECT value FROM json_each(?))
 		       OR (subject_type = 'repository' AND subject_id = ?))
+		  AND (? = '' OR (? = 'resolved') = EXISTS (SELECT 1 FROM feedback_resolutions AS fr WHERE fr.feedback_id = feedback.id))
 		  AND (? = '' OR created_at > ? OR (created_at = ? AND id > ?))
 		ORDER BY created_at, id
 		LIMIT ?`,
 		string(f.Kind), string(f.Kind), string(f.SubjectType), string(f.SubjectType), f.SubjectID, f.SubjectID,
 		f.SubjectVersion, f.SubjectVersion, repositories, repositories, f.RepositoryID,
+		string(f.Status), string(f.Status),
 		at, at, at, id, fetchLimit(f.Page.Limit))
 	if err != nil {
 		return nil, fmt.Errorf("query feedback: %w", err)
@@ -113,8 +123,10 @@ func scanFeedback(row interface{ Scan(...any) error }) (memory.Feedback, error) 
 	var reportContext []byte
 	var subjectType, subjectID, repository, executionID sql.NullString
 	var subjectVersion sql.NullInt64
+	var outcome, reason, actor, referencesJSON, resolvedAt sql.NullString
 	if err := row.Scan(&f.ID, &kind, &f.Summary, &f.Details, &f.Reporter, &reportContext,
-		&subjectType, &subjectID, &subjectVersion, &repository, &executionID, &created); err != nil {
+		&subjectType, &subjectID, &subjectVersion, &repository, &executionID, &created,
+		&outcome, &reason, &actor, &referencesJSON, &resolvedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return memory.Feedback{}, err
 		}
@@ -130,5 +142,74 @@ func scanFeedback(row interface{ Scan(...any) error }) (memory.Feedback, error) 
 	if f.CreatedAt, err = parseTime(created); err != nil {
 		return memory.Feedback{}, err
 	}
+	if outcome.Valid {
+		refs, err := decodeFeedbackReferences(referencesJSON.String)
+		if err != nil {
+			return memory.Feedback{}, err
+		}
+		r := memory.FeedbackResolution{FeedbackID: f.ID, Outcome: memory.FeedbackOutcome(outcome.String),
+			Reason: reason.String, Actor: actor.String, References: refs}
+		if r.CreatedAt, err = parseTime(resolvedAt.String); err != nil {
+			return memory.Feedback{}, err
+		}
+		f.Resolution = &r
+	}
 	return f, nil
+}
+
+// ResolveFeedback implements memory.Store.
+func (s *Store) ResolveFeedback(ctx context.Context, r memory.FeedbackResolution) error {
+	references, err := encodeFeedbackReferences(r.References)
+	if err != nil {
+		return err
+	}
+	return s.write(ctx, func(tx *sql.Tx) error {
+		var exists, resolved bool
+		err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM feedback WHERE id = ?),
+			EXISTS (SELECT 1 FROM feedback_resolutions WHERE feedback_id = ?)`, r.FeedbackID, r.FeedbackID).Scan(&exists, &resolved)
+		switch {
+		case err != nil:
+			return fmt.Errorf("read feedback: %w", err)
+		case !exists:
+			return memory.ErrNotFound
+		case resolved:
+			return memory.ErrFeedbackResolved
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO feedback_resolutions (feedback_id, outcome, reason, actor, references_json, created_at)
+			VALUES (?, ?, ?, ?, ?, ?)`,
+			r.FeedbackID, string(r.Outcome), r.Reason, r.Actor, references, formatTime(r.CreatedAt))
+		if err != nil {
+			return fmt.Errorf("insert feedback resolution: %w", err)
+		}
+		return nil
+	})
+}
+
+// encodeFeedbackReferences stores refs as a JSON array, [] for none
+// (references_json is NOT NULL), reusing toil.go's wireReference shape.
+func encodeFeedbackReferences(refs []memory.ExternalReference) (string, error) {
+	out := make([]wireReference, len(refs))
+	for i, r := range refs {
+		out[i] = wireReference(r)
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return "", fmt.Errorf("encode references: %w", err)
+	}
+	return string(b), nil
+}
+
+func decodeFeedbackReferences(raw string) ([]memory.ExternalReference, error) {
+	var in []wireReference
+	if err := json.Unmarshal([]byte(raw), &in); err != nil {
+		return nil, fmt.Errorf("stored references: %w", err)
+	}
+	if len(in) == 0 {
+		return nil, nil
+	}
+	out := make([]memory.ExternalReference, len(in))
+	for i, r := range in {
+		out[i] = memory.ExternalReference(r)
+	}
+	return out, nil
 }

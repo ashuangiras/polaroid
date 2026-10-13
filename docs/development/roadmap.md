@@ -111,6 +111,13 @@ Second-repository adoption trials are paused while the existing features are pre
 2. [#111](https://github.com/ashuangiras/polaroid/issues/111) Multi-statement reads in read-only snapshot transactions: **done** (PR #117, [ADR-0039](../architecture/decisions/0039-read-only-snapshot-transactions.md)). No contract change.
 3. [#118](https://github.com/ashuangiras/polaroid/issues/118) External ItsDangerous acceptance reports with their provenance: **done** (PR #119).
 4. [#120 Release `v1.0.1` and adopt it](https://github.com/ashuangiras/polaroid/issues/120): the #111 fix as a patch release.
+5. Feedback-driven fixes from the 2026-10-12 triage, filed as issues:
+   - [#127 Feedback resolution](https://github.com/ashuangiras/polaroid/issues/127) ([ADR-0040](../architecture/decisions/0040-feedback-resolution.md)): an append-only record of how a report was handled, and a `status` filter so Polaroid can answer what is still open. **Next, in progress.** Filed first and done first, because closing the other issues below is expected to resolve the reports they came from.
+   - [#122](https://github.com/ashuangiras/polaroid/issues/122): a registered repository identifier given where an ID is required is reported as "not registered".
+   - [#123](https://github.com/ashuangiras/polaroid/issues/123): client setup needs a documented user-level MCP entry and the refresh it needs.
+   - [#124](https://github.com/ashuangiras/polaroid/issues/124): `go.module.checks` should state a bare `go` line is a minimum, and that unpinned tools must suit the active toolchain.
+   - [#125](https://github.com/ashuangiras/polaroid/issues/125): a way to correct an execution whose run was genuine but whose recorded evidence is wrong.
+   - [#126](https://github.com/ashuangiras/polaroid/issues/126): `procedure.capability.extract` has no convention for a promotion-only run.
 
 ## Later (unordered, not yet scoped)
 

@@ -66,7 +66,7 @@ func TestWriteLimitsAreReportedAsEnforced(t *testing.T) {
 	for _, l := range memory.WriteLimits() {
 		want.Fields = append(want.Fields, fieldLimitJSON{Record: l.Record, Field: l.Field, Kind: string(l.Kind), MaxBytes: l.MaxBytes})
 	}
-	if encode(t, got) != encode(t, want) || len(got.Fields) != 37 {
+	if encode(t, got) != encode(t, want) || len(got.Fields) != 40 {
 		t.Fatalf("write_limits = %s\nwant %s", encode(t, got), encode(t, want))
 	}
 	i := slices.IndexFunc(got.Fields, func(f fieldLimitJSON) bool { return f.Record == "execution" && f.Field == "evidence" })
@@ -89,6 +89,7 @@ func TestOversizedWritesStoreNothing(t *testing.T) {
 	s := newTestServer(t)
 	w := newToilWorld(t, s)
 	binding := s.bind(t, "github.com/o/a", "verify", w.steps, `{"pin": 1}`).ID
+	report := idOf(t, s.mustPost(t, "/v1/feedback", feedbackRequest(nil)))
 	before := s.statistics(t)
 
 	text := strings.Repeat("Q", memory.MaxTextBytes+1)
@@ -102,6 +103,9 @@ func TestOversizedWritesStoreNothing(t *testing.T) {
 		limitViolationJSON{"revision.inputs", memory.MaxObjectBytes + 1, memory.MaxObjectBytes})
 	s.tooLarge(t, http.MethodPost, "/v1/feedback", feedbackRequest(map[string]string{"details": `"` + text + `"`}),
 		limitViolationJSON{"details", memory.MaxTextBytes + 1, memory.MaxTextBytes})
+	s.tooLarge(t, http.MethodPost, "/v1/feedback/"+report+"/resolution",
+		`{"outcome":"addressed","reason":"`+text+`","actor":"a.b"}`,
+		limitViolationJSON{"reason", memory.MaxTextBytes + 1, memory.MaxTextBytes})
 	s.tooLarge(t, http.MethodPost, "/v1/procedures/"+w.phases+"/retirement", lifecycleBody(0, text),
 		limitViolationJSON{"reason", memory.MaxTextBytes + 1, memory.MaxTextBytes})
 	s.tooLarge(t, http.MethodPost, "/v1/executions/"+w.runA+"/invalidation", `{"reason":"`+text+`","actor":"a.b"}`,
