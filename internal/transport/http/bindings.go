@@ -56,7 +56,11 @@ func (a *api) getBinding(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) resolveBinding(w http.ResponseWriter, r *http.Request) {
-	query, ok := strictQuery(w, r, "environment", "commit", "inputs", "decisions")
+	query, ok := strictQuery(w, r, "environment", "commit", "inputs", "decisions", "format")
+	if !ok {
+		return
+	}
+	format, ok := planFormat(w, query)
 	if !ok {
 		return
 	}
@@ -65,7 +69,40 @@ func (a *api) resolveBinding(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
+	if format == "plan" {
+		a.respond(w, r, http.StatusOK, wire.NewBindingPlan(res))
+		return
+	}
 	a.respond(w, r, http.StatusOK, wire.NewBindingResolution(res))
+}
+
+// prepareExecution is resolve_binding, always projected to the compact plan
+// (#131), with a target required: preparing to run implies an exact commit
+// and effective inputs, unlike resolve_binding's optional target. It is a
+// thin, additive wrapper: the same ResolveBinding the HTTP and MCP
+// resolution calls already use, never a new engine or stored state.
+func (a *api) prepareExecution(w http.ResponseWriter, r *http.Request) {
+	query, ok := strictQuery(w, r, "environment", "commit", "inputs", "decisions")
+	if !ok {
+		return
+	}
+	var fields []fieldProblem
+	if !query.Has("commit") {
+		fields = append(fields, fieldProblem{Field: "commit", Message: "is required to prepare an execution"})
+	}
+	if !query.Has("inputs") {
+		fields = append(fields, fieldProblem{Field: "inputs", Message: "is required to prepare an execution"})
+	}
+	if len(fields) > 0 {
+		writeError(w, http.StatusBadRequest, errorDetail{Code: "invalid_request", Message: "commit and inputs are required to prepare an execution", Fields: fields})
+		return
+	}
+	res, err := a.svc.ResolveBinding(r.Context(), r.PathValue("id"), query.Get("environment"), targetQuery(query))
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	a.respond(w, r, http.StatusOK, wire.NewBindingPlan(res))
 }
 
 func (a *api) reviseBinding(w http.ResponseWriter, r *http.Request) {

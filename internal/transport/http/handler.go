@@ -60,6 +60,7 @@ func NewHandler(svc *memory.Service, logger *slog.Logger) http.Handler {
 	a.mux.HandleFunc("POST /v1/bindings/{id}/revisions", a.reviseBinding)
 	a.mux.HandleFunc("GET /v1/bindings/{id}/revisions/{revision}", a.getBindingRevision)
 	a.mux.HandleFunc("GET /v1/bindings/{id}/resolution", a.resolveBinding)
+	a.mux.HandleFunc("GET /v1/bindings/{id}/preparation", a.prepareExecution)
 	a.mux.HandleFunc("POST /v1/executions", a.recordExecution)
 	a.mux.HandleFunc("GET /v1/executions", a.listExecutions)
 	a.mux.HandleFunc("GET /v1/executions/{id}", a.getExecution)
@@ -306,9 +307,25 @@ func (a *api) getVersion(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	query, ok := strictQuery(w, r, "fields")
+	if !ok {
+		return
+	}
+	var fields []string
+	if query.Has("fields") {
+		var err error
+		if fields, err = wire.ParseFields(query.Get("fields"), wire.VersionFieldNames); err != nil {
+			writeError(w, http.StatusBadRequest, wire.InvalidRequest(err.Error(), "fields", err.Error()))
+			return
+		}
+	}
 	v, err := a.svc.Version(r.Context(), r.PathValue("id"), number)
 	if err != nil {
 		a.fail(w, r, err)
+		return
+	}
+	if fields != nil {
+		a.respond(w, r, http.StatusOK, wire.NewVersionProjection(v, fields))
 		return
 	}
 	a.respond(w, r, http.StatusOK, wire.NewVersion(v))
@@ -319,7 +336,11 @@ func (a *api) getGraph(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	query, ok := strictQuery(w, r, "repository", "environment", "commit", "inputs", "decisions")
+	query, ok := strictQuery(w, r, "repository", "environment", "commit", "inputs", "decisions", "format")
+	if !ok {
+		return
+	}
+	format, ok := planFormat(w, query)
 	if !ok {
 		return
 	}
@@ -339,6 +360,10 @@ func (a *api) getGraph(w http.ResponseWriter, r *http.Request) {
 	g, err := a.svc.CompositionGraph(r.Context(), r.PathValue("id"), number, rc)
 	if err != nil {
 		a.fail(w, r, err)
+		return
+	}
+	if format == "plan" {
+		a.respond(w, r, http.StatusOK, wire.NewGraphPlan(g))
 		return
 	}
 	a.respond(w, r, http.StatusOK, wire.NewGraphNode(g))

@@ -159,6 +159,21 @@ func snapshotPageQuery(w http.ResponseWriter, query url.Values) (memory.Page, bo
 	return page, true
 }
 
+// planFormat parses the optional "format" parameter of the graph and
+// resolution endpoints: "" or "full" (the default, the existing complete
+// tree) or "plan" (the compact, dependency-ordered projection, #131). Any
+// other value is 400 naming the field. On failure it writes the error
+// response.
+func planFormat(w http.ResponseWriter, query url.Values) (string, bool) {
+	switch f := query.Get("format"); f {
+	case "", "full", "plan":
+		return f, true
+	default:
+		writeError(w, http.StatusBadRequest, wire.InvalidRequest("format must be full or plan", "format", "must be full or plan"))
+		return "", false
+	}
+}
+
 // nonEmpty rejects a given but empty filter parameter, so it is never
 // mistaken for an absent one. On failure it writes the error response.
 func nonEmpty(w http.ResponseWriter, query url.Values, names ...string) bool {
