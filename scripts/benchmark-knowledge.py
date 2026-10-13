@@ -58,6 +58,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REPO = "github.com/ashuangiras/polaroid"
 PROTOCOL = "2026-07-28"
+ENV = "benchmark.local"
 GATE = ["gofmt -l .", "go vet ./..."]
 TOKEN_PATTERN = re.compile(r"[A-Za-z0-9]+|[^\sA-Za-z0-9]")
 try:
@@ -151,14 +152,17 @@ def complete(guidance: dict, keys: list[str]) -> None:
 
 def knowledge(agent: Client, scenario: str, binding: str, shared: bool, gap: bool, full_plan_checks: dict) -> None:
     agent.tool(scenario, "discover", {"task": "check a change to this repository by running its gates", "repository": REPO})
-    root = agent.tool(scenario, "read", {"repository": REPO, "binding": binding})
+    root = agent.tool(scenario, "read", {"repository": REPO, "binding": binding, "environment": ENV})
     check(root["inputs"] == {"gate_commands": GATE}, f"{scenario}: binding inputs {root['inputs']}")
     complete(root, ["inputs", "expected_outcome", "verification", "boundaries", "preconditions"])
-    if shared:
-        ref = root["contract"]["shared_guidance"]
-        rules = agent.tool(scenario, "read", {"canonical_key": ref["canonical_key"], "version": ref["version"]})
-        check(len(rules["contract"]["rules"]) >= 8, f"{scenario}: shared guidance incomplete")
     refs = {r["name"]: r for r in root["references"]}
+    if shared:
+        ref = refs["guidance"]
+        check(ref["selected_by"] == "pin" and ref["version"] == 1 and "condition" not in ref, f"{scenario}: guidance reference {ref}")
+        rules = agent.tool(scenario, "read", {"procedure_id": ref["procedure_id"], "version": ref["version"]})
+        ids = {r["id"] for r in rules["contract"]["rules"]}
+        cited = {c.strip() for s in root["instructions"]["steps"] for m in re.findall(r"\(guidance: ([^)]*)\)", s["action"]) for c in m.split(",")}
+        check(cited and cited <= ids, f"{scenario}: cited guidance rules {sorted(cited - ids)} are missing from {rules['canonical_key']} v{rules['version']}")
     check("build_command" not in root["inputs"], "build must be decided not applicable here")
     checks = refs["checks"]
     check(checks["inputs"] == full_plan_checks, f"{scenario}: checks inputs {checks['inputs']} != full API {full_plan_checks}")
@@ -248,9 +252,9 @@ def main() -> int:
         executions_before = len(http(base, "GET", "/v1/executions")["executions"])
         knowledge(agent, "knowledge-cold", "check-small", False, False, full_plan_checks)
         knowledge(agent, "knowledge-cold-shared", "check-small-kf", True, False, full_plan_checks)
-        agent.tool("knowledge-warm", "read", {"repository": REPO, "binding": "check-small"})
+        agent.tool("knowledge-warm", "read", {"repository": REPO, "binding": "check-small", "environment": ENV})
         run_gate(GATE)
-        agent.tool("knowledge-warm-shared", "read", {"repository": REPO, "binding": "check-small-kf"})
+        agent.tool("knowledge-warm-shared", "read", {"repository": REPO, "binding": "check-small-kf", "environment": ENV})
         run_gate(GATE)
         knowledge(agent, "knowledge-gap", "check-small-kf", True, True, full_plan_checks)
         check(len(http(base, "GET", "/v1/executions")["executions"]) == executions_before, "a knowledge scenario wrote an execution")

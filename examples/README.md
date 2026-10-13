@@ -47,7 +47,7 @@ EOF
 
 ## Knowledge-first example
 
-[knowledge-first/](knowledge-first) is the representative example of [ADR-0043](../docs/architecture/decisions/0043-knowledge-first-agent-mode.md): `agent.guidance.shared` states once the universal rules that `dev.change.verify` v4 repeats inline (exact target, deciding conditional references first, scope, no implied verification, concise evidence, classifying failures, no side effects), and `dev.change.check` is that procedure's method for a run that records nothing, naming the shared guidance in its contract (`shared_guidance`, read once per session). It references the development procedures `go.module.build`, `go.module.checks` and `dev.ci.hosted`, so load [development/](development) first; `make records-check` does. `scripts/benchmark-knowledge.py` measures it against `dev.change.verify` v4.
+[knowledge-first/](knowledge-first) is the representative example of [ADR-0043](../docs/architecture/decisions/0043-knowledge-first-agent-mode.md): `agent.guidance.shared` states once the universal rules that `dev.change.verify` v4 repeats inline (exact target, deciding conditional references first, scope, no implied verification, concise evidence, classifying failures, no side effects), and `dev.change.check` is that procedure's method for a run that records nothing, with the shared guidance as a required reference pinned to version 1 (validated by Polaroid when the version is written, read once per session). It references the development procedures `go.module.build`, `go.module.checks` and `dev.ci.hosted`, so load [development/](development) first; `make records-check` does. `scripts/benchmark-knowledge.py` measures it against `dev.change.verify` v4.
 
 ## Polaroid's development procedures
 

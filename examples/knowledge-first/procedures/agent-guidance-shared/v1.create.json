@@ -2,11 +2,11 @@
   "canonical_key": "agent.guidance.shared",
   "version": {
     "philosophy": "Rules that hold for every procedure are stated once, versioned, and read once per session, instead of being copied into every procedure that needs them.",
-    "method": "Read this version once per session and apply its rules to every procedure whose contract names it as shared_guidance.",
+    "method": "Read this version once per session and apply its rules to every procedure version that references it.",
     "goal": "State the universal rules an agent follows whenever it applies a procedure.",
     "applicability": { "shared": {} },
     "contract": {
-      "applies_to": "Every procedure whose contract names agent.guidance.shared at this version as shared_guidance. A procedure's own contract wins where it is stricter.",
+      "applies_to": "Every procedure version that references agent.guidance.shared, pinned to this version, as a required reference. That version's own contract wins where it is stricter.",
       "rules": [
         { "id": "target", "rule": "Work on one exact target: the repository, the full commit (git rev-parse HEAD), the working-tree state (git status --porcelain) and the environment. Another commit, even with an identical tree, is another target." },
         { "id": "target-stable", "rule": "If the commit, the working tree, the inputs or the environment change during the work, stop and establish the target again." },

@@ -6,7 +6,6 @@
     "goal": "Check one commit of a repository by running its gates through the referenced procedures, without recording executions.",
     "applicability": { "shared": {} },
     "contract": {
-      "shared_guidance": { "canonical_key": "agent.guidance.shared", "version": 1 },
       "inputs": {
         "build_command": "Optional. Present: the gate needs artifacts built first, and the build reference applies.",
         "artifacts": "Passed to the build reference.",
@@ -28,15 +27,21 @@
     },
     "instructions": {
       "steps": [
-        { "id": "target", "action": "Establish the target (shared guidance: target)." },
-        { "id": "decide", "action": "build applies when the inputs name a build_command. hosted-ci applies as its condition says; read the repository's hosted-ci binding for its policy." },
+        { "id": "target", "action": "Read the guidance reference once per session, then establish the target (guidance: target, target-stable)." },
+        { "id": "decide", "action": "build applies when the inputs name a build_command. hosted-ci applies as its condition says; read the repository's hosted-ci binding for its policy (guidance: decide-first)." },
         { "id": "run", "action": "Follow the applicable references in order: build, checks, hosted-ci. Read each child's guidance before following it, and run it once with the inputs its reference maps." },
         { "id": "assess", "action": "Judge each child's outcome against its own contract, not only exit statuses." },
-        { "id": "report", "action": "Report the target, the scope, each command's exit status and excerpt, and which references were skipped and why." },
-        { "id": "on-failure", "action": "Classify the failure (shared guidance: classify-failures). Only a procedural finding becomes feedback on the version followed." }
+        { "id": "report", "action": "Report the target, the scope, each command's exit status and excerpt, and which references were skipped and why (guidance: scope, concise-evidence, no-implied-verification)." },
+        { "id": "on-failure", "action": "Classify the failure (guidance: classify-failures). Only a procedural finding becomes feedback on the version followed." }
       ]
     },
     "references": [
+      {
+        "name": "guidance",
+        "procedure_id": "agent.guidance.shared",
+        "version_policy": { "pin": 1 },
+        "inputs": {}
+      },
       {
         "name": "build",
         "procedure_id": "go.module.build",
@@ -58,6 +63,6 @@
         "condition": "The repository's hosted-ci binding policy requires hosted verification; local-only makes it not applicable."
       }
     ],
-    "revision_reason": "Knowledge-first representative example (#131, ADR-0043): dev.change.verify v4's method for a run that records nothing, with its universal rules moved to agent.guidance.shared v1."
+    "revision_reason": "Knowledge-first representative example (#131, ADR-0043): dev.change.verify v4's method for a run that records nothing, with its universal rules moved to agent.guidance.shared v1, a required reference pinned to that exact version."
   }
 }
