@@ -2,6 +2,14 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
+**Knowledge remote, as of 2026-10-14.**
+
+- **The installed instance now has a remote:** a private knowledge repository, configured as source `corpus` (HTTPS, branch `main`, publisher `operator.deploy-check`, push permitted) in `~/.polaroid/data/knowledge-sources.json`.
+- **History pushed unchanged:** Polaroid's own operator push sent the existing history (3 publications, 15 objects, 3,170 bytes) to `main`. The active snapshot is still `73008e9`.
+- **Distribution verified:** a separate, temporary instance fetched, validated and activated the knowledge from the remote alone. A real agent then discovered and read it there. Untrusted publishers, push without permission and activation without validation were all refused.
+- **Operator workflow:** [knowledge-remotes.md](knowledge-remotes.md) documents it, including the trust-policy format, which was not documented before.
+- **No code or binary changes.**
+
 **Stable `main` baseline, as of 2026-10-14.** PR #133 merged as `acb5303` (tree identical to the gated `c2f5164`). Supersedes the integration handoff below, which is kept as history.
 
 - **Gate on `acb5303` itself:** `make check` (lint 0 issues, docs-check 782 links, loader-check 33/0, nothing cached), `make vuln` (0 affecting the code), `make demo`, `make e2e` 313/0, `make e2e-mcp E2E_INTEROP=0` 137/0, `make lifecycle` 69/0, Linux amd64/arm64 build, vet and lint, MCP contract tests, `-race` knowledge, sync and recovery packages, and the daemon knowledge tests: all pass.

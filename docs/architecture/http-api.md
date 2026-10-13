@@ -681,6 +681,7 @@ Example `invalid_request` response:
 
 - **Authentication:** every request, reads included, must carry the daemon's generated operator token in `Polaroid-Operator-Token`, checked in constant time. Binding to loopback is not treated as sufficient authorisation by itself, since other local processes can reach a loopback-bound port too. The token is generated on first start at `<knowledge-dir>-operator-token` (mode 0600, alongside the default `~/.polaroid/data/knowledge` directory) and read on every later start; `polaroid`'s `knowledge-*` commands send it from `$POLAROID_KNOWLEDGE_TOKEN`.
 - **Credentials:** `fetch` and `push` take `{"credentials": {"username","password","ssh_key","ssh_passphrase","known_hosts"}}`, used for that one call only, and never stored, logged or returned.
+- **Remotes:** sources come from the trust-policy file `<knowledge-dir>-sources.json`, read at start. [knowledge-remotes.md](../development/knowledge-remotes.md) gives its format and the operator workflow.
 - **Readiness:** `GET status`'s `"empty": true` means no knowledge has been published or activated yet; this is a normal, expected state, not an error. If the knowledge path could not start (for example its directory could not be created), the daemon logs why and serves neither `/mcp/agent` nor `/v1/knowledge/*`; the legacy API and full-mode MCP are unaffected.
 
 | Method and path | Success | Purpose |
