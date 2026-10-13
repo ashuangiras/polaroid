@@ -90,12 +90,15 @@ type Repository struct {
 	st  *lockedStorage
 	lim Limits
 
+	instance string
+
 	wmu       sync.Mutex // one writer in this process; flock covers other processes
 	mu        sync.Mutex // guards the caches below
 	indexes   map[Snapshot]*index
 	reachable map[Snapshot]bool        // snapshots at or below the active one
 	blobs     map[plumbing.Hash][]byte // verified content; ids never change meaning
 	blobBytes int
+	imported  map[Snapshot]map[Snapshot]bool // by activation journal head
 }
 
 const blobCacheBytes = 32 << 20
@@ -130,7 +133,12 @@ func Open(dir string, opt Options) (*Repository, error) {
 	if err := os.MkdirAll(filepath.Join(dir, tmpName), 0o700); err != nil { //nolint:gosec // inside the repository directory
 		return nil, err
 	}
-	return &Repository{dir: dir, st: st, lim: lim, indexes: map[Snapshot]*index{}, reachable: map[Snapshot]bool{}, blobs: map[plumbing.Hash][]byte{}}, nil
+	r := &Repository{dir: dir, st: st, lim: lim, indexes: map[Snapshot]*index{}, reachable: map[Snapshot]bool{}, blobs: map[plumbing.Hash][]byte{}}
+	if err := r.loadInstance(); err != nil {
+		_ = st.Close()
+		return nil, err
+	}
+	return r, nil
 }
 
 func (r *Repository) Close() error { return r.st.Close() }

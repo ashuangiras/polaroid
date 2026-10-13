@@ -11,7 +11,9 @@ import (
 )
 
 // journalRef is a local history of activations: one commit, with the empty
-// tree, per Advance. It is never sent to a remote.
+// tree, per Advance, written before the active ref moves (an interrupted
+// activation leaves an entry whose move did not happen; Verify warns). It
+// is never sent to a remote.
 const journalRef = "refs/polaroid/activations"
 
 // Advance makes an imported snapshot active, as a fast-forward of the
@@ -35,6 +37,11 @@ type Advance struct {
 // in the reflog and in the activation journal; the target's commits keep
 // their own identity, authors and messages.
 func (r *Repository) Advance(ctx context.Context, a Advance) error {
+	for _, t := range a.Trailers {
+		if t.Key == "Activated" || t.Key == "Previous" {
+			return invalid("trailer %s is recorded by Advance itself", t.Key)
+		}
+	}
 	trailers := append(append([]Trailer(nil), a.Trailers...), Trailer{"Activated", string(a.Target)}, Trailer{"Previous", previous(a.Expected)})
 	msg, err := (&Publication{Author: a.Author, Subject: a.Subject, Body: a.Body, Trailers: trailers}).message(r.lim)
 	if err != nil {
@@ -90,6 +97,12 @@ func (r *Repository) Advance(ctx context.Context, a Advance) error {
 		when = time.Now()
 	}
 	sig := object.Signature{Name: a.Author, Email: a.Author + "@polaroid.invalid", When: when.UTC().Truncate(time.Second)}
+	// The journal comes first: whatever is active was recorded, so nothing
+	// imported is ever mistaken for a local publication.
+	if err := r.appendJournal(sig, msg); err != nil {
+		return err
+	}
+	hook("journal-durable")
 	if err := r.setActive(a.Target); err != nil {
 		return err
 	}
@@ -99,9 +112,6 @@ func (r *Repository) Advance(ctx context.Context, a Advance) error {
 	}
 	if err := r.appendReflog(active, a.Target, sig, "activate: "+strings.TrimSpace(a.Subject)); err != nil {
 		return fmt.Errorf("activated %s, but the reflog was not updated: %w", a.Target, err)
-	}
-	if err := r.appendJournal(sig, msg); err != nil {
-		return fmt.Errorf("activated %s, but the activation journal was not updated: %w", a.Target, err)
 	}
 	return nil
 }

@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -78,6 +79,18 @@ func (r *Repository) Verify(ctx context.Context) (Report, error) {
 	}
 	if ents, err := os.ReadDir(filepath.Join(r.dir, tmpName)); err == nil && len(ents) > 0 {
 		rep.Warnings = append(rep.Warnings, fmt.Sprintf("%d temp files left by an interrupted writer (removed by the next publication)", len(ents)))
+	}
+	if head, err := r.readRef(journalRef); err != nil {
+		rep.problem("activation journal: %v", err)
+	} else if head != "" {
+		c, err := object.GetCommit(r.st, plumbing.NewHash(string(head)))
+		if err != nil {
+			rep.problem("activation journal: %v", err)
+		} else if target, _, err := journalMove(c); err != nil {
+			rep.problem("%v", err)
+		} else if !slices.ContainsFunc(entries, func(e reflogEntry) bool { return e.to == target }) {
+			rep.Warnings = append(rep.Warnings, fmt.Sprintf("the last recorded activation, of %s, did not complete", target))
+		}
 	}
 	return rep, nil
 }
