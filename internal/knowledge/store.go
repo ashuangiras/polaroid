@@ -21,6 +21,14 @@ type Store interface {
 	// Log lists publications from a published snapshot along first
 	// parents, newest first.
 	Log(ctx context.Context, from Snapshot, limit int) ([]LogEntry, error)
+	// Advance makes a stored snapshot that arrived from elsewhere active, as
+	// a fast-forward of Expected: ErrStale when Expected is no longer active,
+	// ErrDiverged when Target does not descend from it, ErrNotFound when
+	// Target was never accepted into storage. Check sees Target's complete
+	// tree first; its error refuses the move.
+	Advance(ctx context.Context, a Advance) error
+	// Activations lists the recorded activations, newest first.
+	Activations(ctx context.Context, limit int) ([]ActivationEntry, error)
 }
 
 // Files is a read view of one snapshot's tree.
@@ -63,4 +71,25 @@ type LogEntry struct {
 type PathChange struct {
 	Path   string
 	Action string
+}
+
+type Advance struct {
+	Expected Snapshot
+	Target   Snapshot
+	Author   string
+	Subject  string
+	Body     string
+	Trailers []Trailer
+	Check    func(Files) error
+}
+
+// ActivationEntry is one recorded Advance.
+type ActivationEntry struct {
+	Target   Snapshot
+	Previous Snapshot
+	Author   string
+	When     time.Time
+	Subject  string
+	Body     string
+	Trailers []Trailer
 }

@@ -27,6 +27,8 @@ func mapErr(err error) error {
 		return fmt.Errorf("%w: %v", knowledge.ErrStale, err) //nolint:errorlint // Git-core errors stay text: callers match knowledge errors only
 	case errors.Is(err, gitcore.ErrNotFound):
 		return fmt.Errorf("%w: %v", knowledge.ErrNotFound, err) //nolint:errorlint // Git-core errors stay text: callers match knowledge errors only
+	case errors.Is(err, gitcore.ErrDiverged):
+		return fmt.Errorf("%w: %v", knowledge.ErrDiverged, err) //nolint:errorlint // Git-core errors stay text: callers match knowledge errors only
 	case errors.Is(err, gitcore.ErrCorrupt):
 		return fmt.Errorf("%w: %v", knowledge.ErrCorrupt, err) //nolint:errorlint // Git-core errors stay text: callers match knowledge errors only
 	case errors.Is(err, gitcore.ErrInvalid):
@@ -103,6 +105,63 @@ func (s *Store) Log(ctx context.Context, from knowledge.Snapshot, limit int) ([]
 		}
 		for _, ch := range c.Changed {
 			e.Changed = append(e.Changed, knowledge.PathChange{Path: ch.Path, Action: string(ch.Action)})
+		}
+		out[i] = e
+	}
+	return out, nil
+}
+
+// Files is the knowledge view of a Git-core tree, such as a fetched
+// candidate's, for knowledge.Load.
+func Files(t *gitcore.Tree) knowledge.Files { return files{t} }
+
+func (s *Store) Advance(ctx context.Context, a knowledge.Advance) error {
+	adv := gitcore.Advance{Expected: gitcore.Snapshot(a.Expected), Target: gitcore.Snapshot(a.Target), Author: a.Author, Subject: a.Subject, Body: a.Body}
+	for _, t := range a.Trailers {
+		adv.Trailers = append(adv.Trailers, gitcore.Trailer{Key: t.Key, Value: t.Value})
+	}
+	if a.Check != nil {
+		adv.Validate = func(t *gitcore.Tree) error {
+			if err := a.Check(files{t}); err != nil {
+				return errCheck{err}
+			}
+			return nil
+		}
+	}
+	err := s.repo.Advance(ctx, adv)
+	var ec errCheck
+	if errors.As(err, &ec) {
+		return ec.err
+	}
+	return mapErr(err)
+}
+
+// Git-core records each activation's target and previous snapshot as the
+// last two trailers of its journal entry.
+const (
+	trailerActivated = "Activated"
+	trailerPrevious  = "Previous"
+)
+
+func (s *Store) Activations(ctx context.Context, limit int) ([]knowledge.ActivationEntry, error) {
+	commits, err := s.repo.Activations(ctx, limit)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	out := make([]knowledge.ActivationEntry, len(commits))
+	for i, c := range commits {
+		e := knowledge.ActivationEntry{Author: c.Author, When: c.When, Subject: c.Subject, Body: c.Body}
+		for _, t := range c.Trailers {
+			switch t.Key {
+			case trailerActivated:
+				e.Target = knowledge.Snapshot(t.Value)
+			case trailerPrevious:
+				if t.Value != "none" {
+					e.Previous = knowledge.Snapshot(t.Value)
+				}
+			default:
+				e.Trailers = append(e.Trailers, knowledge.Trailer{Key: t.Key, Value: t.Value})
+			}
 		}
 		out[i] = e
 	}

@@ -27,6 +27,9 @@ var (
 	ErrInvalid = errors.New("invalid knowledge")
 	// ErrCorrupt: storage holds damaged data.
 	ErrCorrupt = errors.New("knowledge storage is damaged")
+	// ErrDiverged: an activation target does not descend from the active
+	// knowledge, so activating it would discard local publications.
+	ErrDiverged = errors.New("knowledge histories have diverged")
 )
 
 // Problem is one reason knowledge is invalid, at a field path such as
