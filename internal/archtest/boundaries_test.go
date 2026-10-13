@@ -10,6 +10,7 @@ import (
 
 	// Importing the checked packages makes `go test` re-run this test
 	// whenever they change, instead of reusing a cached pass.
+	_ "github.com/ashuangiras/polaroid/internal/gitcore"
 	_ "github.com/ashuangiras/polaroid/internal/lifecycle"
 	_ "github.com/ashuangiras/polaroid/internal/memory"
 	_ "github.com/ashuangiras/polaroid/internal/recovery"
@@ -30,8 +31,11 @@ func TestPackageBoundaries(t *testing.T) {
 		forbidden []string
 	}{
 		{"internal/memory", []string{"net/http", "database/sql", "modernc.org/sqlite",
-			module + "/internal/storage", module + "/internal/transport", module + "/cmd"}},
+			module + "/internal/storage", module + "/internal/transport", module + "/internal/gitcore", module + "/cmd"}},
 		{"internal/storage/sqlite", []string{"net/http", module + "/internal/transport", module + "/cmd"}},
+		// Git-core stores files and snapshots; it knows no procedures, records or transports.
+		{"internal/gitcore", slices.Concat(storage, []string{module + "/internal/memory", module + "/internal/transport", module + "/internal/recovery",
+			module + "/internal/lifecycle"})},
 		{"internal/transport/wire", slices.Concat(storage, []string{module + "/internal/transport/http", module + "/internal/transport/mcp", "github.com/modelcontextprotocol"})},
 		{"internal/transport/http", slices.Concat(storage, []string{module + "/internal/transport/mcp", "github.com/modelcontextprotocol"})},
 		{"internal/transport/mcp", slices.Concat(storage, []string{module + "/internal/transport/http"})},
