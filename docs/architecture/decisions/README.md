@@ -45,5 +45,7 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0039](0039-read-only-snapshot-transactions.md) | Multi-statement reads use read-only snapshot transactions | Accepted |
 | [0040](0040-feedback-resolution.md) | Feedback resolution: an append-only record of how a report was handled | Accepted |
 | [0041](0041-verification-artifacts.md) | Verification artifacts: a lightweight, local, gitignored build for independent review, never implying a release | Accepted |
+| [0042](0042-context-efficient-projections.md) | Context-efficient projections: `fields` on a version read, `format=plan` and `prepare_execution` | Accepted |
+| [0043](0043-knowledge-first-agent-mode.md) | Knowledge-first agent mode at `/mcp/agent`: discover, read, feedback; execution recording optional | Accepted (experimental endpoint) |
 
 Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.

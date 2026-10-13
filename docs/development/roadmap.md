@@ -119,6 +119,11 @@ Second-repository adoption trials are paused while the existing features are pre
    - [#125](https://github.com/ashuangiras/polaroid/issues/125): a way to correct an execution whose run was genuine but whose recorded evidence is wrong.
    - [#126](https://github.com/ashuangiras/polaroid/issues/126): `procedure.capability.extract` has no convention for a promotion-only run.
 
+## Agent-facing context efficiency
+
+1. [#131 Reduce Polaroid's agent-facing context consumption (MCP token usage)](https://github.com/ashuangiras/polaroid/issues/131): **first increment done** ([ADR-0042](../architecture/decisions/0042-context-efficient-projections.md)). A benchmark harness and a measured baseline ([context-efficiency-baseline.md](context-efficiency-baseline.md)), and an additive architecture proposal ([context-efficiency-proposal.md](context-efficiency-proposal.md)), of which two pieces are implemented: a `fields` projection on version reads, and a `format=plan` projection of `resolve_binding`/`get_graph` plus the new `prepare_execution` (39 tools, 25 read-only). Measured warm-run reduction: 79.6% fewer response tokens, exceeding the 70% target, with verification correctness checked by the same benchmark. Conditional fetch of immutable records (`ETag`/`If-None-Match`) is proposed but not yet implemented.
+2. Knowledge-first agent mode ([ADR-0043](../architecture/decisions/0043-knowledge-first-agent-mode.md)), same issue and PR #132: `/mcp/agent` with `discover`, `read` and `feedback`; execution recording optional; shared-guidance example. Measured cold success 24,798 → 6,410 tokens including session setup (estimate); one real Copilot CLI run per mode: 7,065 fewer prompt tokens per model call, equivalent work.
+
 ## Later (unordered, not yet scoped)
 
 - **The #85 assessment's automation (proposed, not filed):** a committed tool that applies `dev.change.classify` rules mechanically. Its inputs, outputs and acceptance criteria are in the live toil item `polaroid.change-classification.manual` (`candidate`; [#89](https://github.com/ashuangiras/polaroid/issues/89)) ([status](status.md)). Filing it as an issue is a decision for the owner.

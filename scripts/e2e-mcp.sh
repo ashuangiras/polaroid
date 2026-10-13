@@ -110,7 +110,7 @@ meta() { printf '"_meta":{"io.modelcontextprotocol/protocolVersion":"%s","io.mod
 post() { # post METHOD NAME PARAMS_INNER [PROTOCOL]: PARAMS_INNER are the params members before _meta, sent verbatim
 	local v="${4:-$PROTO}" sep=""
 	[[ -n "$3" ]] && sep=","
-	curl -sS -X POST "$URL/mcp" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+	curl -sS -X POST "$URL${MCP_PATH:-/mcp}" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
 		-H "Mcp-Protocol-Version: $v" -H "Mcp-Method: $1" ${2:+-H "Mcp-Name: $2"} \
 		--data-binary "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$1\",\"params\":{$3$sep$(meta "$v")}}"
 }
@@ -147,11 +147,11 @@ note "The raw request behind \`post server/discover\`:" '```http' \
 
 ########################################################################
 section "Tool catalogue" \
-	"39 tools mirror the HTTP API one-to-one. 24 only read (including \`discover_procedures\` and \`suggest_duplicates\`, which store nothing, and \`get_catalog_statistics\`) and are annotated \`readOnlyHint\`; 15 write (create/revise procedure, record procedure origin, register repository, add repository alias, create/revise binding, record execution, report feedback, resolve feedback, create/revise toil item, invalidate execution, retire/reactivate procedure) and are annotated non-destructive (they only append). Every tool advertises a JSON Schema generated from its argument type: flat arguments named after record fields, optional ones not required." \
+	"40 tools mirror the HTTP API one-to-one. 25 only read (including \`discover_procedures\` and \`suggest_duplicates\`, which store nothing, \`get_catalog_statistics\`, and \`prepare_execution\`, a compact, dependency-ordered execution plan) and are annotated \`readOnlyHint\`; 15 write (create/revise procedure, record procedure origin, register repository, add repository alias, create/revise binding, record execution, report feedback, resolve feedback, create/revise toil item, invalidate execution, retire/reactivate procedure) and are annotated non-destructive (they only append). Every tool advertises a JSON Schema generated from its argument type: flat arguments named after record fields, optional ones not required." \
 	"An MCP client lists tools automatically. By hand: \`post tools/list \"\" \"\"\`."
 show 'post tools/list "" "" | jq -c "[.result.tools[] | {name, readOnly: .annotations.readOnlyHint, destructive: .annotations.destructiveHint, required: .inputSchema.required}]" | jq -c ".[]"'
-check "39 tools" equal "$(wc -l <<<"$LAST" | tr -d ' ')" 39
-check "24 read-only tools" equal "$(grep -c '"readOnly":true' <<<"$LAST")" 24
+check "40 tools" equal "$(wc -l <<<"$LAST" | tr -d ' ')" 40
+check "25 read-only tools" equal "$(grep -c '"readOnly":true' <<<"$LAST")" 25
 check "the 15 write tools are marked non-destructive" equal "$(grep -c '"readOnly":false,"destructive":false' <<<"$LAST")" 15
 show 'post tools/list "" "" | jq ".result.tools[] | select(.name == \"get_graph\") | .inputSchema"'
 check "get_graph requires procedure_id and version; repository and environment are optional" out_has '"required": ['
@@ -483,6 +483,22 @@ show 'curl -sS -o /dev/null -w "%{http_code}\n" -X POST "$URL/mcp" -H "Sec-Fetch
 check "a cross-site browser request: 403" equal "$LAST" 403
 
 ########################################################################
+section "Agent mode: discover, read, feedback" \
+	"\`/mcp/agent\` (ADR-0043) serves only the three tools everyday procedural-knowledge use needs, so an agent never loads the full API's schemas. \`read\` returns executable guidance without history; nothing records executions, and following a procedure verifies nothing by itself. Only a finding about the procedure itself becomes classified \`feedback\`; product defects, environment problems and transient failures are refused." \
+	"Point an MCP client at \`http://127.0.0.1:7417/mcp/agent\`."
+RUNS_BEFORE="$(tool list_executions '{}' | text)"
+LAST="$(MCP_PATH=/mcp/agent post tools/list "" "" | jq -c '[.result.tools[].name] | sort')"
+md '```text' 'tools/list at /mcp/agent' "$LAST" '```'
+check "agent mode lists exactly discover, feedback and read" equal "$LAST" '["discover","feedback","read"]'
+MCP_PATH=/mcp/agent step read "{\"procedure_id\":\"$LEAF\"}" '{version, philosophy: has("philosophy"), contract: has("contract"), instructions: has("instructions")}'
+check "read returns guidance without philosophy or history" json_has '.philosophy == false and .contract and .instructions'
+MCP_PATH=/mcp/agent step feedback "{\"procedure_id\":\"$LEAF\",\"version\":1,\"classification\":\"environment_problem\",\"summary\":\"s\",\"details\":\"d\",\"reporter\":\"manual.agent\"}" '.error.code'
+check "an environment problem is not procedural feedback: invalid_request" json_has '. == "invalid_request"'
+MCP_PATH=/mcp/agent step feedback "{\"procedure_id\":\"$LEAF\",\"version\":1,\"classification\":\"missing_precondition\",\"summary\":\"Needs a toolchain check\",\"details\":\"The contract names no Go version.\",\"reporter\":\"manual.agent\"}" '{classification}'
+check "a missing precondition is stored as classified feedback" json_has '. == {"classification":"missing_precondition"}'
+check "agent mode wrote no execution" equal "$(tool list_executions '{}' | text)" "$RUNS_BEFORE"
+
+########################################################################
 section "Records written over MCP persist" \
 	"MCP writes go through the same service and SQLite transactions as HTTP. After a graceful restart, everything the agent wrote is still there." \
 	"Stop and restart \`polaroidd\`, then read again."
@@ -525,10 +541,10 @@ await client.close().catch(() => {});
 EOF
 show '(cd "$TSDIR" && node probe.mjs "$URL/mcp")'
 check "TypeScript SDK 1.32.1 connects at 2025-11-25, without a session" out_has "negotiated: 2025-11-25 session: none"
-check "...lists all 39 tools" out_has "connected; tools: 39"
+check "...lists all 40 tools" out_has "connected; tools: 40"
 check "...and records feedback" out_has "report_feedback: ts.sdk"
 show '(cd "$TSDIR" && npx --no-install mcp-inspector --cli "$URL/mcp" --transport http --method tools/list 2>/dev/null | jq -c "[.tools[].name] | length")'
-check "MCP Inspector 2.10.1 lists the 39 tools" equal "$LAST" 39
+check "MCP Inspector 2.10.1 lists the 40 tools" equal "$LAST" 40
 fi
 VSCODE_GITHUB="/Applications/Visual Studio Code.app/Contents/Resources/app/node_modules.asar.unpacked/@github"
 if [[ "${E2E_INTEROP:-1}" == 0 ]]; then
