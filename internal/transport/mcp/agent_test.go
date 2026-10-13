@@ -217,6 +217,71 @@ func TestAgentSharedGuidanceIsAPinnedReference(t *testing.T) {
 	full.fail(t, "create_procedure", strings.Replace(guidance("1"), "demo.uses-guidance", "demo.uses-retired", 1), "procedure_retired")
 }
 
+// Nested references: a contextual reference two levels below a binding needs
+// a context, and a child read in the binding's repository and environment
+// selects what resolve_binding selects at that depth; the pinned guidance of
+// the middle procedure is validated and reported the same way.
+func TestAgentReadNestedSelection(t *testing.T) {
+	full, agent := newAgentHarness(t)
+	const repo = "github.com/example/service"
+	def := `"philosophy":"p","method":"m","contract":{},"instructions":{},"revision_reason":"r"`
+	ref := func(name, id, policy string) string {
+		return `{"name":"` + name + `","procedure_id":"` + id + `","version_policy":` + policy + `,"inputs":{}}`
+	}
+	leaf := field(t, full.ok(t, "create_procedure", `{"canonical_key":"demo.leaf",`+def+`}`), "id")
+	full.ok(t, "revise_procedure", `{"procedure_id":"`+leaf+`","base_version":1,`+def+`}`)
+	g := field(t, full.ok(t, "create_procedure", `{"canonical_key":"demo.guidance",`+def+`}`), "id")
+	mid := field(t, full.ok(t, "create_procedure", `{"canonical_key":"demo.mid",`+def+`,"references":[`+ref("guidance", g, `{"pin":1}`)+`,`+ref("leaf", leaf, `{"contextual":{}}`)+`]}`), "id")
+	root := field(t, full.ok(t, "create_procedure", `{"canonical_key":"demo.root",`+def+`,"references":[`+ref("mid", mid, `{"pin":1}`)+`]}`), "id")
+	bid := field(t, full.ok(t, "create_binding", `{"repository":"`+repo+`","name":"nested","procedure_id":"`+root+`","inputs":{},"version_policy":{"pin":1},"revision_reason":"r"}`), "id")
+	full.ok(t, "record_execution", `{"procedure_id":"`+leaf+`","version":1,"repository":"`+repo+`","commit":"`+commit40+`","environment":{"name":"ci.test","attributes":{}},"inputs":{},"outcome":"succeeded","evidence":{"ran":"x"}}`)
+
+	if e := agent.fail(t, "read", `{"repository":"`+repo+`","binding":"nested"}`, "invalid_request"); !strings.Contains(e.Message, "context required") {
+		t.Fatalf("contextual reference two levels down, no environment = %+v", e)
+	}
+	b := decodeJSON(t, agent.ok(t, "read", `{"repository":"`+repo+`","binding":"nested","environment":"ci.test"}`))
+	if r := b["references"].([]any)[0].(map[string]any); r["procedure_id"] != mid || r["version"] != 1.0 || r["selected_by"] != "pin" {
+		t.Fatalf("binding read reference = %v", r)
+	}
+	res := decodeJSON(t, full.ok(t, "resolve_binding", `{"binding_id":"`+bid+`","environment":"ci.test"}`))
+	var resolved map[string]any
+	for _, e := range res["graph"].(map[string]any)["references"].([]any)[0].(map[string]any)["node"].(map[string]any)["references"].([]any) {
+		if e := e.(map[string]any); e["name"] == "leaf" {
+			resolved = e
+		}
+	}
+	if resolved["node"].(map[string]any)["version"] != 1.0 || resolved["selected_by"] != "evidence" {
+		t.Fatalf("resolve_binding leaf = %v", resolved)
+	}
+
+	refs := func(args string) map[string]map[string]any {
+		out := map[string]map[string]any{}
+		for _, r := range decodeJSON(t, agent.ok(t, "read", args))["references"].([]any) {
+			out[r.(map[string]any)["name"].(string)] = r.(map[string]any)
+		}
+		return out
+	}
+	if instr := agent.session.InitializeResult().Instructions; !strings.Contains(instr, "same repository and environment as the binding") {
+		t.Fatalf("agent instructions do not say how to read a binding's children: %q", instr)
+	}
+	in := refs(`{"procedure_id":"` + mid + `","version":1,"repository":"` + repo + `","environment":"ci.test"}`)
+	if in["leaf"]["version"] != 1.0 || in["leaf"]["selected_by"] != "evidence" || in["guidance"]["version"] != 1.0 || in["guidance"]["selected_by"] != "pin" {
+		t.Fatalf("child read in the binding's context must match resolve_binding: %v", in)
+	}
+	if out := refs(`{"procedure_id":"` + mid + `","version":1}`); out["leaf"]["version"] != 2.0 || out["leaf"]["selected_by"] != "latest" {
+		t.Fatalf("child read without a context selects as get_graph does, and says so: %v", out)
+	}
+
+	if e := full.fail(t, "revise_procedure", `{"procedure_id":"`+mid+`","base_version":1,`+def+`,"references":[`+ref("guidance", g, `{"pin":2}`)+`]}`, "invalid_request"); !slices.Contains(e.fields(), "references[0].version_policy.pin") {
+		t.Fatalf("nested guidance pinned to a missing version = %+v", e)
+	}
+	full.ok(t, "retire_procedure", `{"procedure_id":"`+g+`","base_event":0,"reason":"superseded","actor":"test.agent"}`)
+	if r := decodeJSON(t, agent.ok(t, "read", `{"procedure_id":"`+g+`","version":1}`)); r["retired"] != true {
+		t.Fatalf("retired guidance read = %v", r)
+	}
+	full.fail(t, "revise_procedure", `{"procedure_id":"`+mid+`","base_version":1,`+def+`,"references":[`+ref("guidance", g, `{"pin":1}`)+`]}`, "procedure_retired")
+}
+
 func TestAgentFeedback(t *testing.T) {
 	full, agent := newAgentHarness(t)
 	p := field(t, full.ok(t, "create_procedure", `{"canonical_key":"demo.fb","philosophy":"p","method":"m","contract":{},"instructions":{},"revision_reason":"r"}`), "id")

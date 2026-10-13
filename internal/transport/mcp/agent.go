@@ -21,7 +21,7 @@ import (
 
 const agentInstructions = `Polaroid agent mode: procedural knowledge, proven methods of working.
 1. discover a procedure for your task; with repository it also names that repository's bindings of the candidates.
-2. read it, or a repository binding, for executable guidance: contract, instructions, effective inputs, and each reference with the exact version and inputs of its child. Read a child before following it. Decide each conditional reference yourself from its condition.
+2. read it, or a repository binding, for executable guidance: contract, instructions, effective inputs, and each reference with the exact version and inputs of its child. Read a child before following it, with the same repository and environment as the binding so its references are selected as the binding's are. Decide each conditional reference yourself from its condition.
 3. Do the work with your own tools and check the outcome against the contract. Nothing is recorded here, and following a procedure verifies nothing by itself: an audit-grade verification claim needs evidence from your verification system (or the full API at /mcp).
 4. Only when the outcome shows the procedure itself is wrong, incomplete, ambiguous or improvable, send feedback with a classification. Product defects, environment problems and transient failures are not procedural knowledge: handle them, do not report them here.`
 

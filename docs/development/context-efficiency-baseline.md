@@ -63,18 +63,18 @@ The sections above measure the execution-recording workflow, kept as a regressio
 | Mode | Tools | Schema tokens | Instructions tokens |
 | --- | ---: | ---: | ---: |
 | full (`/mcp`) | 39 | 14,433 | 1,163 |
-| agent (`/mcp/agent`) | 3 | 1,024 | 324 |
+| agent (`/mcp/agent`) | 3 | 1,024 | 345 |
 
 | Scenario | Calls | Request | Response | Setup | **Total** |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | legacy-full: resolve, read ×2, record ×2, verify, resolve | 7 | 1,445 | 7,757 | 15,596 | **24,798** |
-| knowledge-cold, `dev.change.verify` v4 unchanged: discover, read binding, read checks | 3 | 447 | 4,594 | 1,348 | **6,389** (−74.2%) |
-| knowledge-cold-shared, `dev.change.check` + `agent.guidance.shared`: as above + shared guidance once | 4 | 582 | 3,189 | 1,348 | **5,119** (−79.4%) |
-| knowledge-gap: knowledge-cold-shared + one classified `feedback` | 5 | 826 | 3,236 | 1,348 | **5,410** (−78.2%) |
-| knowledge-warm, v4 (*conditional*): read binding only | 1 | 143 | 3,059 | 1,348 | 4,550 |
-| knowledge-warm-shared (*conditional*): read binding only | 1 | 145 | 1,038 | 1,348 | 2,531 |
+| knowledge-cold, `dev.change.verify` v4 unchanged: discover, read binding, read checks | 3 | 447 | 4,594 | 1,369 | **6,410** (−74.2%) |
+| knowledge-cold-shared, `dev.change.check` + `agent.guidance.shared`: as above + shared guidance once | 4 | 582 | 3,189 | 1,369 | **5,140** (−79.3%) |
+| knowledge-gap: knowledge-cold-shared + one classified `feedback` | 5 | 826 | 3,236 | 1,369 | **5,431** (−78.1%) |
+| knowledge-warm, v4 (*conditional*): read binding only | 1 | 143 | 3,059 | 1,369 | 4,571 |
+| knowledge-warm-shared (*conditional*): read binding only | 1 | 145 | 1,038 | 1,369 | 2,552 |
 
-Run at `8467a1c`. Binding reads pass `environment`, because the binding selects from evidence (agent-mode `read` refuses such a binding without context rather than guess).
+Run with the final agent instructions (2026-10-13). Binding reads pass `environment`, because the binding selects from evidence (agent-mode `read` refuses such a binding without context rather than guess).
 
 **Correctness, asserted before any number is printed:** both modes report 39 and 3 tools; every read root has `inputs`, `preconditions`, `expected_outcome`, `verification` and `boundaries` in its contract and non-empty instructions; `dev.change.check` lists the shared guidance as a required reference pinned to version 1, the guidance is read through that reference, and every rule id the procedure cites exists in that exact version; the `checks` child's mapped inputs equal the full API's own derivation (`prepare_execution`); the real gate passes; the legacy run is verified; no knowledge scenario writes an execution; the feedback is stored with its classification. The knowledge-gap finding is scripted, and labelled as such in the stored report.
 
@@ -101,7 +101,8 @@ Findings:
 - **Work quality was equivalent.** Both runs selected the same versions, ran the real gate, treated hosted CI as not applicable, modified nothing, and made no false verification claim. Neither recorded an execution, although the full-mode run could have.
 - **The fixed per-call context is the reliable difference:** 7,065 fewer prompt tokens on every model call, measured on the first call, where nothing else differs.
 - **Session totals are not a reliable comparison at n = 1.** Most model calls in both runs went to work outside the procedure that no Polaroid interface causes: shell commands the run was not permitted to use (`go version`, hashing the working tree) and reading `AGENTS.md`. The agent-mode run made 4 more model calls and still used 5% fewer prompt tokens in total.
-- **The agent-mode run passed `full: true` on every `read`,** so it received complete versions rather than the compact default; the compact projection saved nothing in this run.
+- **The agent-mode run passed `full: true` on every `read`, as the procedure told it to:** step `read` of `dev.change.verify` v4 says to "read the selected version in full (philosophy, method, contract and instructions)", and `philosophy` is only in a full read. That was legitimate, not overuse. It cost about 1,050 more estimated tokens over the four reads (6,108 compact, 7,160 full), of which `applicability`, `revision_reason` and `created_at` were not needed. The API is unchanged.
+- After this run, the agent-mode instructions gained one clause (read a binding's children with its repository and environment, so nested references select as the binding's do): 21 more estimated instruction tokens, not re-measured with a model.
 
 ## Reproducing
 
