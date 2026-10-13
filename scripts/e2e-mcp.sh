@@ -110,7 +110,7 @@ meta() { printf '"_meta":{"io.modelcontextprotocol/protocolVersion":"%s","io.mod
 post() { # post METHOD NAME PARAMS_INNER [PROTOCOL]: PARAMS_INNER are the params members before _meta, sent verbatim
 	local v="${4:-$PROTO}" sep=""
 	[[ -n "$3" ]] && sep=","
-	curl -sS -X POST "$URL/mcp" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+	curl -sS -X POST "$URL${MCP_PATH:-/mcp}" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
 		-H "Mcp-Protocol-Version: $v" -H "Mcp-Method: $1" ${2:+-H "Mcp-Name: $2"} \
 		--data-binary "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$1\",\"params\":{$3$sep$(meta "$v")}}"
 }
@@ -481,6 +481,22 @@ show 'curl -sS -o /dev/null -w "%{http_code}\n" -X POST "$URL/mcp" -H "Host: evi
 check "a foreign Host header (DNS rebinding): 403" equal "$LAST" 403
 show 'curl -sS -o /dev/null -w "%{http_code}\n" -X POST "$URL/mcp" -H "Sec-Fetch-Site: cross-site" -H "Content-Type: application/json" --data-binary "{}"'
 check "a cross-site browser request: 403" equal "$LAST" 403
+
+########################################################################
+section "Agent mode: discover, read, feedback" \
+	"\`/mcp/agent\` (ADR-0043) serves only the three tools everyday procedural-knowledge use needs, so an agent never loads the full API's schemas. \`read\` returns executable guidance without history; nothing records executions, and following a procedure verifies nothing by itself. Only a finding about the procedure itself becomes classified \`feedback\`; product defects, environment problems and transient failures are refused." \
+	"Point an MCP client at \`http://127.0.0.1:7417/mcp/agent\`."
+RUNS_BEFORE="$(tool list_executions '{}' | text)"
+LAST="$(MCP_PATH=/mcp/agent post tools/list "" "" | jq -c '[.result.tools[].name] | sort')"
+md '```text' 'tools/list at /mcp/agent' "$LAST" '```'
+check "agent mode lists exactly discover, feedback and read" equal "$LAST" '["discover","feedback","read"]'
+MCP_PATH=/mcp/agent step read "{\"procedure_id\":\"$LEAF\"}" '{version, philosophy: has("philosophy"), contract: has("contract"), instructions: has("instructions")}'
+check "read returns guidance without philosophy or history" json_has '.philosophy == false and .contract and .instructions'
+MCP_PATH=/mcp/agent step feedback "{\"procedure_id\":\"$LEAF\",\"version\":1,\"classification\":\"environment_problem\",\"summary\":\"s\",\"details\":\"d\",\"reporter\":\"manual.agent\"}" '.error.code'
+check "an environment problem is not procedural feedback: invalid_request" json_has '. == "invalid_request"'
+MCP_PATH=/mcp/agent step feedback "{\"procedure_id\":\"$LEAF\",\"version\":1,\"classification\":\"missing_precondition\",\"summary\":\"Needs a toolchain check\",\"details\":\"The contract names no Go version.\",\"reporter\":\"manual.agent\"}" '{classification}'
+check "a missing precondition is stored as classified feedback" json_has '. == {"classification":"missing_precondition"}'
+check "agent mode wrote no execution" equal "$(tool list_executions '{}' | text)" "$RUNS_BEFORE"
 
 ########################################################################
 section "Records written over MCP persist" \

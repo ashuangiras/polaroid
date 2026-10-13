@@ -1,0 +1,63 @@
+{
+  "canonical_key": "dev.change.check",
+  "version": {
+    "philosophy": "A change is checked by running the repository's own gate at one exact target, through the procedures that know how to build and check, and judging each result against its contract.",
+    "method": "Establish the target, decide the conditional references, run build (if applicable), checks and hosted CI (if applicable) through their references, judge each outcome against its contract, and report the result for that target and scope.",
+    "goal": "Check one commit of a repository by running its gates through the referenced procedures, without recording executions.",
+    "applicability": { "shared": {} },
+    "contract": {
+      "shared_guidance": { "canonical_key": "agent.guidance.shared", "version": 1 },
+      "inputs": {
+        "build_command": "Optional. Present: the gate needs artifacts built first, and the build reference applies.",
+        "artifacts": "Passed to the build reference.",
+        "gate_commands": "Passed to the checks reference.",
+        "packages": "Optional; passed to the checks reference for a {packages} placeholder."
+      },
+      "preconditions": [
+        "A local checkout of the repository at the commit to check.",
+        "The tools the gate commands need, at the versions the repository pins."
+      ],
+      "expected_outcome": "Each applicable reference ran once, in order, and met its own contract; the result is reported for the exact target and scope.",
+      "verification": [
+        "Every gate command exited 0 and met the success criterion of the checks reference.",
+        "When the build applied, it produced the declared artifacts."
+      ],
+      "boundaries": [
+        "The result holds only for the target and the commands that ran. It is not an audit-grade verification record; that needs the verification system's own evidence."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        { "id": "target", "action": "Establish the target (shared guidance: target)." },
+        { "id": "decide", "action": "build applies when the inputs name a build_command. hosted-ci applies as its condition says; read the repository's hosted-ci binding for its policy." },
+        { "id": "run", "action": "Follow the applicable references in order: build, checks, hosted-ci. Read each child's guidance before following it, and run it once with the inputs its reference maps." },
+        { "id": "assess", "action": "Judge each child's outcome against its own contract, not only exit statuses." },
+        { "id": "report", "action": "Report the target, the scope, each command's exit status and excerpt, and which references were skipped and why." },
+        { "id": "on-failure", "action": "Classify the failure (shared guidance: classify-failures). Only a procedural finding becomes feedback on the version followed." }
+      ]
+    },
+    "references": [
+      {
+        "name": "build",
+        "procedure_id": "go.module.build",
+        "version_policy": { "contextual": {} },
+        "inputs": { "build_command": { "input": "build_command" }, "artifacts": { "input": "artifacts" } },
+        "condition": "The inputs name a build_command."
+      },
+      {
+        "name": "checks",
+        "procedure_id": "go.module.checks",
+        "version_policy": { "pin": 4 },
+        "inputs": { "gate_commands": { "input": "gate_commands" }, "packages": { "input": "packages" } }
+      },
+      {
+        "name": "hosted-ci",
+        "procedure_id": "dev.ci.hosted",
+        "version_policy": { "pin": 1 },
+        "inputs": {},
+        "condition": "The repository's hosted-ci binding policy requires hosted verification; local-only makes it not applicable."
+      }
+    ],
+    "revision_reason": "Knowledge-first representative example (#131, ADR-0043): dev.change.verify v4's method for a run that records nothing, with its universal rules moved to agent.guidance.shared v1."
+  }
+}
