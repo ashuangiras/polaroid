@@ -43,7 +43,8 @@ type (
 		CanonicalKey string         `json:"canonical_key,omitzero"`
 		Version      int            `json:"version,omitzero" jsonschema:"default: the latest; not with binding"`
 		Repository   string         `json:"repository,omitzero"`
-		Binding      string         `json:"binding,omitzero" jsonschema:"a binding name in repository: its procedure, pinned version and inputs"`
+		Environment  string         `json:"environment,omitzero" jsonschema:"with repository: select contextual versions from evidence there, as resolve_binding does; required when a binding's selection depends on evidence"`
+		Binding      string         `json:"binding,omitzero" jsonschema:"a binding name in repository: its procedure, selected version and inputs"`
 		Inputs       jsontext.Value `json:"inputs,omitzero" jsonschema:"your effective inputs, to get each reference's mapped child inputs; not with binding"`
 		Full         bool           `json:"full,omitzero" jsonschema:"also philosophy, applicability, revision_reason and created_at"`
 	}
@@ -85,6 +86,7 @@ type (
 		Name         string         `json:"name"`
 		ProcedureID  string         `json:"procedure_id"`
 		Version      int            `json:"version"`
+		SelectedBy   string         `json:"selected_by"`
 		Condition    *string        `json:"condition,omitzero"`
 		Inputs       jsontext.Value `json:"inputs,omitzero"`
 		InputMapping jsontext.Value `json:"input_mapping,omitzero"`
@@ -93,6 +95,7 @@ type (
 		ProcedureID    string              `json:"procedure_id"`
 		CanonicalKey   string              `json:"canonical_key"`
 		Version        int                 `json:"version"`
+		SelectedBy     string              `json:"selected_by,omitzero"`
 		LatestVersion  int                 `json:"latest_version"`
 		Retired        bool                `json:"retired,omitzero"`
 		Scope          string              `json:"scope"`
@@ -192,6 +195,8 @@ func (t *tools) agentRead(ctx context.Context, in agentReadArgs) (any, error) {
 
 	procedureID, version, inputs := in.ProcedureID, in.Version, in.Inputs
 	var binding *agentBinding
+	var resolved *memory.GraphNode
+	var selectedBy memory.Selection
 	if in.Binding != "" {
 		bindings, _, err := t.svc.ListBindings(ctx, in.Repository, memory.Page{})
 		if err != nil {
@@ -207,10 +212,19 @@ func (t *tools) agentRead(ctx context.Context, in agentReadArgs) (any, error) {
 		}
 		rev := h.Revisions[len(h.Revisions)-1]
 		procedureID, inputs = h.Binding.ProcedureID, rev.Inputs
-		if rev.VersionPolicy.Kind == memory.PolicyPin {
-			version = rev.VersionPolicy.Pin
-		}
 		binding = &agentBinding{ID: h.Binding.ID, Revision: rev.Number, Repository: h.Binding.Repository, Name: h.Binding.Name}
+		switch {
+		case in.Environment != "":
+			res, err := t.svc.ResolveBinding(ctx, h.Binding.ID, in.Environment, nil)
+			if err != nil {
+				return nil, err
+			}
+			resolved, version, selectedBy = &res.Graph, res.Graph.Version, res.SelectedBy
+		case rev.VersionPolicy.Kind == memory.PolicyPin:
+			version, selectedBy = rev.VersionPolicy.Pin, memory.SelectedByPin
+		default:
+			return nil, contextRequired(in.Binding, "selects its version from evidence (a contextual policy)")
+		}
 	}
 
 	var h memory.History
@@ -230,18 +244,29 @@ func (t *tools) agentRead(ctx context.Context, in agentReadArgs) (any, error) {
 		return nil, fmt.Errorf("procedure %q version %d: %w", h.Procedure.ID, version, memory.ErrNotFound)
 	}
 	v := h.Versions[version-1]
-	g, err := t.svc.CompositionGraph(ctx, h.Procedure.ID, version, memory.ResolutionContext{})
-	if err != nil {
-		return nil, err
+	if resolved == nil {
+		var rc memory.ResolutionContext
+		if binding == nil {
+			rc = memory.ResolutionContext{Repository: in.Repository, Environment: in.Environment}
+		}
+		g, err := t.svc.CompositionGraph(ctx, h.Procedure.ID, version, rc)
+		if err != nil {
+			return nil, err
+		}
+		if binding != nil && hasContextual(g) {
+			return nil, contextRequired(in.Binding, "composes a reference selected from evidence (a contextual policy)")
+		}
+		resolved = &g
 	}
+	g := *resolved
 
 	out := agentGuidance{
-		ProcedureID: h.Procedure.ID, CanonicalKey: h.Procedure.CanonicalKey, Version: version, LatestVersion: h.Procedure.LatestVersion,
+		ProcedureID: h.Procedure.ID, CanonicalKey: h.Procedure.CanonicalKey, Version: version, SelectedBy: string(selectedBy), LatestVersion: h.Procedure.LatestVersion,
 		Retired: h.Procedure.Lifecycle == memory.LifecycleRetired, Scope: v.Applicability.Name(), Goal: v.Goal, Method: v.Method,
 		Binding: binding, Inputs: inputs, Contract: v.Contract, Instructions: v.Instructions,
 	}
 	for _, e := range g.Edges {
-		ref := agentReference{Name: e.Reference.Name, ProcedureID: e.Node.ProcedureID, Version: e.Node.Version, Condition: e.Reference.Condition}
+		ref := agentReference{Name: e.Reference.Name, ProcedureID: e.Node.ProcedureID, Version: e.Node.Version, SelectedBy: string(e.SelectedBy), Condition: e.Reference.Condition}
 		if inputs != nil {
 			if ref.Inputs, err = memory.MapInputs(e.Reference.Inputs, inputs); err != nil {
 				return nil, fmt.Errorf("map inputs of reference %q: %w", e.Reference.Name, err)
@@ -256,6 +281,24 @@ func (t *tools) agentRead(ctx context.Context, in agentReadArgs) (any, error) {
 		out.Applicability = wire.NewApplicability(v.Applicability)
 	}
 	return out, nil
+}
+
+// contextRequired refuses a binding read whose selection depends on evidence
+// when no environment was given: the full API's resolution needs one, and
+// guessing the latest version could hand the agent a version it never would
+// have selected (ADR-0013).
+func contextRequired(binding, why string) error {
+	return &memory.ValidationError{Problems: []memory.FieldProblem{{Field: "environment",
+		Message: fmt.Sprintf("context required: binding %q %s; pass environment to resolve it from evidence, as resolve_binding does", binding, why)}}}
+}
+
+func hasContextual(n memory.GraphNode) bool {
+	for _, e := range n.Edges {
+		if e.Reference.VersionPolicy.Kind == memory.PolicyContextual || hasContextual(e.Node) {
+			return true
+		}
+	}
+	return false
 }
 
 func (t *tools) agentFeedback(ctx context.Context, in agentFeedbackArgs) (any, error) {

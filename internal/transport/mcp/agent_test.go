@@ -85,7 +85,7 @@ func TestAgentDiscoverAndRead(t *testing.T) {
 		t.Fatalf("bindings = %v", d["bindings"])
 	}
 
-	text := agent.ok(t, "read", `{"repository":"github.com/example/service","binding":"change-module"}`)
+	text := agent.ok(t, "read", `{"repository":"github.com/example/service","binding":"change-module","environment":"ci.test"}`)
 	g := decodeJSON(t, text)
 	if g["procedure_id"] != root || g["version"] != 1.0 || g["method"] != "Change, tidy, check." || g["binding"].(map[string]any)["revision"] != 1.0 {
 		t.Fatalf("read binding = %s", text)
@@ -138,6 +138,83 @@ func TestAgentDiscoverAndRead(t *testing.T) {
 	if got := full.ok(t, "list_executions", `{}`); got != `{"executions":[]}` {
 		t.Fatalf("agent mode wrote executions: %s", got)
 	}
+}
+
+// read never guesses an evidence-based selection: a binding whose version or
+// references are selected from evidence needs environment, and with it the
+// selection is resolve_binding's own.
+func TestAgentReadSelection(t *testing.T) {
+	full, agent := newAgentHarness(t)
+	const repo = "github.com/example/service"
+	def := `"philosophy":"p","method":"m","contract":{},"instructions":{},"revision_reason":"r"`
+	p := field(t, full.ok(t, "create_procedure", `{"canonical_key":"demo.sel",`+def+`}`), "id")
+	full.ok(t, "revise_procedure", `{"procedure_id":"`+p+`","base_version":1,`+def+`}`)
+	full.ok(t, "create_binding", `{"repository":"`+repo+`","name":"sel","procedure_id":"`+p+`","inputs":{},"version_policy":{"contextual":{}},"revision_reason":"r"}`)
+
+	e := agent.fail(t, "read", `{"repository":"`+repo+`","binding":"sel"}`, "invalid_request")
+	if got := e.fields(); len(got) != 1 || got[0] != "environment" || !strings.Contains(e.Message, "context required") {
+		t.Fatalf("contextual binding without environment = %+v", e)
+	}
+	if g := decodeJSON(t, agent.ok(t, "read", `{"repository":"`+repo+`","binding":"sel","environment":"ci.test"}`)); g["version"] != 2.0 || g["selected_by"] != "latest" {
+		t.Fatalf("without evidence: %v", g)
+	}
+
+	full.ok(t, "record_execution", `{"procedure_id":"`+p+`","version":1,"repository":"`+repo+`","commit":"`+commit40+`","environment":{"name":"ci.test","attributes":{}},"inputs":{},"outcome":"succeeded","evidence":{"ran":"x"}}`)
+	g := decodeJSON(t, agent.ok(t, "read", `{"repository":"`+repo+`","binding":"sel","environment":"ci.test"}`))
+	res := decodeJSON(t, full.ok(t, "resolve_binding", `{"binding_id":"`+g["binding"].(map[string]any)["id"].(string)+`","environment":"ci.test"}`))
+	if g["version"] != 1.0 || g["selected_by"] != "evidence" || g["latest_version"] != 2.0 || res["graph"].(map[string]any)["version"] != 1.0 {
+		t.Fatalf("evidence must select version 1, as resolve_binding does: read %v, resolve %v", g, res["graph"])
+	}
+
+	ref := func(name, policy string) string {
+		return `{"name":"` + name + `","procedure_id":"` + p + `","version_policy":` + policy + `,"inputs":{}}`
+	}
+	q := field(t, full.ok(t, "create_procedure", `{"canonical_key":"demo.sel-parent",`+def+`,"references":[`+ref("child", `{"contextual":{}}`)+`]}`), "id")
+	full.ok(t, "create_binding", `{"repository":"`+repo+`","name":"pinned-parent","procedure_id":"`+q+`","inputs":{},"version_policy":{"pin":1},"revision_reason":"r"}`)
+	e = agent.fail(t, "read", `{"repository":"`+repo+`","binding":"pinned-parent"}`, "invalid_request")
+	if !strings.Contains(e.Message, "composes a reference selected from evidence") {
+		t.Fatalf("pinned binding over a contextual reference = %+v", e)
+	}
+	child := decodeJSON(t, agent.ok(t, "read", `{"repository":"`+repo+`","binding":"pinned-parent","environment":"ci.test"}`))["references"].([]any)[0].(map[string]any)
+	if child["version"] != 1.0 || child["selected_by"] != "evidence" {
+		t.Fatalf("child with environment = %v", child)
+	}
+	if c := decodeJSON(t, agent.ok(t, "read", `{"procedure_id":"`+q+`"}`))["references"].([]any)[0].(map[string]any); c["version"] != 2.0 || c["selected_by"] != "latest" {
+		t.Fatalf("without a context a procedure read selects as get_graph does, and says so: %v", c)
+	}
+	if c := decodeJSON(t, agent.ok(t, "read", `{"procedure_id":"`+q+`","repository":"`+repo+`","environment":"ci.test"}`))["references"].([]any)[0].(map[string]any); c["version"] != 1.0 || c["selected_by"] != "evidence" {
+		t.Fatalf("procedure read in a context = %v", c)
+	}
+	agent.fail(t, "read", `{"procedure_id":"`+q+`","environment":"ci.test"}`, "invalid_request")
+
+	r := field(t, full.ok(t, "create_procedure", `{"canonical_key":"demo.sel-pinned",`+def+`,"references":[`+ref("child", `{"pin":2}`)+`]}`), "id")
+	full.ok(t, "create_binding", `{"repository":"`+repo+`","name":"all-pinned","procedure_id":"`+r+`","inputs":{},"version_policy":{"pin":1},"revision_reason":"r"}`)
+	if g := decodeJSON(t, agent.ok(t, "read", `{"repository":"`+repo+`","binding":"all-pinned"}`)); g["selected_by"] != "pin" || g["references"].([]any)[0].(map[string]any)["version"] != 2.0 {
+		t.Fatalf("a fully pinned binding needs no environment: %v", g)
+	}
+}
+
+// Shared guidance is a required reference pinned to an exact version: a
+// missing version is refused when written, and read reports the pin even
+// after the guidance moves on, so it cannot be silently omitted or drift.
+func TestAgentSharedGuidanceIsAPinnedReference(t *testing.T) {
+	full, agent := newAgentHarness(t)
+	def := `"philosophy":"p","method":"m","contract":{"rules":[{"id":"target"}]},"instructions":{},"revision_reason":"r"`
+	gid := field(t, full.ok(t, "create_procedure", `{"canonical_key":"agent.guidance.shared",`+def+`}`), "id")
+	guidance := func(pin string) string {
+		return `{"canonical_key":"demo.uses-guidance","philosophy":"p","method":"m","contract":{},"instructions":{},"revision_reason":"r","references":[{"name":"guidance","procedure_id":"` + gid + `","version_policy":{"pin":` + pin + `},"inputs":{}}]}`
+	}
+	if e := full.fail(t, "create_procedure", guidance("2"), "invalid_request"); !slices.Contains(e.fields(), "references[0].version_policy.pin") {
+		t.Fatalf("a pin to a missing guidance version = %+v", e)
+	}
+	p := field(t, full.ok(t, "create_procedure", guidance("1")), "id")
+	full.ok(t, "revise_procedure", `{"procedure_id":"`+gid+`","base_version":1,`+def+`}`)
+	ref := decodeJSON(t, agent.ok(t, "read", `{"procedure_id":"`+p+`"}`))["references"].([]any)[0].(map[string]any)
+	if ref["name"] != "guidance" || ref["version"] != 1.0 || ref["selected_by"] != "pin" || ref["condition"] != nil {
+		t.Fatalf("guidance reference = %v", ref)
+	}
+	full.ok(t, "retire_procedure", `{"procedure_id":"`+gid+`","base_event":0,"reason":"superseded","actor":"test.agent"}`)
+	full.fail(t, "create_procedure", strings.Replace(guidance("1"), "demo.uses-guidance", "demo.uses-retired", 1), "procedure_retired")
 }
 
 func TestAgentFeedback(t *testing.T) {
