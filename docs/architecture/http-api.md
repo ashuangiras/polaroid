@@ -675,6 +675,27 @@ Example `invalid_request` response:
             {"field":"version.method","message":"is required"}]}}
 ```
 
+## Git-native knowledge (operator API)
+
+[ADR-0048](decisions/0048-git-native-agent-interface.md) adds a second, separate knowledge authority: living procedural knowledge in a Git-core repository, read by canonical key at an opaque snapshot token, with no procedure version, binding or evidence-based selection. It has its own agent interface (MCP agent mode at `/mcp/agent`, three tools: `discover`, `read`, `feedback`; see [mcp.md](mcp.md)) and this separate, explicit, operator-only HTTP surface at `/v1/knowledge/*`. Nothing here is reachable from agent mode, there is no scheduler, and nothing on this surface writes to or reads from the `/v1/procedures` catalog above: the two authorities never mix, and this milestone migrates no record between them.
+
+- **Authentication:** every request, reads included, must carry the daemon's generated operator token in `Polaroid-Operator-Token`, checked in constant time. Binding to loopback is not treated as sufficient authorisation by itself, since other local processes can reach a loopback-bound port too. The token is generated on first start at `<knowledge-dir>-operator-token` (mode 0600, alongside the default `~/.polaroid/data/knowledge` directory) and read on every later start; `polaroid`'s `knowledge-*` commands send it from `$POLAROID_KNOWLEDGE_TOKEN`.
+- **Credentials:** `fetch` and `push` take `{"credentials": {"username","password","ssh_key","ssh_passphrase","known_hosts"}}`, used for that one call only, and never stored, logged or returned.
+- **Readiness:** `GET status`'s `"empty": true` means no knowledge has been published or activated yet; this is a normal, expected state, not an error. If the knowledge path could not start (for example its directory could not be created), the daemon logs why and serves neither `/mcp/agent` nor `/v1/knowledge/*`; the legacy API and full-mode MCP are unaffected.
+
+| Method and path | Success | Purpose |
+| --- | --- | --- |
+| `GET /v1/knowledge/status` | `200` status | The active snapshot (`""` if none), whether it is empty, this instance's identity, its procedure count, and the configured sources (never their credentials). |
+| `POST /v1/knowledge/publications` | `201` publish result | Publish `{"base","changes","author","summary","rationale","finding","validation"}` (`finding`, `validation` optional). Each change is `{"key","remove","scope","repository","goal","philosophy","method","contract","instructions","references"}`; `remove: true` deletes the key. With `finding` naming a feedback report id, reconciliation is attempted immediately and reported in `reconciliation`; a failed reconciliation never undoes the publication, which has already succeeded. |
+| `POST /v1/knowledge/sources/{name}/fetch` | `200` candidate status | Transfer `{name}`'s knowledge into quarantine, with an optional `{"credentials"}` body. Nothing local changes. |
+| `POST /v1/knowledge/sources/{name}/validation` | `200` candidate status | Validate the source's fetched candidate: Git integrity, the trust policy's authorised publishers, and every new publication as a complete catalog. A rejected candidate's `problems` are in the result, not a request failure. |
+| `POST /v1/knowledge/sources/{name}/activation` | `201` activation result | Activate `{name}`'s validated, fast-forward candidate, from decision `{"author","summary","rationale","finding","validation"}`. |
+| `POST /v1/knowledge/sources/{name}/push` | `200` push result | Send the active knowledge to `{name}`, with an optional `{"credentials"}` body, as a fast-forward only; the policy must permit publishing to it. |
+| `GET /v1/knowledge/activations[?limit=…]` | `200 {"activations":[...]}` | Accepted activations, newest first (default limit 50). |
+| `POST /v1/knowledge/reconciliations/{finding_id}` | `200` reconciliation result | Resolve the feedback report as addressed once a local publication of this instance addresses it (its `Polaroid-Finding` trailer names the report, and it changed the report's key); idempotent and safe to call independently of publishing, including after a restart. `status` is `resolved`, `already_resolved` or `no_publication_yet`. |
+
+Error codes on this surface (same envelope as [Errors](#errors) above): `401 unauthorized` (missing or wrong token), `400 invalid_request`, `404 not_found` (unknown key, source or feedback id; also an empty catalog), `404 not_applicable` (the key does not apply in the given repository), `409 stale_snapshot` (`base` is no longer active), `409 diverged`, `409 behind`, `409 not_eligible` (the candidate is not in the right state for this step, for example activating one never validated), `403 forbidden` (the policy does not permit publishing to that source), `413 too_large`.
+
 ## CLI mapping
 
 `polaroid` is a thin client for this API. It prints each response body to stdout, also when the request fails. It exits with 0 for success, 1 for a failed request (any non-2xx status, or a transport error) and 2 for a usage error.
@@ -724,8 +745,16 @@ Example `invalid_request` response:
 | `polaroid get-toil-revision ID N` | `GET /v1/toil-items/{id}/revisions/{n}` |
 | `polaroid revise-toil-item ID [FILE]` | `POST /v1/toil-items/{id}/revisions` |
 | `polaroid statistics` | `GET /v1/statistics` |
+| `polaroid knowledge-status` | `GET /v1/knowledge/status` |
+| `polaroid knowledge-publish [FILE]` | `POST /v1/knowledge/publications` |
+| `polaroid knowledge-fetch SOURCE [FILE]` | `POST /v1/knowledge/sources/{source}/fetch` |
+| `polaroid knowledge-validate SOURCE` | `POST /v1/knowledge/sources/{source}/validation` |
+| `polaroid knowledge-activate SOURCE [FILE]` | `POST /v1/knowledge/sources/{source}/activation` |
+| `polaroid knowledge-push SOURCE [FILE]` | `POST /v1/knowledge/sources/{source}/push` |
+| `polaroid knowledge-activations [NAME=VALUE...]` | `GET /v1/knowledge/activations[?…]` |
+| `polaroid knowledge-reconcile FINDING_ID` | `POST /v1/knowledge/reconciliations/{finding_id}` |
 
-`FILE` defaults to stdin, and so does `-`. Trailing `NAME=VALUE` arguments of the list commands become query parameters, for example `polaroid list repository=github.com/ashuangiras/polaroid scope=shared limit=20`. Required arguments are sent as written, whatever they contain: `polaroid discover 'Add max_age=0 expiry tests' repository=github.com/o/r` sends the whole task. After them, an argument with `=` is a parameter; a parameter without a name, or another argument after a parameter, is a usage error (exit 2), and an unknown name is the server's `400`. The server is `-server URL`, else `$POLAROID_URL`, else `http://127.0.0.1:7417`.
+`FILE` defaults to stdin, and so does `-`. Trailing `NAME=VALUE` arguments of the list commands become query parameters, for example `polaroid list repository=github.com/ashuangiras/polaroid scope=shared limit=20`. Required arguments are sent as written, whatever they contain: `polaroid discover 'Add max_age=0 expiry tests' repository=github.com/o/r` sends the whole task. After them, an argument with `=` is a parameter; a parameter without a name, or another argument after a parameter, is a usage error (exit 2), and an unknown name is the server's `400`. The server is `-server URL`, else `$POLAROID_URL`, else `http://127.0.0.1:7417`. The `knowledge-*` commands send `$POLAROID_KNOWLEDGE_TOKEN` as `Polaroid-Operator-Token`.
 
 ### Local lifecycle commands
 
