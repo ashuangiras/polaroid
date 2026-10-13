@@ -63,20 +63,45 @@ The sections above measure the execution-recording workflow, kept as a regressio
 | Mode | Tools | Schema tokens | Instructions tokens |
 | --- | ---: | ---: | ---: |
 | full (`/mcp`) | 39 | 14,433 | 1,163 |
-| agent (`/mcp/agent`) | 3 | 977 | 324 |
+| agent (`/mcp/agent`) | 3 | 1,024 | 324 |
 
 | Scenario | Calls | Request | Response | Setup | **Total** |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | legacy-full: resolve, read ×2, record ×2, verify, resolve | 7 | 1,445 | 7,757 | 15,596 | **24,798** |
-| knowledge-cold, `dev.change.verify` v4 unchanged: discover, read binding, read checks | 3 | 437 | 4,554 | 1,301 | **6,292** (−74.6%) |
-| knowledge-cold-shared, `dev.change.check` + `agent.guidance.shared`: as above + shared guidance once | 4 | 568 | 3,094 | 1,301 | **4,963** (−80.0%) |
-| knowledge-gap: knowledge-cold-shared + one classified `feedback` | 5 | 812 | 3,141 | 1,301 | **5,254** (−78.8%) |
-| knowledge-warm, v4 (*conditional*): read binding only | 1 | 133 | 3,019 | 1,301 | 4,453 |
-| knowledge-warm-shared (*conditional*): read binding only | 1 | 135 | 942 | 1,301 | 2,378 |
+| knowledge-cold, `dev.change.verify` v4 unchanged: discover, read binding, read checks | 3 | 447 | 4,594 | 1,348 | **6,389** (−74.2%) |
+| knowledge-cold-shared, `dev.change.check` + `agent.guidance.shared`: as above + shared guidance once | 4 | 582 | 3,189 | 1,348 | **5,119** (−79.4%) |
+| knowledge-gap: knowledge-cold-shared + one classified `feedback` | 5 | 826 | 3,236 | 1,348 | **5,410** (−78.2%) |
+| knowledge-warm, v4 (*conditional*): read binding only | 1 | 143 | 3,059 | 1,348 | 4,550 |
+| knowledge-warm-shared (*conditional*): read binding only | 1 | 145 | 1,038 | 1,348 | 2,531 |
 
-**Correctness, asserted before any number is printed:** both modes report 39 and 3 tools; every read root has `inputs`, `preconditions`, `expected_outcome`, `verification` and `boundaries` in its contract and non-empty instructions; the shared guidance has all its rules; the `checks` child's mapped inputs equal the full API's own derivation (`prepare_execution`); the real gate passes; the legacy run is verified; no knowledge scenario writes an execution; the feedback is stored with its classification. The knowledge-gap finding is scripted, and labelled as such in the stored report.
+Run at `8467a1c`. Binding reads pass `environment`, because the binding selects from evidence (agent-mode `read` refuses such a binding without context rather than guess).
 
-**Shared guidance (section 8 of the brief):** reading `dev.change.check` v1 plus `agent.guidance.shared` v1 once costs less than reading `dev.change.verify` v4 alone, while the contract sections above stay present; whether every rule of v4 that matters for a run that records nothing survives is a reviewer's judgment, and the rules moved are listed in [examples/README.md](../../examples/README.md#knowledge-first-example). The warm rows are conditional on a session that already holds the child and shared guidance (immutable versions); they are not measured savings.
+**Correctness, asserted before any number is printed:** both modes report 39 and 3 tools; every read root has `inputs`, `preconditions`, `expected_outcome`, `verification` and `boundaries` in its contract and non-empty instructions; `dev.change.check` lists the shared guidance as a required reference pinned to version 1, the guidance is read through that reference, and every rule id the procedure cites exists in that exact version; the `checks` child's mapped inputs equal the full API's own derivation (`prepare_execution`); the real gate passes; the legacy run is verified; no knowledge scenario writes an execution; the feedback is stored with its classification. The knowledge-gap finding is scripted, and labelled as such in the stored report.
+
+**Shared guidance (section 8 of the brief):** the guidance is a pinned reference, not a name in the contract, so Polaroid refuses the version if the guidance or its pinned version is missing or retired, and the pin does not move when the guidance is revised (`TestAgentSharedGuidanceIsAPinnedReference`). Reading `dev.change.check` v1 plus `agent.guidance.shared` v1 once costs less than reading `dev.change.verify` v4 alone, while the contract sections above stay present; whether every rule of v4 that matters for a run that records nothing survives is a reviewer's judgment, and the rules moved are listed in [examples/README.md](../../examples/README.md#knowledge-first-example). The warm rows are conditional on a session that already holds the child and shared guidance (immutable versions); they are not measured savings.
+
+## Real-agent comparison (one run per mode)
+
+[scripts/agent-compare.py](../../scripts/agent-compare.py) gives a real LLM agent, the GitHub Copilot CLI 1.0.92 in non-interactive mode (`copilot -p`, model `gpt-5.3-codex`, the CLI's default), the same task once per interface: check the current commit with binding `check-small` (`dev.change.verify`, gate `gofmt -l .` and `go vet ./...`) in `local.dev`, follow the procedure, run the gate, modify nothing, report. Each run had its own fresh polaroidd, no custom instructions, none of the user's MCP servers, and permission for the Polaroid server and the gate's commands only. **Tokens are the model API's own usage counts** from the CLI's debug log, not estimates. Commit `8467a1c`, 2026-10-13, n = 1 per mode.
+
+| | full (`/mcp`) | agent (`/mcp/agent`) |
+| --- | ---: | ---: |
+| Prompt tokens of the first model call (system, tool schemas, server instructions, task) | 21,820 | 14,755 (−7,065, −32%) |
+| Model calls | 27 | 31 |
+| Prompt tokens, all calls (of which cached) | 961,736 (883,200) | 911,422 (825,856) |
+| Completion tokens (of which reasoning) | 11,456 (9,228) | 10,516 (7,097) |
+| Polaroid calls | 7: `list_bindings`, `get_binding` ×2, `resolve_binding` ×2, `get_version` ×2 (with `fields`) | 5: `discover`, `read` ×4 (each with `full: true`) |
+| Procedure followed | `dev.change.verify` v4, `go.module.checks` v4 | same |
+| Gate run, exit status | both 0 | both 0 |
+| Files modified, executions, feedback written | none | none |
+| Verification claim | "nothing is currently verified in Polaroid" (`target_verification.verified: false`) | gate passed locally; "not established: a Polaroid recorded verification" |
+
+Findings:
+
+- **Work quality was equivalent.** Both runs selected the same versions, ran the real gate, treated hosted CI as not applicable, modified nothing, and made no false verification claim. Neither recorded an execution, although the full-mode run could have.
+- **The fixed per-call context is the reliable difference:** 7,065 fewer prompt tokens on every model call, measured on the first call, where nothing else differs.
+- **Session totals are not a reliable comparison at n = 1.** Most model calls in both runs went to work outside the procedure that no Polaroid interface causes: shell commands the run was not permitted to use (`go version`, hashing the working tree) and reading `AGENTS.md`. The agent-mode run made 4 more model calls and still used 5% fewer prompt tokens in total.
+- **The agent-mode run passed `full: true` on every `read`,** so it received complete versions rather than the compact default; the compact projection saved nothing in this run.
 
 ## Reproducing
 
@@ -85,6 +110,7 @@ make build
 python3 scripts/benchmark-context.py        # token benchmark, synthetic evidence, four variants
 python3 scripts/verify-change-real-check.py # real, small, fast correctness check
 python3 scripts/benchmark-knowledge.py      # knowledge-first vs legacy, real gate, both MCP modes
+python3 scripts/agent-compare.py            # one real Copilot CLI run per mode; spends premium requests
 ```
 
 The first prints a compact table and the path to `summary.json`; per-call request/response bodies, `manifest.json` and `tools_list.json` sit beside it, under `bin/benchmark/<timestamp>/` (git-ignored). The figures above are one such run's `summary.json`, copied in by hand.
