@@ -11,16 +11,16 @@ Polaroid is a versioned procedural memory service for agents, written in Go, wit
    - [docs/architecture/overview.md](docs/architecture/overview.md): boundaries and dependency direction.
 3. Identify the work item and its acceptance criteria. Work items are [GitHub issues](https://github.com/ashuangiras/polaroid/issues); [docs/development/roadmap.md](docs/development/roadmap.md) gives their order. If the criteria are missing or ambiguous, settle them before writing code.
 4. Inspect the implementation and its tests before proposing a change. Do not design from the docs alone.
-5. Consult Polaroid's knowledge for the task: call `discover` on the installed service's `/mcp/agent` with repository `github.com/ashuangiras/polaroid`, then `read` the relevant candidates with the snapshot it returned, and follow them. If nothing relevant is published, say so and continue; do not claim knowledge-guided work. Verification follows the bindings below.
+5. Consult Polaroid's knowledge for the task: call `discover` on the installed service's `/mcp/agent` with repository `github.com/ashuangiras/polaroid`, then `read` the relevant candidates with the snapshot it returned, and follow them. For a code change, the Git-native procedures `dev.change.implement`, `dev.change.verify` and `dev.change.review` are the normal guidance. If nothing relevant is published, say so and continue; do not claim knowledge-guided work. The gates below decide what verification this repository requires.
 
 ## Development baseline
 
 - `main` is the baseline. Develop on a topic branch of `main` in this checkout; no separate repository or worktree is needed.
 - The installed service (`~/.local/bin/polaroid{,d}`, launchd, `127.0.0.1:7417`) runs a verified build of `main` and stays known-good while you work. Never start a development daemon on its port or catalog: the scripts and tests use `bin/`, random ports and temporary catalogs. Upgrade it only from a verified `main` commit, with `polaroid backup` first and `polaroid install -from DIR`.
-- Agents use `/mcp/agent` (`discover`, `read`, `feedback`) for procedural knowledge. Report a genuine deficiency of a procedure you followed with `feedback`, never an invented one, and never a product defect or environment problem. Only an operator publishes knowledge (`polaroid knowledge-publish`), after the owner approves the change.
-- `/mcp` (40 tools) and the CLI are the operator and evidence interfaces: verification bindings, executions, feedback triage. They are not the agent's knowledge interface.
+- Agents use `/mcp/agent` (`discover`, `read`, `feedback`), the primary interface to Git-native procedural knowledge. Report a genuine deficiency of a procedure you followed with `feedback`, never an invented one, and never a product defect or environment problem. Only an operator publishes knowledge (`polaroid knowledge-publish`), after the owner approves the change.
+- `/mcp` (40 tools) and the CLI are the operator and evidence interfaces: verification bindings, executions, feedback triage. They are not the agent's knowledge interface. The SQLite-backed procedures they serve, including the bindings' procedures in the table below, are legacy records: they still define the bindings and hold their evidence, but they are not the default source of procedural guidance. Where a key exists in both, such as `dev.change.verify`, the Git-native procedure is the guidance.
 - Git-native knowledge lives in `~/.polaroid/data/knowledge`, never in this repository.
-- Run commands through Dispatch when it is available: it keeps the whole output, so read back the part you need instead of running a command again.
+- Run commands through Dispatch when it is available: it executes them and keeps the whole output, so read back the part you need with its log tools instead of running a command again.
 
 ## Rules
 
@@ -40,7 +40,7 @@ Polaroid is a versioned procedural memory service for agents, written in Go, wit
 
 ## Before you call it done
 
-- Verify through the Polaroid binding of `github.com/ashuangiras/polaroid` that matches the change (`polaroid bindings github.com/ashuangiras/polaroid`), follow the versions it selects, and record the executions. Each scoped procedure lists what it covers, what it excludes, and when to escalate. A small diff is not proof of low risk: when unsure, use `verify-change`.
+- Verify with the Git-native `dev.change.verify`, running the gate of the Polaroid binding of `github.com/ashuangiras/polaroid` that matches the change (`polaroid bindings github.com/ashuangiras/polaroid`), and record the executions against that binding as evidence. Each scoped binding lists what it covers, what it excludes, and when to escalate. A small diff is not proof of low risk: when unsure, use `verify-change`.
 
   | Binding | Procedure | For | Gate |
   | --- | --- | --- | --- |
