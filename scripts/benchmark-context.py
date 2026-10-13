@@ -1,42 +1,66 @@
 #!/usr/bin/env python3
 """Benchmarks agent-facing context cost of the "verify-change" workflow over
-the real MCP transport (issue #131, corrected per the owner's P0 redirect):
-no LLM is in the loop, every byte is captured to local files, and what is
-measured is **total agent-visible tokens per successfully completed
-workflow** - not raw transport bytes alone.
+the real MCP transport (issue #131, corrected per the owner's P0 redirect
+and the PR #132 review): no LLM is in the loop, every byte is captured to
+local files, and what is measured is **total agent-visible tokens per
+successfully completed workflow** - not raw transport bytes alone.
 
 It starts an isolated polaroidd, loads the development fixtures, then drives
-three variants of the same workflow through real `tools/call` JSON-RPC
+four variants of the same workflow through real `tools/call` JSON-RPC
 requests (the exact envelope an MCP client sends: method, params, _meta,
 headers), each at a fresh target commit:
 
-  baseline        today's full interface: resolve_binding (full graph)
-                  before and after, get_version in full for every node.
-  optimized-cold  prepare_execution (compact) instead of resolve_binding
-                  before running; format=plan instead of the full graph to
-                  confirm; get_version is still read in full for every node,
-                  because a cold agent has no cached content yet.
-  optimized-warm  the same, but the three get_version reads are not made at
-                  all: this variant simulates a session that has already
-                  read these exact, immutable (procedure_id, version) pairs
-                  before (ADR-0004 makes that content cacheable forever).
-                  This is an assumption this script states explicitly, not a
-                  claim that conditional fetch (ETag/If-None-Match) is
-                  implemented: that remains a documented follow-up
-                  (context-efficiency-proposal.md) to make the cache check
-                  itself cheap over the wire, rather than trusted
-                  client-side bookkeeping alone.
+  baseline               today's full interface: resolve_binding (full
+                         graph) before and after, get_version in full for
+                         every node.
+  optimized-cold         prepare_execution (compact) instead of
+                         resolve_binding before running; format=plan
+                         instead of the full graph to confirm;
+                         get_version is still read in full for every node,
+                         because a cold agent has no cached content yet.
+  optimized-cold-selective  the same, but the three get_version reads use
+                         fields=contract,instructions instead of the
+                         complete version (dropping philosophy, method,
+                         goal, applicability, references, revision_reason):
+                         this is still a cold run (nothing is cached, and
+                         nothing is skipped), it just asks for less. The
+                         correctness check is identical to every other
+                         variant's, so this variant is also evidence that
+                         the workflow completes correctly with less
+                         information, not just an assumption.
+  optimized-warm         *CONDITIONAL, not a measurement of real agent/
+                         session context savings.* The three get_version
+                         reads are not made at all, on the stated
+                         assumption that the caller already holds this
+                         exact, immutable (procedure_id, version) content
+                         from an earlier read (ADR-0004 makes that content
+                         cacheable forever in principle). Polaroid does not
+                         yet let a client check that assumption cheaply
+                         over the wire (no ETag/If-None-Match, a documented
+                         follow-up in context-efficiency-proposal.md): this
+                         script cannot and does not verify that a real
+                         Copilot/agent session actually skipped those
+                         reads, only what the token cost would be *if* it
+                         safely could. Report this number as conditional,
+                         never as "measured Copilot context savings".
 
 Every variant must reach the identical verified outcome, at the identical
 target, with the identical selected (procedure_id, version) per reference
 path, or the script exits non-zero: an optimization that is cheaper but
-wrong is not reported as a saving.
+wrong is not reported as a saving. For a real (non-synthetic) execution of
+this workflow, with real commands and real evidence, see
+scripts/verify-change-real-check.py, which this script's synthetic,
+token-focused measurement deliberately does not replace.
 
 Token counts: this script tries a real tokenizer (tiktoken's o200k_base)
 first; when it is not installed (as in this environment: no network to
 fetch it), it falls back to a local, deterministic estimate
 (approx_tokens), clearly labelled, applied identically everywhere so
 relative comparisons stay meaningful.
+
+Tool schema cost (finding 6): the MCP tools/list response is measured once,
+reported under tool_schema_list, and is never added into any variant's
+totals: it is a one-time, per-connection cost, not a per-call one.
 
 Usage: scripts/benchmark-context.py [-o OUT_DIR]
   Needs bin/polaroid and bin/polaroidd (make build). Writes OUT_DIR (default
@@ -214,7 +238,7 @@ def run_variant(mcp: MCPClient, variant: str, binding_id: str, root_id: str, bui
         mcp.tool(variant, "read_version_root", "get_version", {"procedure_id": root_id, "version": 4})
         mcp.tool(variant, "read_version_build", "get_version", {"procedure_id": build_id, "version": 3})
         mcp.tool(variant, "read_version_checks", "get_version", {"procedure_id": checks_id, "version": 4})
-    else:  # optimized-cold, optimized-warm
+    else:  # optimized-cold, optimized-cold-selective, optimized-warm
         pre, err = mcp.tool(variant, "prepare_execution", "prepare_execution", dict(target))
         if err:
             raise RuntimeError(f"{variant}: prepare_execution failed: {pre}")
@@ -223,9 +247,20 @@ def run_variant(mcp: MCPClient, variant: str, binding_id: str, root_id: str, bui
             mcp.tool(variant, "read_version_root", "get_version", {"procedure_id": root_id, "version": 4})
             mcp.tool(variant, "read_version_build", "get_version", {"procedure_id": build_id, "version": 3})
             mcp.tool(variant, "read_version_checks", "get_version", {"procedure_id": checks_id, "version": 4})
+        elif variant == "optimized-cold-selective":
+            # Finding 3: still cold (nothing cached, nothing skipped), but
+            # each read names only contract and instructions -- the two
+            # members a fresh agent needs to judge whether, and how, to
+            # follow a version (AGENTS.md: these are opaque, read whole or
+            # not at all). The same correctness check below applies, so a
+            # pass here is evidence the workflow completes correctly with
+            # less information, not just a size difference.
+            mcp.tool(variant, "read_version_root", "get_version", {"procedure_id": root_id, "version": 4, "fields": "contract,instructions"})
+            mcp.tool(variant, "read_version_build", "get_version", {"procedure_id": build_id, "version": 3, "fields": "contract,instructions"})
+            mcp.tool(variant, "read_version_checks", "get_version", {"procedure_id": checks_id, "version": 4, "fields": "contract,instructions"})
         # optimized-warm: these three calls are not made at all (see module
-        # docstring): the simulated session already holds this exact,
-        # immutable content.
+        # docstring): a *conditional* figure, not a measurement of a real
+        # session's savings.
 
     build_inputs = {"build_command": inputs["build_command"], "artifacts": inputs["artifacts"], "working_tree": "clean"}
     build_exec, err = mcp.tool(variant, "record_execution_build", "record_execution", {
@@ -336,13 +371,18 @@ def main() -> int:
             "note": "one-time per session/connection, not per workflow call; a conforming client fetches this once, not on every turn",
         }
 
-        commits = {"baseline": "b" * 40, "optimized-cold": "c" * 40, "optimized-warm": "d" * 40}
+        commits = {
+            "baseline": "b" * 40,
+            "optimized-cold": "c" * 40,
+            "optimized-cold-selective": "e" * 40,
+            "optimized-warm": "d" * 40,
+        }
         results = {}
         for variant, commit in commits.items():
             results[variant] = run_variant(mcp, variant, binding_id, root_id, build_id, checks_id, commit)
 
         base_sel = results["baseline"]["selection"]
-        for variant in ("optimized-cold", "optimized-warm"):
+        for variant in ("optimized-cold", "optimized-cold-selective", "optimized-warm"):
             if results[variant]["selection"] != base_sel:
                 raise RuntimeError(f"{variant} selected different (procedure_id, version) pairs than baseline: "
                                    f"{results[variant]['selection']} vs {base_sel}")
@@ -371,8 +411,13 @@ def main() -> int:
                 "response_tool_result_tokens": sum(c["response_tool_result_tokens"] for c in calls),
                 "by_step": [{"step": c["step"], "tool": c["tool"], "response_tool_result_tokens": c["response_tool_result_tokens"]} for c in calls],
             }
+        summary["variants"]["optimized-warm"]["caveat"] = (
+            "CONDITIONAL, not a measurement of real agent/session context savings: assumes the caller already "
+            "holds the three get_version reads' content from an earlier read, which Polaroid does not yet let a "
+            "client check cheaply over the wire (no ETag/If-None-Match). See the module docstring."
+        )
         base_tokens = summary["variants"]["baseline"]["response_tool_result_tokens"]
-        for variant in ("optimized-cold", "optimized-warm"):
+        for variant in ("optimized-cold", "optimized-cold-selective", "optimized-warm"):
             v = summary["variants"][variant]
             v["response_tool_result_token_reduction_vs_baseline"] = round(1 - v["response_tool_result_tokens"] / base_tokens, 4) if base_tokens else None
 
@@ -389,12 +434,14 @@ def main() -> int:
         (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
 
         print(f"tokenizer: {TOKENIZER}")
-        print(f"{'variant':<16} {'calls':>5} {'req_tok':>9} {'resp_tok':>9} {'reduction_vs_baseline':>22}")
+        print(f"tool schema cost (tools/list, one-time per connection, NOT per workflow call, separate from every total below): "
+              f"{schema_record['response_tokens']} tokens, {schema_record['response_bytes']} bytes")
+        print(f"{'variant':<24} {'calls':>5} {'req_tok':>9} {'resp_tok':>9} {'reduction_vs_baseline':>22}")
         for variant, v in summary["variants"].items():
             red = v.get("response_tool_result_token_reduction_vs_baseline")
             red_s = f"{red * 100:.1f}%" if red is not None else "-"
-            print(f"{variant:<16} {v['calls']:>5} {v['request_tokens']:>9} {v['response_tool_result_tokens']:>9} {red_s:>22}")
-        print(f"tool schema list (tools/list, one-time): {schema_record['response_tokens']} tokens, {schema_record['response_bytes']} bytes")
+            print(f"{variant:<24} {v['calls']:>5} {v['request_tokens']:>9} {v['response_tool_result_tokens']:>9} {red_s:>22}")
+        print("optimized-warm is CONDITIONAL (see caveat in summary.json): assumes cached content, not a measured session saving.")
         print(str(out_dir / "summary.json"))
         return 0
     finally:
