@@ -13,6 +13,7 @@ import (
 	_ "github.com/ashuangiras/polaroid/internal/gitcore"
 	_ "github.com/ashuangiras/polaroid/internal/knowledge"
 	_ "github.com/ashuangiras/polaroid/internal/knowledge/gitstore"
+	_ "github.com/ashuangiras/polaroid/internal/knowledgesync"
 	_ "github.com/ashuangiras/polaroid/internal/lifecycle"
 	_ "github.com/ashuangiras/polaroid/internal/memory"
 	_ "github.com/ashuangiras/polaroid/internal/recovery"
@@ -28,9 +29,9 @@ import (
 func TestPackageBoundaries(t *testing.T) {
 	root, module := moduleRootAndPath(t)
 	storage := []string{"database/sql", "modernc.org/sqlite", module + "/internal/storage", module + "/cmd"}
-	// The Git-native knowledge path (ADR-0045) is reachable from no legacy
-	// package: nothing writes knowledge to both stores.
-	knowledge := []string{module + "/internal/knowledge", module + "/internal/gitcore"}
+	// The Git-native knowledge path (ADR-0045, ADR-0046) is reachable from no
+	// legacy package: nothing writes knowledge to both stores.
+	knowledge := []string{module + "/internal/knowledge", module + "/internal/knowledgesync", module + "/internal/gitcore"}
 	rules := []struct {
 		pkg       string
 		forbidden []string
@@ -41,14 +42,18 @@ func TestPackageBoundaries(t *testing.T) {
 		// The knowledge domain sees storage only through its Store port: no
 		// Git, no SQL, no transport, no legacy records.
 		{"internal/knowledge", slices.Concat(storage, []string{"net/http", module + "/internal/gitcore", "github.com/go-git",
-			module + "/internal/knowledge/gitstore", module + "/internal/memory", module + "/internal/transport",
+			module + "/internal/knowledge/gitstore", module + "/internal/knowledgesync", module + "/internal/memory", module + "/internal/transport",
 			module + "/internal/recovery", module + "/internal/lifecycle"})},
 		// The adapter joins the domain to Git-core and nothing else.
-		{"internal/knowledge/gitstore", slices.Concat(storage, []string{"net/http", module + "/internal/memory",
+		{"internal/knowledge/gitstore", slices.Concat(storage, []string{module + "/internal/memory", module + "/internal/knowledgesync",
 			module + "/internal/transport", module + "/internal/recovery", module + "/internal/lifecycle"})},
-		// Git-core stores files and snapshots; it knows no procedures, records or transports.
-		{"internal/gitcore", slices.Concat(storage, []string{module + "/internal/memory", module + "/internal/transport", module + "/internal/recovery",
-			module + "/internal/lifecycle"})},
+		// Synchronisation joins the kernel, its adapter and Git-core; no agent
+		// interface, legacy record or SQL reaches it (ADR-0046).
+		{"internal/knowledgesync", slices.Concat(storage, []string{module + "/internal/memory", module + "/internal/transport",
+			module + "/internal/recovery", module + "/internal/lifecycle", "github.com/modelcontextprotocol"})},
+		// Git-core stores files and snapshots; it knows no procedures, records or agent interfaces.
+		{"internal/gitcore", slices.Concat(storage, []string{module + "/internal/memory", module + "/internal/knowledge", module + "/internal/knowledgesync",
+			module + "/internal/transport", module + "/internal/recovery", module + "/internal/lifecycle"})},
 		{"internal/transport/wire", slices.Concat(storage, knowledge, []string{module + "/internal/transport/http", module + "/internal/transport/mcp", "github.com/modelcontextprotocol"})},
 		{"internal/transport/http", slices.Concat(storage, knowledge, []string{module + "/internal/transport/mcp", "github.com/modelcontextprotocol"})},
 		{"internal/transport/mcp", slices.Concat(storage, knowledge, []string{module + "/internal/transport/http"})},
