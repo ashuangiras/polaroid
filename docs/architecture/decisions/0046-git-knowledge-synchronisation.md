@@ -97,7 +97,7 @@ Several go-git limits found by the earlier experiment affect the design:
      - **validates the target's complete catalog again** through the kernel;
      - then moves the active ref.
   3. The incoming commits keep their identities, authors, rationale and `Polaroid-*` trailers.
-  4. The local decision is recorded in two places: in the reflog, and as a commit in a local activation journal, `refs/polaroid/activations`. That journal is never pushed; its commits have the empty tree. A journal entry holds:
+  4. The local decision is recorded in two places: in the reflog, and as a commit in a local activation journal (written before the active ref moves, since [ADR-0047](0047-knowledge-identities-and-origin.md)), `refs/polaroid/activations`. That journal is never pushed; its commits have the empty tree. A journal entry holds:
      - who accepted the knowledge (the commit author) and why (the summary and rationale);
      - `Polaroid-Source` (the source name and URL);
      - `Polaroid-Remote-Snapshot`;

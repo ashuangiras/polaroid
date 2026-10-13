@@ -2,6 +2,28 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
+**Git-core, milestone D foundations ([ADR-0047](../architecture/decisions/0047-knowledge-identities-and-origin.md)), on branch `git-core`, as of 2026-10-13.** Integration plan approved by the owner. No PR yet.
+
+- **Done:**
+  - **Identities:** the typed knowledge-feedback identity `FeedbackRef{Key, Snapshot}` (strict JSON, checked against served knowledge) and `PublicationRef` (`polaroid-knowledge:<instance>/<snapshot>#<key>`).
+  - **Instance identity:** per repository, local, never pushed.
+  - **Origin:** `Kernel.Origin`, local or imported, taken from the activation journal only, never from authors or trailers.
+  - **Ordering:** the journal entry is written before the active ref moves.
+  - **Input mapping:** `knowledge.MapInputs`.
+- **Tested:**
+  - forged instance and author claims, imported history, rollback, recovery, a fresh process and a rebuilt instance;
+  - an interrupted activation and racing opens;
+  - valid and invalid identities;
+  - snapshot-consistent child reads.
+
+  Mutation checks fail the tests without each guard. No API, MCP, CLI, record or schema changes.
+- **PR #132, step 1:** `243b460` marks `/mcp/agent` experimental, outside ADR-0038's v1 guarantee, with its behaviour unchanged. It adds full-mode contract regression tests against the reviewed `internal/transport/mcp/testdata/full-mode-tools.json` and mcp.md. Full gate green at `243b460`.
+- **Blocked until merged and integrated:** `/mcp/agent` on the kernel, feedback storage with `FeedbackRef`, operator publication and sync over HTTP and CLI, and reconciliation of #128's resolutions.
+
+Next action: owner review and merge of #128, #130 and #132 (in that order; each later PR first gets a commit merging `main` into its branch, and a gate). Then merge `main` into `git-core` and continue milestone D.
+
+**Git-core, milestones A–C, as of 2026-10-13.** The handoff below is unchanged.
+
 **Git-core, milestones A–C ([ADR-0044](../architecture/decisions/0044-git-core.md), [ADR-0045](../architecture/decisions/0045-living-knowledge-kernel.md), [ADR-0046](../architecture/decisions/0046-git-knowledge-synchronisation.md)), on branch `git-core`, as of 2026-10-13.** No PR yet.
 
 - **Milestone C done:** independent instances exchange knowledge through ordinary Git remotes, implemented in `internal/knowledgesync` and Git-core's fetch, import, activation and push.
