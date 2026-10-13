@@ -115,6 +115,7 @@ Second-repository adoption trials are paused while the existing features are pre
 ## Agent-facing context efficiency
 
 1. [#131 Reduce Polaroid's agent-facing context consumption (MCP token usage)](https://github.com/ashuangiras/polaroid/issues/131): **first increment done** ([ADR-0042](../architecture/decisions/0042-context-efficient-projections.md)). A benchmark harness and a measured baseline ([context-efficiency-baseline.md](context-efficiency-baseline.md)), and an additive architecture proposal ([context-efficiency-proposal.md](context-efficiency-proposal.md)), of which two pieces are implemented: a `fields` projection on version reads, and a `format=plan` projection of `resolve_binding`/`get_graph` plus the new `prepare_execution` (39 tools, 25 read-only). Measured warm-run reduction: 79.6% fewer response tokens, exceeding the 70% target, with verification correctness checked by the same benchmark. Conditional fetch of immutable records (`ETag`/`If-None-Match`) is proposed but not yet implemented.
+2. Knowledge-first agent mode ([ADR-0043](../architecture/decisions/0043-knowledge-first-agent-mode.md)), same issue and PR #132: `/mcp/agent` with `discover`, `read` and `feedback`; execution recording optional; shared-guidance example. Measured cold success 24,798 → 6,292 tokens including session setup.
 
 ## Later (unordered, not yet scoped)
 

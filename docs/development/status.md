@@ -2,6 +2,16 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
+**Knowledge-first agent mode ([#131](https://github.com/ashuangiras/polaroid/issues/131), [ADR-0043](../architecture/decisions/0043-knowledge-first-agent-mode.md)), on [PR #132](https://github.com/ashuangiras/polaroid/pull/132), as of 2026-10-13.**
+
+- **Decision:** Polaroid owns procedural knowledge; execution systems own runs and logs; verification systems own target evidence. A successful run writes nothing to Polaroid; only a finding about the procedure itself becomes classified feedback.
+- **Shipped:** `/mcp/agent`, three tools (`discover`, `read`, `feedback`) on the existing MCP server; `/mcp` unchanged (39 tools, execution and verification records intact). Representative shared-guidance example `agent.guidance.shared` v1 + `dev.change.check` v1 in `examples/knowledge-first` (no existing procedure rewritten). `scripts/benchmark-knowledge.py` (real gate, both modes, correctness-asserted).
+- **Measured** (deterministic estimate, not Copilot billing; setup = instructions + tool schemas, included): setup 15,596 → 1,301 tokens (39 → 3 tools); cold success 24,798 → 6,292 (v4 unchanged, 3 calls) / 4,963 (shared guidance, 4 calls); knowledge gap 5,254 (5 calls); legacy 7 calls. Warm figures conditional. Details: [context-efficiency-baseline.md](context-efficiency-baseline.md#knowledge-first-workflow-adr-0043).
+- **Gate at `4fe7a00`** (clean tree, run directly, not through Polaroid): `make check` (lint `0 issues.`, records-check incl. knowledge-first, loader 33/0), `make vuln` clean, `make demo` PASS, `make e2e` 302/0, `make e2e-mcp E2E_INTEROP=0` 134/0.
+- **Unchanged and frozen:** PRs #128 and #130 (no dependency on either was needed). Polaroid's own development procedures and bindings still describe the recording workflow; moving them, and any deprecation of execution records, are separate decisions.
+
+Next action: owner review of PR #132; then decide whether development moves to `/mcp/agent`.
+
 **Agent-facing context efficiency ([#131](https://github.com/ashuangiras/polaroid/issues/131), [ADR-0042](../architecture/decisions/0042-context-efficient-projections.md)), first increment implemented, reviewed and revised, as of 2026-10-13.**
 
 - Driving Polaroid's own development through its MCP tools was suspended for this effort: its large request/response payloads were the very thing being measured and redesigned, so this item used GitHub, git, Dispatch and direct HTTP/MCP JSON-RPC calls instead of `mcp_polaroid_proc_*` tools; Polaroid itself was exercised only by real tests and the benchmark harness, never by routing its payloads through an LLM.
