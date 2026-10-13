@@ -22,8 +22,8 @@ This page is the contract of the API that `polaroidd` serves. It covers only wha
 | `GET /v1/procedures/{id}/lifecycle/events` | `200` lifecycle | The procedure's [lifecycle](#procedure-lifecycle) state and every retirement and reactivation. |
 | `POST /v1/procedures/{id}/retirement` | `201` lifecycle, with a `Location` header | Retire the procedure, against `base_event`. |
 | `POST /v1/procedures/{id}/reactivation` | `201` lifecycle, with a `Location` header | Reactivate a retired procedure, against `base_event`. |
-| `GET /v1/procedures/{id}/versions/{n}` | `200` version | One version. |
-| `GET /v1/procedures/{id}/versions/{n}/graph` | `200` graph node | The version's composition graph, with the exact version each reference selects. |
+| `GET /v1/procedures/{id}/versions/{n}[?fields=…]` | `200` version | One version, in full; or, with `fields`, only the named top-level members ([a compact projection](#selective-version-projection-fields), #131). |
+| `GET /v1/procedures/{id}/versions/{n}/graph[?format=…]` | `200` graph node | The version's composition graph, with the exact version each reference selects; or, with `format=plan`, [a compact, dependency-ordered projection](#compact-execution-plans-formatplan-and-prepare_execution) (#131). |
 | `GET /v1/procedures/{id}/versions/{n}/verifications[?repository=…][&commit=…][&environment=…]` | `200 {"verifications":[...]}` | The version's execution combinations and whether each is verified. Not paginated. |
 | `POST /v1/procedures/{id}/versions` | `201` version, with a `Location` header | Append a version derived from `base_version`. |
 | `POST /v1/bindings` | `201` binding history, with a `Location` header | Create a binding and its revision 1. |
@@ -31,6 +31,7 @@ This page is the contract of the API that `polaroidd` serves. It covers only wha
 | `GET /v1/bindings/{id}` | `200` binding history | A binding and all of its revisions, oldest first. |
 | `GET /v1/bindings/{id}/revisions/{n}` | `200` binding revision | One revision. |
 | `POST /v1/bindings/{id}/revisions` | `201` binding revision, with a `Location` header | Append a revision derived from `base_revision`. |
+| `GET /v1/bindings/{id}/preparation?environment=…&commit=…&inputs=…[&decisions=…]` | `200` plan | [`resolve_binding` projected to a compact execution plan](#compact-execution-plans-formatplan-and-prepare_execution), with its target required (#131). Read-only: computes the same resolution and verification, stores nothing new. |
 | `POST /v1/executions` | `201` execution, with a `Location` header | Record one finished run. |
 | `GET /v1/executions[?procedure_id=…[&version=…]][&repository=…][&commit=…][&evidence_status=…][&limit=…&after=…]` | `200 {"executions":[...]}` | List executions, oldest first, without `inputs` and `evidence`. |
 | `GET /v1/executions/{id}` | `200` execution | One execution, in full, with its evidence status. |
@@ -54,6 +55,8 @@ This page is the contract of the API that `polaroidd` serves. It covers only wha
 | `GET /v1/statistics` | `200` statistics | [Catalog statistics](#catalog-statistics): counts, payload sizes and storage. Read-only; takes no parameters. |
 
 `HEAD` is accepted wherever `GET` is.
+
+`GET /v1/bindings/{id}/resolution` also accepts `format=plan`, the same projection as the graph endpoint's.
 
 ### Create a procedure
 
@@ -158,6 +161,38 @@ A missing procedure or version is `404`. A cycle is `409 reference_cycle`. It is
 ```
 
 Here version 2 was selected because it succeeded at commit A, and it is not verified at commit B, the target. `environment` is required, and each parameter must appear once and be valid. Any other parameter is `400`. An unknown binding is `404`. Graph errors are as for the graph endpoint.
+
+### Selective version projection (`fields=`)
+
+`GET /v1/procedures/{id}/versions/{n}?fields=goal,instructions` returns only the named top-level members, alongside the version's identity (`procedure_id`, `version`, `scope`, `created_at`), which is always present. `fields` is a comma-separated list from `philosophy`, `method`, `goal`, `applicability`, `contract`, `instructions`, `references`, `revision_reason`; blank entries are ignored, and an unknown name is `400 invalid_request` naming `fields`. Without `fields`, the response is the complete version, exactly as before (#131).
+
+```json
+{"procedure_id":"…","version":4,"scope":"shared","created_at":"2026-10-13T00:00:00Z",
+ "goal":"Verify one commit of a repository by running its gates.","instructions":{"steps":[…]}}
+```
+
+A member not named in `fields` is **absent**, never `null` or empty, so a client can tell "not requested" apart from "requested and legitimately empty" (for example `goal`). `contract` and `instructions` are each selected whole or not at all: `fields` never names a member inside either, because Polaroid never interprets their content (AGENTS.md). This is additive: every existing client that never sends `fields` sees the same bytes as before.
+
+### Compact execution plans (`format=plan` and `prepare_execution`)
+
+The graph and resolution endpoints accept `format=plan` (default `format=full`, identical to today's response) and `GET /v1/bindings/{id}/preparation` is the same projection with its target required, since preparing to run something implies an exact commit and effective inputs. All three compute the identical resolution and target verification the full graph already does; the projection only changes what is reported, never what is derived or stored (#131).
+
+```json
+{"binding_id":"…","binding_revision":2,"repository":"github.com/ashuangiras/polaroid","environment":{"name":"ci.ubuntu-latest"},
+ "steps":[
+   {"path":"build","procedure_id":"…","version":3,"selected_by":"latest","status":"verified","latest_execution_id":"…"},
+   {"path":"checks","procedure_id":"…","version":4,"selected_by":"evidence","status":"pending"},
+   {"path":"hosted-ci","procedure_id":"…","version":1,"decision":"not_applicable","status":"skipped"},
+   {"path":"","procedure_id":"…","version":4,"selected_by":"evidence","status":"pending"}],
+ "next_action":"checks"}
+```
+
+- **One step per node, flattened and dependency-ordered**: a node's own references (in the version's declared order) are listed before the node itself, so every step's dependencies already appear earlier in `steps` — the same order the referenced procedures' own `instructions` already document running them in. `path` is the reference names from the root joined by `/`, `""` for the root itself.
+- **No `canonical_key`, `scope`, `applicability` or nested `node`**: a step gives `procedure_id` and `version`, enough to fetch the complete version (`GET .../versions/{n}`, optionally with `fields`) when it is actually needed.
+- **`status`** is `selected` (no target was given), `decision_required` (a conditional reference's applicability is undecided for this target), `skipped` (a conditional reference was decided not applicable), `verified` (the selected combination is verified at the target) or `pending` (a target was given and it is not verified there yet). `decision` is present only for a conditional reference with a target, as in the full graph.
+- **`next_action`** names the `path` of the first step, in dependency order, still `decision_required` or `pending`; it is absent when every step is already `verified` or `skipped`, meaning nothing is left to do for this exact target.
+- **Never evidence by itself.** A `verified` step reads the same derived verification `GET /v1/executions/{id}/verification` does; the plan is a read, and claims nothing that a fresh resolution of the identical target would not also report.
+- **`GET /v1/bindings/{id}/preparation`** additionally requires `commit` and `inputs` (each a `400 invalid_request` naming the missing field if absent) and is otherwise exactly `resolve_binding?format=plan` at that target: same identity, same steps, same errors.
 
 ### Append a version
 

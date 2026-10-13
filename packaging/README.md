@@ -122,7 +122,7 @@ rm -rf "$H"
 {"servers": {"polaroid": {"type": "http", "url": "http://127.0.0.1:7417/mcp"}}}
 ```
 
-The server's instructions describe the agent loop: discover a procedure, resolve it, follow it, record the run, improve the procedure. The client lists 38 tools; each tool's description and argument schema state the formats it accepts. A client that was connected before an upgrade keeps its old tool list: restart its connection to the server (in VS Code, **MCP: List Servers**, then the server, then **Restart Server**), and start a new agent session.
+The server's instructions describe the agent loop: discover a procedure, resolve it, follow it, record the run, improve the procedure. The client lists 39 tools; each tool's description and argument schema state the formats it accepts. A client that was connected before an upgrade keeps its old tool list: restart its connection to the server (in VS Code, **MCP: List Servers**, then the server, then **Restart Server**), and start a new agent session.
 
 **From the command line.**
 

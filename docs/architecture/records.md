@@ -49,6 +49,8 @@ Polaroid checks the shape of `contract` and `instructions`, never their meaning.
 
 Member order is kept as Polaroid receives it, but JSON gives it no meaning (RFC 8259), and some clients reorder members before sending; VS Code Copilot chat does so over MCP. Keep order-sensitive data, such as steps, in arrays, never as ordered object members. This applies to every free-form object on this page.
 
+**Selective projection (`fields=`, #131, [ADR-0042](decisions/0042-context-efficient-projections.md)):** a read of one version may name a subset of `philosophy`, `method`, `goal`, `applicability`, `contract`, `instructions`, `references`, `revision_reason`, getting only those plus the identity above (`procedure_id`, `version`, `scope`, `created_at`, always present). `contract` and `instructions` are each returned whole or not at all: a projection never selects a member inside either, because Polaroid never interprets their content. Without `fields`, the response is the complete version, unchanged.
+
 ### Subprocedure reference (implemented)
 
 A reference is a named use of another procedure by a version. It is part of the version, so it is immutable with it ([ADR-0008](decisions/0008-subprocedure-references.md)).
@@ -75,6 +77,8 @@ A version's references, their targets' references, and so on, form its compositi
 - **No cycles:** a path may not reach a procedure that is already on it, at any version. `A → A` and `A v2 → B → A v1` are both cycles. Every write of a version with references expands its graph in the same transaction. A cycle gets `409 reference_cycle`, and nothing is stored. This includes a cycle closed by a later revision of a contextually referenced target.
 - **Limits:** a graph may be at most **32** references deep and **2048** nodes in the expanded tree. A target shared by two references counts under each. A larger graph gets `422 graph_too_large`, never partial data. Writes check the new version's graph. A later revision elsewhere can still push an existing version's graph over the limits, and reading that graph then returns `422`.
 - Versions stored before cycle checking existed are never rewritten. If one holds a cycle, reading its graph returns `409 reference_cycle`.
+
+**Compact projection (`format=plan`, `prepare_execution`, #131, [ADR-0042](decisions/0042-context-efficient-projections.md)):** the same resolved graph, flattened to one step per node in dependency order (a node's own references before the node itself) with only `procedure_id`, `version`, `selected_by`, a conditional reference's `decision`, and a `status` derived from the same target verification this section describes — never a second derivation. It is a read-time projection of this graph, not a different record: see [http-api.md](http-api.md#compact-execution-plans-formatplan-and-prepare_execution) for its exact shape.
 
 ### Versioning rules (implemented)
 

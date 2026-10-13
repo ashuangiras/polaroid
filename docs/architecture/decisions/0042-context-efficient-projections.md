@@ -1,0 +1,31 @@
+# 0042. Context-efficient projections: `fields`, `format=plan` and `prepare_execution`
+
+**Status:** Accepted.
+**Date:** 2026-10-13
+
+## Context
+
+[#131](https://github.com/ashuangiras/polaroid/issues/131) measured one representative `verify-change` workflow (`dev.change.verify` v4) against the shipped interface, without any LLM in the loop ([scripts/benchmark-context.py](../../../scripts/benchmark-context.py), `docs/development/context-efficiency-baseline.md`): a cold run is 9 MCP tool calls, with 65% of all response bytes being immutable `contract`/`instructions` text re-sent on every read of a version an agent (or an earlier run in the same session) has already read, and a confirmation `resolve_binding` call after recording an execution repeating 99.48% of its own earlier response unchanged. None of this is a defect in what is stored or returned: every field exists because some client needs it, at least once. The cost is in always sending everything to every client, whether it already has it or does not yet need it.
+
+## Decision
+
+Two read-side projections, both strictly additive: a client that sends neither gets byte-identical responses to every endpoint and tool as before. Neither changes storage, immutability, version-selection semantics, or how verification is derived ([records.md](../records.md)); each is a different serialization of the identical already-computed data.
+
+1. **`fields=` on a version read** (`GET /v1/procedures/{id}/versions/{n}`, MCP `get_version`): a comma-separated subset of `philosophy`, `method`, `goal`, `applicability`, `contract`, `instructions`, `references`, `revision_reason`. The response always carries the version's identity (`procedure_id`, `version`, `scope`, `created_at`); a member outside `fields` is **absent**, never `null` or empty, so a client can tell "not requested" apart from "requested and legitimately empty" (for example `goal`). `contract` and `instructions` are each selected whole or not at all: a projection never names a member inside either, because Polaroid never interprets their content ([AGENTS.md](../../../AGENTS.md)). An unknown name is `400 invalid_request` on `fields`.
+2. **`format=plan` on the graph and resolution reads** (`GET /v1/procedures/{id}/versions/{n}/graph`, `GET /v1/bindings/{id}/resolution`, MCP `get_graph`/`resolve_binding`), and **`GET /v1/bindings/{id}/preparation`** (MCP `prepare_execution`), the same projection with its target (`commit`, `inputs`) required, since preparing to run something always implies an exact one. All three compute the identical resolution and target verification the full graph already does ([records.md](../records.md#composition-graph-implemented)); the projection changes only what is reported.
+   - **One step per node, flattened and dependency-ordered**: a node's own references, in the version's declared order, before the node itself, so every step's dependencies already appear earlier — the order the referenced procedures' own `instructions` already document running them in ([procedural-loop.md](../../development/procedural-loop.md)).
+   - **No `canonical_key`, `scope`, `applicability`, or a nested `node`**: a step gives `procedure_id` and `version`, enough to fetch the complete version (optionally projected with `fields`) when it is actually needed. Nothing is ever dropped from the catalog or made unreachable, only deferred until asked for.
+   - **`status`** is `selected` (no target given), `decision_required` (a conditional reference's applicability is undecided for this target), `skipped` (decided not applicable), `verified`, or `pending`. A `verified` step reads the same derived verification `GET /v1/executions/{id}/verification` does: the plan is never evidence by itself, and never claims a target is verified that a fresh resolution of the identical target would not also report.
+   - **`next_action`** names the `path` of the first step, in dependency order, still `decision_required` or `pending`; absent when every step is already verified or skipped.
+3. **Not decided here: conditional fetch of immutable records.** Because a version, binding revision, execution or toil revision is immutable once written, a content hash and `ETag`/`If-None-Match` on their single-record reads is a natural next increment (the 65% baseline cost is exactly re-sent, unchanged `contract`/`instructions`), but it is not implemented by this decision: it needs its own change, including where the shared hash function lives so both transports agree.
+
+## Consequences
+
+- Measured against the same benchmark ([context-efficiency-baseline.md](../../development/context-efficiency-baseline.md), updated for this decision): a **warm** `verify-change` run (the realistic, repeated case this repository's own history shows: the same `dev.change.verify` version run dozens of times) is 6 calls instead of 9, at **79.6% fewer response tokens**, exceeding the 70% target. A **cold** run (every version read in full, nothing cached yet) is still 23.4% cheaper, from the plan projection alone.
+- Every variant reaches the identical verified outcome, at the identical target, with the identical selected `(procedure_id, version)` per reference path as the unoptimized interface: the benchmark asserts this before reporting any reduction, and fails loudly if an optimization ever changes a decision, a selection, or the verification outcome.
+- The MCP tool schema list (`tools/list`) is a one-time, per-connection cost (not paid per call), measured separately so it is never mistaken for part of a workflow's own cost.
+- Still distinct, by design: a compact step is not a new kind of evidence, and `prepare_execution` is not a new engine — it is `resolve_binding` with a required target and a different projection, built on the same `ResolveBinding`/`CompositionGraph` service calls everything else already uses.
+
+## Addendum: real-tokenizer note
+
+The benchmark prefers a real tokenizer (`tiktoken`'s `o200k_base`) when available, falling back to a local, deterministic word/punctuation estimate otherwise, always labelled; this environment had no network access to install `tiktoken`, so the figures above use the fallback estimate, applied identically to every variant so the relative comparison stays meaningful.
