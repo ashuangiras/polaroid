@@ -33,7 +33,7 @@ func (a *api) getFeedback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) listFeedback(w http.ResponseWriter, r *http.Request) {
-	query, ok := strictQuery(w, r, "kind", "subject_type", "subject_id", "subject_version", "repository", "limit", "after")
+	query, ok := strictQuery(w, r, "kind", "subject_type", "subject_id", "subject_version", "repository", "status", "limit", "after")
 	if !ok {
 		return
 	}
@@ -43,11 +43,11 @@ func (a *api) listFeedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page, ok := pageQuery(w, query)
-	if !ok || !nonEmpty(w, query, "subject_type", "subject_id", "repository") {
+	if !ok || !nonEmpty(w, query, "subject_type", "subject_id", "repository", "status") {
 		return
 	}
 	f := memory.FeedbackFilter{Kind: kind, SubjectType: memory.SubjectType(query.Get("subject_type")),
-		SubjectID: query.Get("subject_id"), Repository: query.Get("repository"), Page: page}
+		SubjectID: query.Get("subject_id"), Repository: query.Get("repository"), Status: memory.FeedbackStatus(query.Get("status")), Page: page}
 	if query.Has("subject_version") {
 		n, err := strconv.Atoi(query.Get("subject_version"))
 		if err != nil || n < 1 {
@@ -62,4 +62,18 @@ func (a *api) listFeedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.respond(w, r, http.StatusOK, wire.NewFeedbackList(reports, next))
+}
+
+func (a *api) resolveFeedback(w http.ResponseWriter, r *http.Request) {
+	var body wire.FeedbackResolutionRequest
+	if !decode(w, r, &body) {
+		return
+	}
+	res, err := a.svc.ResolveFeedback(r.Context(), r.PathValue("id"), body.Domain())
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	w.Header().Set("Location", "/v1/feedback/"+url.PathEscape(res.FeedbackID))
+	a.respond(w, r, http.StatusCreated, wire.NewFeedbackResolution(res))
 }

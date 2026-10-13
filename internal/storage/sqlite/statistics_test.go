@@ -25,11 +25,11 @@ func statistics(t *testing.T, s *sqlite.Store) memory.Statistics {
 func TestStatisticsOfAnEmptyCatalog(t *testing.T) {
 	st := statistics(t, openStore(t, dbPath(t)))
 	if st.Records != (memory.RecordCounts{}) || st.Procedures != (memory.ProcedureCounts{}) || st.Executions != (memory.ExecutionCounts{}) ||
-		st.ToilItems != (memory.ToilStatusCounts{}) || st.Payloads != (memory.PayloadSizes{}) {
+		st.Feedback != (memory.FeedbackCounts{}) || st.ToilItems != (memory.ToilStatusCounts{}) || st.Payloads != (memory.PayloadSizes{}) {
 		t.Fatalf("empty catalog: %+v", st)
 	}
 	s := st.Storage
-	if s.SchemaVersion != 10 || s.PageSize <= 0 || s.PageCount <= 0 || s.FreelistCount < 0 || s.DatabaseBytes() != s.PageSize*s.PageCount {
+	if s.SchemaVersion != 11 || s.PageSize <= 0 || s.PageCount <= 0 || s.FreelistCount < 0 || s.DatabaseBytes() != s.PageSize*s.PageCount {
 		t.Fatalf("storage = %+v", s)
 	}
 	if !s.Files.Database.Present || s.Files.Database.Bytes <= 0 || !s.Files.WAL.Present || !s.Files.SharedMemory.Present {

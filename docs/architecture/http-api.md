@@ -39,8 +39,9 @@ This page is the contract of the API that `polaroidd` serves. It covers only wha
 | `POST /v1/executions/{id}/invalidation` | `201` invalidation state, with a `Location` header | [Withdraw the execution as evidence](#execution-evidence-invalidation), permanently. |
 | `GET /v1/executions/{id}/invalidation` | `200` invalidation state | Whether the execution is still valid evidence. |
 | `POST /v1/feedback` | `201` feedback report, with a `Location` header | Report a problem or a suggestion, optionally naming its subject. |
-| `GET /v1/feedback[?kind=…][&subject_type=…[&subject_id=…[&subject_version=…]]][&repository=…][&limit=…&after=…]` | `200 {"feedback":[...]}` | List feedback reports, oldest first, in full. |
+| `GET /v1/feedback[?kind=…][&subject_type=…[&subject_id=…[&subject_version=…]]][&repository=…][&status=…][&limit=…&after=…]` | `200 {"feedback":[...]}` | List feedback reports, oldest first, in full. |
 | `GET /v1/feedback/{id}` | `200` feedback report | One feedback report. |
+| `POST /v1/feedback/{id}/resolution` | `201` feedback resolution, with a `Location` header | [Record how a report was handled](#feedback-resolution), permanently. |
 | `POST /v1/repositories` | `201` repository, with a `Location` header | Register a repository under its canonical identifier. |
 | `GET /v1/repositories[?limit=…&after=…]` | `200 {"repositories":[...]}` | List registered repositories, oldest first. |
 | `GET /v1/repositories/{id}` | `200` repository | One repository with its aliases. |
@@ -466,7 +467,31 @@ A report may also name its `subject`, the `repository` it was made in, and a rel
 
 An unknown subject record or execution, a subject member of another type, and a repository or execution that disagrees with the subject are `400` naming the field. The list adds the filters `subject_type`, `subject_id` (needs `subject_type`), `subject_version` (needs a procedure or binding `subject_id`) and `repository` (the report's repository, or a repository subject, by identity), plus `limit` and `after`. `subject_type=service` includes reports without a subject. For example, reports about version 2 of a procedure in one repository: `GET /v1/feedback?subject_type=procedure&subject_id=…&subject_version=2&repository=github.com/ashuangiras/polaroid`.
 
-Reports are never changed or deleted, and Polaroid tracks no triage state ([records.md](records.md#feedback-report-implemented)).
+Reports are never changed or deleted. Each carries a `status`, `open` or `resolved`, derived from its [resolution](#feedback-resolution); `list_feedback`'s `status` filter narrows by it, and with none given every report is listed, open and resolved alike ([ADR-0040](decisions/0040-feedback-resolution.md)).
+
+### Feedback resolution
+
+A resolution records how a feedback report was handled, without changing the report ([ADR-0040](decisions/0040-feedback-resolution.md), [records.md](records.md#feedback-resolution-implemented)).
+
+```http
+POST /v1/feedback/{id}/resolution
+Content-Type: application/json
+
+{"outcome": "addressed", "reason": "record_execution's error now states the commit-hash length it requires.",
+ "actor": "copilot.vscode", "references": [{"uri": "https://github.com/ashuangiras/polaroid/pull/74"}]}
+```
+
+```http
+HTTP/1.1 201 Created
+Location: /v1/feedback/{id}
+
+{"outcome":"addressed","reason":"record_execution's error now states …","actor":"copilot.vscode",
+ "references":[{"uri":"https://github.com/ashuangiras/polaroid/pull/74"}],"created_at":"2026-10-12T13:00:00Z"}
+```
+
+- `outcome` (`addressed`, `declined`, `not_reproduced` or `duplicate`), `reason` (not blank) and `actor` (canonical-key format, as a feedback `reporter`) are required; `references`, declared `{uri, note?}` values as a toil item's, is optional. Each rule violation is `400` naming the field. An unknown report is `404`.
+- It is **irreversible**: a second resolution, also a concurrent one, is `409 feedback_resolved`, and nothing changes. A report that recurs is answered by a new report, which may cite this one, not by reopening it.
+- `GET /v1/feedback/{id}` adds `status` (`resolved`) and `resolution` with exactly the stored fields; an open report has `status` `open` and no `resolution`.
 
 ### Toil items
 
@@ -544,17 +569,18 @@ Location: /v1/procedures/{id}/lifecycle/events
 
 ### Catalog statistics
 
-`GET /v1/statistics` summarizes the whole catalog ([ADR-0036](decisions/0036-read-only-catalog-statistics.md)). It writes nothing, takes no query parameter (any is `400 invalid_request`), and returns no record content, ID or filesystem path. A real response from the synthetic catalog of the HTTP tests (two repositories, five procedures, nine executions), with eight payload categories and the 37 field limits left out where marked:
+`GET /v1/statistics` summarizes the whole catalog ([ADR-0036](decisions/0036-read-only-catalog-statistics.md)). It writes nothing, takes no query parameter (any is `400 invalid_request`), and returns no record content, ID or filesystem path. A real response from the synthetic catalog of the HTTP tests (two repositories, five procedures, nine executions), with eight payload categories and the 40 field limits left out where marked:
 
 ```json
 {"statistics_version":1,"generated_at":"2026-10-11T14:50:55.299568Z",
  "records":{"procedures":5,"procedure_versions":6,"procedure_references":3,"procedure_origins":1,"procedure_lifecycle_events":3,
    "repositories":2,"repository_aliases":1,"bindings":1,"binding_revisions":2,"executions":9,"execution_children":4,
-   "execution_decisions":2,"execution_invalidations":5,"feedback":1,"toil_items":1,"toil_revisions":2,"toil_revision_sources":2,
+   "execution_decisions":2,"execution_invalidations":5,"feedback":1,"feedback_resolutions":0,"toil_items":1,"toil_revisions":2,"toil_revision_sources":2,
    "toil_revision_executions":2},
  "procedures":{"by_lifecycle":{"active":4,"retired":1},"by_scope":{"shared":1,"local":1,"unspecified":3}},
  "executions":{"by_outcome":{"succeeded":8,"failed":1},"by_evidence_status":{"valid":4,"invalidated":5},
    "invalidated_by_outcome":{"succeeded":4,"failed":1},"valid_with_invalidated_child":1},
+ "feedback":{"by_status":{"open":1,"resolved":0}},
  "toil_items":{"by_status":{"observed":0,"candidate":1,"implemented":0,"validated":0,"retired":0}},
  "payloads":{"procedure_contracts":{"count":6,"total_bytes":57,"mean_bytes":9,"max_bytes":47},
    "execution_evidence":{"count":9,"total_bytes":105,"mean_bytes":11,"max_bytes":25},
@@ -566,9 +592,10 @@ Location: /v1/procedures/{id}/lifecycle/events
 
 Here every page is still in the WAL, so the database file is one page while `database_bytes` is 70 pages.
 
-- **`records`** counts every stored record kind: identities (`procedures`, `repositories`, `bindings`, `executions`, `feedback`, `toil_items`), their history (`procedure_versions`, `procedure_lifecycle_events`, `binding_revisions`, `toil_revisions`) and relationship records (`procedure_references`, `procedure_origins`, `repository_aliases`, `execution_children`, `execution_decisions`, `execution_invalidations`, `toil_revision_sources`, `toil_revision_executions`).
+- **`records`** counts every stored record kind: identities (`procedures`, `repositories`, `bindings`, `executions`, `feedback`, `toil_items`), their history (`procedure_versions`, `procedure_lifecycle_events`, `binding_revisions`, `toil_revisions`) and relationship records (`procedure_references`, `procedure_origins`, `repository_aliases`, `execution_children`, `execution_decisions`, `execution_invalidations`, `feedback_resolutions`, `toil_revision_sources`, `toil_revision_executions`).
 - **`procedures`**: `by_lifecycle` from each procedure's latest lifecycle event, `by_scope` from its latest version. Each adds up to `records.procedures`.
 - **`executions`**: `by_outcome` is the recorded outcome of every execution, invalidated ones included; it is not verification. `by_evidence_status` is `valid` or `invalidated`; `invalidated_by_outcome` splits the invalidated ones by outcome. `valid_with_invalidated_child` counts valid executions that directly link at least one invalidated child (they report `child_invalidated`); their ancestors are not counted. Verified executions are not counted: that needs every execution tree walked.
+- **`feedback`**: `by_status` of every report, `open` or `resolved` ([ADR-0040](decisions/0040-feedback-resolution.md)). Adds up to `records.feedback`.
 - **`toil_items`**: `by_status` of each item's latest revision.
 - **`payloads`**: for `procedure_contracts`, `procedure_instructions`, `reference_inputs`, `binding_revision_inputs`, `execution_inputs`, `execution_evidence`, `execution_environment_attributes`, `decision_evidence`, `feedback_contexts`, `toil_assessments` and `toil_proposals`, over every version and revision: `count` of stored values, `total_bytes`, `mean_bytes` (rounded down, 0 without values) and `max_bytes`. A size is the UTF-8 length of the value's stored JSON text (compact, escapes as received); a response writes an escaped character as itself, so it can be shorter. `{}` counts 2 bytes; an absent optional value (`proposal`, a decision's `evidence`) is not counted.
 - **`storage`**: `schema_version`, `page_size`, `page_count`, `freelist_count` and `database_bytes` (page size × page count) describe the database as of the same snapshot. `files` are the sizes of the database file and SQLite's `wal` and `shm` files, each `{"present":true,"bytes":N}` or `{"present":false}`.
@@ -584,8 +611,8 @@ Every persisted, user-controlled text and JSON field has a byte limit, and so ha
 | --- | --- | --- |
 | document | 65,536 | `version.contract`, `version.instructions`; execution `evidence`; toil `revision.assessment`, `revision.proposal` |
 | object | 16,384 | `version.references[].inputs`; binding `revision.inputs`; execution `inputs`, `environment.attributes`, `decisions[].evidence`; feedback `context` |
-| text | 8,192 | `version.philosophy`, `version.method`, `version.revision_reason`, `version.references[].condition`, `origin.reason`; binding `revision.revision_reason`; `decisions[].rationale`; invalidation, lifecycle and alias `reason`; feedback `details`; toil `revision.status_rationale`, `revision.revision_reason`, `revision.replacement.summary`, `revision.validation.rationale`, and every `note` |
-| line | 2,048 | `version.goal`; feedback `summary`; repository `name`; toil `revision.activity`, `revision.sources[].steps[]`, each `uri` |
+| text | 8,192 | `version.philosophy`, `version.method`, `version.revision_reason`, `version.references[].condition`, `origin.reason`; binding `revision.revision_reason`; `decisions[].rationale`; invalidation, lifecycle, alias and feedback resolution `reason`; feedback `details`; feedback resolution `references[].note`; toil `revision.status_rationale`, `revision.revision_reason`, `revision.replacement.summary`, `revision.validation.rationale`, and every `note` |
+| line | 2,048 | `version.goal`; feedback `summary`; feedback resolution `references[].uri`; repository `name`; toil `revision.activity`, `revision.sources[].steps[]`, each `uri` |
 | whole write | 262,144 | the sum of all bounded fields of one request |
 
 - **Measurement:** JSON is measured after the compaction used for storage (whitespace removed, member order and string escapes as sent, so `"\u00e9"` counts 6 bytes and `"é"` 2); text is measured in UTF-8 bytes as stored. Exactly the limit is accepted; one byte more is refused. Absent optional values are not counted; feedback without `context` stores and counts `{}`.
@@ -629,6 +656,7 @@ Every error is a JSON object of this form:
 | 409 | `revision_conflict` | `base_revision` is not the latest revision of the binding or toil item. `latest_revision` is included. |
 | 409 | `reference_cycle` | The version's references would form a cycle, or a stored graph contains one. `cycle` is included. |
 | 409 | `execution_invalidated` | The execution is already invalidated; invalidation is irreversible. |
+| 409 | `feedback_resolved` | The feedback report is already resolved; resolving is irreversible. |
 | 409 | `lifecycle_conflict` | `base_event` is not the procedure's latest lifecycle event. `latest_event` is included. |
 | 409 | `lifecycle_unchanged` | Retiring a retired procedure, or reactivating an active one. |
 | 409 | `procedure_retired` | A new version of a retired procedure, a new version referencing one (`fields` names each reference), or a new binding or binding revision of one. Reactivate it first. |
@@ -683,6 +711,7 @@ Example `invalid_request` response:
 | `polaroid feedback [FILE]` | `POST /v1/feedback` |
 | `polaroid feedbacks [KIND] [NAME=VALUE...]` | `GET /v1/feedback[?kind={kind}][&…]` |
 | `polaroid get-feedback ID` | `GET /v1/feedback/{id}` |
+| `polaroid resolve-feedback ID [FILE]` | `POST /v1/feedback/{id}/resolution` |
 | `polaroid register [FILE]` | `POST /v1/repositories` |
 | `polaroid alias ID [FILE]` | `POST /v1/repositories/{id}/aliases` |
 | `polaroid repository ID` | `GET /v1/repositories/{id}` |
@@ -765,3 +794,11 @@ Changes for [#98](https://github.com/ashuangiras/polaroid/issues/98) ([ADR-0037]
 
 - Every write endpoint refuses a value over its [write limit](#write-limits), or a write over 256 KiB in total, with the new error `413 value_too_large` (member `limits`). Such writes used to be accepted. No stored record, read, list, verification, selection, backup or restore changes; the largest live values are at most a quarter of their limits.
 - `GET /v1/statistics` adds `write_limits`; `statistics_version` stays 1.
+
+Changes for [#127](https://github.com/ashuangiras/polaroid/issues/127) ([ADR-0040](decisions/0040-feedback-resolution.md)), additive; migration 11:
+
+- New endpoint `POST /v1/feedback/{id}/resolution`, the error case above for it, and the `status` filter on `GET /v1/feedback`. `value_too_large` can now name a resolution's `reason` or `references[].uri`/`references[].note`.
+- New response fields, always present on a feedback report: `status` (`open` or `resolved`); present only once resolved: `resolution`. `GET /v1/statistics` adds `feedback` (`by_status`) and `feedback_resolutions` under `records`.
+- Until a report is resolved, every existing response is the same apart from `status`, and every request behaves as before. `GET /v1/feedback` without `status` still lists every report, open and resolved alike.
+- A schema-11 catalog cannot be opened by earlier builds, and their `inspect-backup` and `restore` refuse a schema-11 backup.
+

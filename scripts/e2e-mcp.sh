@@ -147,12 +147,12 @@ note "The raw request behind \`post server/discover\`:" '```http' \
 
 ########################################################################
 section "Tool catalogue" \
-	"39 tools mirror the HTTP API one-to-one. 25 only read (including \`discover_procedures\` and \`suggest_duplicates\`, which store nothing, \`get_catalog_statistics\`, and \`prepare_execution\`, a compact, dependency-ordered execution plan) and are annotated \`readOnlyHint\`; 14 write (create/revise procedure, record procedure origin, register repository, add repository alias, create/revise binding, record execution, report feedback, create/revise toil item, invalidate execution, retire/reactivate procedure) and are annotated non-destructive (they only append). Every tool advertises a JSON Schema generated from its argument type: flat arguments named after record fields, optional ones not required." \
+	"40 tools mirror the HTTP API one-to-one. 25 only read (including \`discover_procedures\` and \`suggest_duplicates\`, which store nothing, \`get_catalog_statistics\`, and \`prepare_execution\`, a compact, dependency-ordered execution plan) and are annotated \`readOnlyHint\`; 15 write (create/revise procedure, record procedure origin, register repository, add repository alias, create/revise binding, record execution, report feedback, resolve feedback, create/revise toil item, invalidate execution, retire/reactivate procedure) and are annotated non-destructive (they only append). Every tool advertises a JSON Schema generated from its argument type: flat arguments named after record fields, optional ones not required." \
 	"An MCP client lists tools automatically. By hand: \`post tools/list \"\" \"\"\`."
 show 'post tools/list "" "" | jq -c "[.result.tools[] | {name, readOnly: .annotations.readOnlyHint, destructive: .annotations.destructiveHint, required: .inputSchema.required}]" | jq -c ".[]"'
-check "39 tools" equal "$(wc -l <<<"$LAST" | tr -d ' ')" 39
+check "40 tools" equal "$(wc -l <<<"$LAST" | tr -d ' ')" 40
 check "25 read-only tools" equal "$(grep -c '"readOnly":true' <<<"$LAST")" 25
-check "the 14 write tools are marked non-destructive" equal "$(grep -c '"readOnly":false,"destructive":false' <<<"$LAST")" 14
+check "the 15 write tools are marked non-destructive" equal "$(grep -c '"readOnly":false,"destructive":false' <<<"$LAST")" 15
 show 'post tools/list "" "" | jq ".result.tools[] | select(.name == \"get_graph\") | .inputSchema"'
 check "get_graph requires procedure_id and version; repository and environment are optional" out_has '"required": ['
 
@@ -413,7 +413,7 @@ check "the same document as GET /v1/statistics, apart from generated_at" equal "
 step get_catalog_statistics '{"repository":"github.com/example/service"}' '.error.code'
 check "arguments are refused: invalid_request" json_has '. == "invalid_request"'
 step get_catalog_statistics '{}' '.write_limits | {policy_version, fields: (.fields | length)}'
-check "the statistics report the write-limit policy (ADR-0037)" json_has '. == {"policy_version":1,"fields":37}'
+check "the statistics report the write-limit policy (ADR-0037)" json_has '. == {"policy_version":1,"fields":40}'
 BIG98="{\"canonical_key\":\"demo.too-large\",\"philosophy\":\"p\",\"method\":\"m\",\"contract\":{\"log\":\"$(printf 'x%.0s' $(seq 65530))\"},\"instructions\":{},\"revision_reason\":\"r\"}"
 LAST="$(tool create_procedure "$BIG98" | text | jq -c '.error | {code, limits}')"
 md '```text' 'tools/call create_procedure' 'arguments: {"canonical_key":"demo.too-large", …, "contract":{"log":"<65,530 x>"}, …}' "result | .error | {code, limits}:" "$LAST" '```'
@@ -541,10 +541,10 @@ await client.close().catch(() => {});
 EOF
 show '(cd "$TSDIR" && node probe.mjs "$URL/mcp")'
 check "TypeScript SDK 1.32.1 connects at 2025-11-25, without a session" out_has "negotiated: 2025-11-25 session: none"
-check "...lists all 39 tools" out_has "connected; tools: 39"
+check "...lists all 40 tools" out_has "connected; tools: 40"
 check "...and records feedback" out_has "report_feedback: ts.sdk"
 show '(cd "$TSDIR" && npx --no-install mcp-inspector --cli "$URL/mcp" --transport http --method tools/list 2>/dev/null | jq -c "[.tools[].name] | length")'
-check "MCP Inspector 2.10.1 lists the 39 tools" equal "$LAST" 39
+check "MCP Inspector 2.10.1 lists the 40 tools" equal "$LAST" 40
 fi
 VSCODE_GITHUB="/Applications/Visual Studio Code.app/Contents/Resources/app/node_modules.asar.unpacked/@github"
 if [[ "${E2E_INTEROP:-1}" == 0 ]]; then
