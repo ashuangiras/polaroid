@@ -2,29 +2,26 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
-**Git-core, milestones A and B ([ADR-0044](../architecture/decisions/0044-git-core.md), [ADR-0045](../architecture/decisions/0045-living-knowledge-kernel.md)), on branch `git-core`, as of 2026-10-13.** No PR yet.
+**Git-core, milestones A–C ([ADR-0044](../architecture/decisions/0044-git-core.md), [ADR-0045](../architecture/decisions/0045-living-knowledge-kernel.md), [ADR-0046](../architecture/decisions/0046-git-knowledge-synchronisation.md)), on branch `git-core`, as of 2026-10-13.** No PR yet.
 
-- **Milestone B done:** `internal/knowledge`, the Git-native knowledge path, with `internal/knowledge/gitstore`, its store on Git-core.
-  - Procedures live under stable canonical keys as canonical JSON documents.
-  - Catalogs and compositions are read from one snapshot.
-  - Publication validates the whole resulting catalog (references, applicability, cycles, depth, size) and records provenance as commit author, rationale and `Polaroid-*` trailers.
-  - Rollback is a new publication. Discovery is deterministic.
-  - A fresh process recovers everything from the repository alone.
-- **Legacy path unchanged:** the daemon, API, MCP tools, CLI, records and schema still serve only the SQLite path. `internal/archtest` keeps every legacy package free of `knowledge` and `gitcore`, so nothing writes knowledge to both stores.
-- **Tested** (`go test -race ./internal/knowledge/...`): one acceptance scenario, run against an in-memory store and against real Git-core. It covers:
-  - three related procedures;
-  - an improved child, with the old snapshot's composition intact;
-  - refused broken references, cycles, invalid contracts and stale updates;
-  - six racing publishers with one winner;
-  - rollback;
-  - provenance.
+- **Milestone C done:** independent instances exchange knowledge through ordinary Git remotes, implemented in `internal/knowledgesync` and Git-core's fetch, import, activation and push.
+  - **Transports:** local paths (the installed `git-upload-pack`/`git-receive-pack`), HTTPS with basic or token authentication, and SSH with an explicit key and a verifying `known_hosts`. Credentials are supplied per call; a URL holding a password or token is refused.
+  - **Fetch:** transfers into a quarantine bounded by pack bytes, object count, object and delta-result size, inflated total and commit count. It changes nothing.
+  - **Validate:** verifies Git integrity (hashes, safe regular-file trees, linear history, no unrequested objects). It then checks every new publication against the trust policy (a listed source, an authorised publisher, a rationale) and as a complete catalog. Rejected candidates leave nothing; accepted ones are stored and tracked but stay inactive.
+  - **Activate:** a fast-forward through the kernel, revalidated under the writer lock. It is optimistic: a newer local publication makes it `ErrStale`. Each decision is recorded in a local activation journal.
+  - **Divergence:** detected and kept on both sides; nothing is merged or forced. Pushes are fast-forward only and use the remote's compare-and-swap.
+  - **Interfaces:** no API, MCP, CLI, record or schema changes; the daemon does not link Git-core.
+- **Tested** (`go test -race ./internal/gitcore/ ./internal/knowledge/... ./internal/knowledgesync/`) against real Git servers: a `git init --bare` remote, `git http-backend` over TLS, and an in-process SSH server running Git.
+  - Two instances and a fresh third run the 14-step exchange.
+  - Failure cases: interrupted, corrupted and truncated transfers; authentication and host-key failures; unsafe trees; transfer limits; unrequested objects; stale activation and import; racing activation and publication; six racing pushers with one winner.
 
-  Integration tests also cover recovery in a fresh process, foreign trees refused, and damaged documents reported as corruption. Mutation checks fail the tests without the stale check, publication or read validation, the cycle and depth check, applicability admission, the stored-tree check or canonical decoding.
-- **Milestone A done:** `internal/gitcore`. It provides durable, atomic publication under one active ref and reads of published snapshots only. It also provides history with trailers, diff, `Verify` and `Recover`. Its tests cover process crashes at five stages, racing writers across processes, damage detection and recovery, and Git CLI interoperability.
-- **Dependencies:** go-git v5.19.3 plus 12 modules (all permissive), and `golang.org/x/net` v0.60.0; milestone B adds none.
+  Mutation checks fail the tests when any of 24 guards is removed. Measurements are in ADR-0046 (`POLAROID_SYNC_MEASURE=1`).
+- **Dependencies added:** go-git's `file`, `http` and `ssh` transports compile `github.com/golang/groupcache`, `github.com/kevinburke/ssh_config`, `github.com/skeema/knownhosts` and `github.com/xanzy/ssh-agent` (MIT or Apache-2.0), plus more of `golang.org/x/crypto` and `x/net`.
+- **Not run:** the [hosted-remote smoke test](git-remote-smoke.md), which needs a test repository and token from the owner.
+- **Milestones A and B done:** `internal/gitcore` (durable, atomic snapshots under one active ref; crash, concurrency, damage, recovery and Git CLI tests) and `internal/knowledge` with `internal/knowledge/gitstore` (keyed procedures, snapshot catalogs, whole-catalog validation, provenance, rollback, discovery, recovery from the repository alone).
 - **Experiment preserved:** branch `exp/git-native-knowledge` at `f5780a5` on GitHub (public; no PR).
 
-Next action: milestone C, remote synchronisation. Its open questions are listed in ADR-0045's consequences.
+Next action: milestone D, the agent interface on the knowledge kernel, which depends on the disposition of PR #132. The open items carried forward are listed in ADR-0046's consequences.
 
 **Maintenance release `v1.0.1` in progress ([#120](https://github.com/ashuangiras/polaroid/issues/120)), as of 2026-10-11.**
 

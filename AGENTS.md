@@ -77,9 +77,10 @@ Polaroid is a versioned procedural memory service for agents, written in Go, wit
 | `internal/archtest` | Package-boundary tests |
 | `internal/lifecycle` | Per-user installation and the managed service (launchd, systemd user services); no domain, storage or transport code |
 | `internal/recovery` | Catalog backup, inspection and restore (ADR-0030); the only way `cmd/polaroid` reaches storage |
-| `internal/gitcore` | Knowledge snapshots in a bare Git repository (ADR-0044): durable publication, active ref, history, verification, recovery; no procedure rules |
+| `internal/gitcore` | Knowledge snapshots in a bare Git repository (ADR-0044): durable publication, active ref, history, verification, recovery; quarantined fetch, import, fast-forward activation and push over Git remotes (ADR-0046); no procedure rules |
 | `internal/knowledge` | The Git-native knowledge path (ADR-0045): keyed procedures, snapshot catalogs, composition, validation, publication with provenance, rollback, discovery; storage only through its `Store` port; not used by the daemon |
 | `internal/knowledge/gitstore` | The knowledge `Store` on Git-core |
+| `internal/knowledgesync` | Knowledge exchange between instances (ADR-0046): trust policy, fetch, validation, divergence, activation, publishing; not used by the daemon |
 | `internal/version` | Build identity from the embedded VCS metadata |
 | `examples/` | Example procedure records (task knowledge), and Polaroid's development procedures in `examples/development/`, loaded with `scripts/load-fixtures.sh` |
 | `docs/` | Architecture, decisions, workflow, status, roadmap |
