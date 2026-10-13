@@ -29,6 +29,7 @@ import (
 	"github.com/ashuangiras/polaroid/internal/memory"
 	"github.com/ashuangiras/polaroid/internal/storage/sqlite"
 	httptransport "github.com/ashuangiras/polaroid/internal/transport/http"
+	"github.com/ashuangiras/polaroid/internal/transport/httpops"
 	mcptransport "github.com/ashuangiras/polaroid/internal/transport/mcp"
 	"github.com/ashuangiras/polaroid/internal/version"
 )
@@ -52,8 +53,11 @@ type config struct {
 	// defaultLocation is set when dbPath is the per-user default, however it
 	// was given; such a database is created private (ADR-0025, ADR-0026).
 	defaultLocation bool
-	logFile         string
-	version         bool
+	// knowledgeDir is the Git-native knowledge repository's directory
+	// (ADR-0048), however it was given.
+	knowledgeDir string
+	logFile      string
+	version      bool
 }
 
 func main() {
@@ -107,10 +111,12 @@ func parseConfig(args []string, lookupEnv func(string) (string, bool), userHomeD
 	fs.SetOutput(output)
 	fs.StringVar(&cfg.addr, "addr", cfg.addr, "listen `address` (env POLAROID_ADDR)")
 	fs.StringVar(&dbFlag, "db", "", "SQLite database `file` (env POLAROID_DB; default ~/.polaroid/data/polaroid.db in the user's home directory)")
+	var knowledgeDirFlag string
+	fs.StringVar(&knowledgeDirFlag, "knowledge-dir", "", "Git-native knowledge repository `directory` (env POLAROID_KNOWLEDGE_DIR; default ~/.polaroid/data/knowledge)")
 	fs.StringVar(&cfg.logFile, "log-file", "", "write logs, standard output and standard error to `file`, rotated to file.1 at 4 MiB (default: standard error)")
 	fs.BoolVar(&cfg.version, "version", false, "print the build as JSON and exit")
 	fs.Usage = func() {
-		fmt.Fprintln(output, "Usage: polaroidd [-addr host:port] [-db path] [-log-file path] [-version]")
+		fmt.Fprintln(output, "Usage: polaroidd [-addr host:port] [-db path] [-knowledge-dir path] [-log-file path] [-version]")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -149,6 +155,26 @@ func parseConfig(args []string, lookupEnv func(string) (string, bool), userHomeD
 			cfg.defaultLocation = true
 		}
 	}
+	knowledgeDirSet := false
+	fs.Visit(func(f *flag.Flag) { knowledgeDirSet = knowledgeDirSet || f.Name == "knowledge-dir" })
+	switch kenv, kenvSet := lookupEnv("POLAROID_KNOWLEDGE_DIR"); {
+	case knowledgeDirSet && knowledgeDirFlag == "":
+		return config{}, errors.New("-knowledge-dir must not be empty")
+	case knowledgeDirSet:
+		cfg.knowledgeDir = knowledgeDirFlag
+	case kenvSet && kenv == "":
+		return config{}, errors.New("POLAROID_KNOWLEDGE_DIR is set but empty: unset it to use ~/.polaroid/data/knowledge, or name a directory")
+	case kenvSet:
+		cfg.knowledgeDir = kenv
+	default:
+		// A home-directory resolution failure here is not fatal (as the
+		// database's own defaultLocation check above tolerates it): it only
+		// means the Git-native knowledge path does not start, which run
+		// reports but does not fail on.
+		if dir, err := defaultKnowledgeDir(userHomeDir); err == nil {
+			cfg.knowledgeDir = dir
+		}
+	}
 	return cfg, nil
 }
 
@@ -182,8 +208,15 @@ func run(ctx context.Context, cfg config, logger *slog.Logger, ready func(net.Ad
 	svc := memory.NewService(store)
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", mcptransport.NewHandler(svc, logger))
-	mux.Handle("/mcp/agent", mcptransport.NewAgentHandler(svc, logger))
 	mux.Handle("/", httptransport.NewHandler(svc, logger))
+	if cfg.knowledgeDir != "" {
+		if kc, err := setupKnowledge(cfg.knowledgeDir, cfg.knowledgeDir+"-sources.json", cfg.knowledgeDir+"-operator-token", svc); err != nil {
+			logKnowledgeUnavailable(logger, err)
+		} else {
+			mux.Handle("/mcp/agent", mcptransport.NewAgentHandler(kc.agent, logger))
+			mux.Handle("/v1/knowledge/", httpops.NewHandler(kc.operator, kc.token, logger))
+		}
+	}
 	var handler http.Handler = mux
 	if tcp, ok := ln.Addr().(*net.TCPAddr); ok && tcp.IP.IsLoopback() {
 		handler = httptransport.RequireLoopbackHost(handler)

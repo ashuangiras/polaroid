@@ -282,7 +282,11 @@ check "the restored service is healthy" healthy
 check "the record written after the backup is gone" bash -c "! curl -sf '$URL/v1/procedures/by-key/lifecycle.after' >/dev/null"
 check "the record from before the backup is intact" test "$(record)" == "$BEFORE"
 check "the recovery backup is in the default directory and holds the replaced catalog" bash -c "[[ '$RECOVERY' == '$BACKUPS'/polaroid-*-pre-restore* ]] && '$CLI' inspect-backup '$RECOVERY' | jq -e '.valid and .records.procedures == 2' >/dev/null"
-check "the catalog is private and no restore leftovers remain" bash -c "[[ \$($(declare -f mode_of); mode_of '$DB') == 600 && -z \$(ls -A '$(dirname "$DB")' | grep -Ev '^polaroid\.db(-wal|-shm)?\$') ]]"
+check "the catalog is private and no restore leftovers remain" bash -c "[[ \$($(declare -f mode_of); mode_of '$DB') == 600 && -z \$(ls -A '$(dirname "$DB")' | grep -Ev '^polaroid\.db(-wal|-shm)?\$|^knowledge\$|^knowledge-operator-token\$|^knowledge-sources\.json\$') ]]"
+KDIR="$(dirname "$DB")/knowledge"
+if [[ -e "$KDIR" ]]; then
+    check "the knowledge directory and operator token are private" bash -c "[[ \$($(declare -f mode_of); mode_of '$KDIR') == 700 && \$($(declare -f mode_of); mode_of '$KDIR-operator-token') == 600 ]]"
+fi
 cli stop
 SUM=$(sha256 "$DB")
 "$B0/polaroidd" -addr "$ADDR" -db "$ROOT/manual.db" 2>"$ROOT/manual.log" &

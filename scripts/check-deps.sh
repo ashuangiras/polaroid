@@ -75,7 +75,9 @@ while read -r mod ver; do
 	go mod download "$mod@$ver"
 	dir="$(go list -m -f '{{.Dir}}' "$mod")"
 	file=""
-	for name in LICENSE LICENSE.md LICENSE.txt COPYING; do
+	# LICENSE.BSD: filepath-securejoin ships its BSD-3-Clause and MPL-2.0 texts
+	# side by side; the packages Polaroid compiles carry the BSD-3-Clause one.
+	for name in LICENSE LICENSE.md LICENSE.txt COPYING LICENSE.BSD; do
 		if [[ -f "$dir/$name" ]]; then
 			file="$dir/$name"
 			break

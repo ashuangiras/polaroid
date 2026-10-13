@@ -3,28 +3,79 @@ package mcp_test
 import (
 	"context"
 	"encoding/json"
+	"encoding/json/jsontext"
 	"log/slog"
 	"net/http/httptest"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/ashuangiras/polaroid/internal/gitcore"
+	"github.com/ashuangiras/polaroid/internal/knowledge"
+	"github.com/ashuangiras/polaroid/internal/knowledge/gitstore"
+	"github.com/ashuangiras/polaroid/internal/knowledgeops"
 	"github.com/ashuangiras/polaroid/internal/memory"
+	"github.com/ashuangiras/polaroid/internal/storage/sqlite"
 	mcptransport "github.com/ashuangiras/polaroid/internal/transport/mcp"
 )
 
-// ADR-0043: the agent-mode endpoint, over the same store as the full one.
+// ADR-0043, finalized for Git-native knowledge by ADR-0048: the agent-mode
+// endpoint, backed solely by living knowledge named by canonical key and
+// snapshot token.
 
-func newAgentHarness(t *testing.T) (full, agent *harness) {
+// knowledgeHarness runs the real agent-mode MCP handler over a real
+// Git-core repository (for knowledge) and a real SQLite file (for
+// feedback), over real HTTP.
+type knowledgeHarness struct {
+	*harness
+	kernel *knowledge.Kernel
+}
+
+func newKnowledgeHarness(t *testing.T) *knowledgeHarness {
 	t.Helper()
-	full = newHarness(t)
-	srv := httptest.NewServer(mcptransport.NewAgentHandler(memory.NewService(full.store), slog.New(slog.NewTextHandler(full.logs, nil))))
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "polaroid.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	repo, err := gitcore.Open(filepath.Join(t.TempDir(), "knowledge"), gitcore.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kernel := knowledge.New(gitstore.New(repo))
+	agent := knowledgeops.NewAgent(kernel, memory.NewService(store))
+	logs := &syncBuffer{}
+	srv := httptest.NewServer(mcptransport.NewAgentHandler(agent, slog.New(slog.NewTextHandler(logs, nil))))
 	t.Cleanup(srv.Close)
-	agent = &harness{url: srv.URL, store: full.store, logs: full.logs}
-	agent.session = agent.connect(t, "")
-	return full, agent
+	h := &harness{url: srv.URL, store: store, logs: logs}
+	h.session = h.connect(t, "")
+	return &knowledgeHarness{harness: h, kernel: kernel}
+}
+
+// publish commits procs atop the active snapshot and returns the result.
+func (kh *knowledgeHarness) publish(t *testing.T, procs ...*knowledge.Procedure) knowledge.Snapshot {
+	t.Helper()
+	ctx := context.Background()
+	base, err := kh.kernel.Active(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes := make([]knowledge.Change, len(procs))
+	for i, p := range procs {
+		changes[i] = knowledge.Change{Key: p.Key, Procedure: p}
+	}
+	snap, err := kh.kernel.Publish(ctx, knowledge.Proposal{
+		Base: base.Snapshot(), Changes: changes,
+		Provenance: knowledge.Provenance{Author: "test", Summary: "test publish", Rationale: "test fixture"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snap
 }
 
 func decodeJSON(t *testing.T, text string) map[string]any {
@@ -37,7 +88,7 @@ func decodeJSON(t *testing.T, text string) map[string]any {
 }
 
 func TestAgentModeAdvertisesOnlyItsTools(t *testing.T) {
-	_, agent := newAgentHarness(t)
+	agent := newKnowledgeHarness(t)
 	var names []string
 	for tool, err := range agent.session.Tools(context.Background(), nil) {
 		if err != nil {
@@ -59,257 +110,114 @@ func TestAgentModeAdvertisesOnlyItsTools(t *testing.T) {
 	}
 }
 
-func TestAgentDiscoverAndRead(t *testing.T) {
-	full, agent := newAgentHarness(t)
-	leaf := field(t, full.ok(t, "create_procedure", `{"canonical_key":"go.module.tidy","philosophy":"p","method":"Tidy the module.","goal":"Tidy a Go module's dependencies.","contract":{"inputs":{"module":"path"}},"instructions":{"steps":["go mod tidy"]},"revision_reason":"r"}`), "id")
-	full.ok(t, "revise_procedure", `{"procedure_id":"`+leaf+`","base_version":1,"philosophy":"p","method":"Tidy the module.","goal":"Tidy a Go module's dependencies.","contract":{"inputs":{"module":"path"}},"instructions":{"steps":["go mod tidy","git diff"]},"revision_reason":"r2"}`)
-	root := field(t, full.ok(t, "create_procedure", `{"canonical_key":"go.module.change","philosophy":"Why it works.","method":"Change, tidy, check.","goal":"Safely modify a Go module.","contract":{"inputs":{"module":"path"}},"instructions":{"steps":["change","tidy"]},"revision_reason":"r",
-		"references":[{"name":"tidy","procedure_id":"`+leaf+`","version_policy":{"pin":1},"inputs":{"module":{"input":"module"}}},
-		{"name":"tidy-latest","procedure_id":"`+leaf+`","version_policy":{"contextual":{}},"inputs":{"module":{"input":"module"},"strict":{"value":true}},"condition":"Only when dependencies changed."}]}`), "id")
-	full.ok(t, "create_binding", `{"repository":"github.com/example/service","name":"change-module","procedure_id":"`+root+`","inputs":{"module":"example.com/m"},"version_policy":{"contextual":{}},"revision_reason":"r"}`)
+func TestAgentDiscoverEmptyCatalog(t *testing.T) {
+	agent := newKnowledgeHarness(t)
+	d := decodeJSON(t, agent.ok(t, "discover", `{"task":"anything"}`))
+	if d["empty"] != true {
+		t.Fatalf("discover of an empty catalog = %v", d)
+	}
+	if _, ok := d["candidates"]; ok {
+		t.Fatalf("empty discover must not carry candidates: %v", d)
+	}
+}
 
-	d := decodeJSON(t, agent.ok(t, "discover", `{"task":"safely modify a Go module","repository":"github.com/example/service"}`))
+func TestAgentDiscoverAndRead(t *testing.T) {
+	agent := newKnowledgeHarness(t)
+	leaf := &knowledge.Procedure{
+		Key: "go.module.tidy", Goal: "Tidy a Go module's dependencies.", Philosophy: "Keep dependencies minimal.", Method: "Run go mod tidy.",
+		Contract: jsontext.Value(`{"inputs":{"module":"path"}}`), Instructions: jsontext.Value(`{"steps":["go mod tidy"]}`),
+	}
+	cond := "Only when dependencies changed."
+	root := &knowledge.Procedure{
+		Key: "go.module.change", Goal: "Safely modify a Go module.", Philosophy: "Why it works.", Method: "Change, tidy, check.",
+		Contract: jsontext.Value(`{"inputs":{"module":"path"}}`), Instructions: jsontext.Value(`{"steps":["change","tidy"]}`),
+		References: []knowledge.Reference{
+			{Name: "tidy", Key: "go.module.tidy", Inputs: jsontext.Value(`{"module":{"input":"module"}}`)},
+			{Name: "tidy-conditional", Key: "go.module.tidy", Condition: &cond, Inputs: jsontext.Value(`{"module":{"input":"module"}}`)},
+		},
+	}
+	snap := agent.publish(t, leaf, root)
+
+	d := decodeJSON(t, agent.ok(t, "discover", `{"task":"safely modify a Go module"}`))
+	if d["snapshot"] != string(snap) {
+		t.Fatalf("discover snapshot = %v, want %s", d["snapshot"], snap)
+	}
 	cands := d["candidates"].([]any)
+	if len(cands) == 0 {
+		t.Fatalf("no candidates: %v", d)
+	}
 	first := cands[0].(map[string]any)
-	if first["canonical_key"] != "go.module.change" || first["goal"] != "Safely modify a Go module." || first["scope"] != "unspecified" {
+	if first["key"] != "go.module.change" || first["goal"] != "Safely modify a Go module." {
 		t.Fatalf("first candidate = %v", first)
 	}
 	for _, c := range cands {
 		for k := range c.(map[string]any) {
-			if !slices.Contains([]string{"procedure_id", "canonical_key", "version", "scope", "goal"}, k) {
+			if !slices.Contains([]string{"key", "goal", "score"}, k) {
 				t.Fatalf("candidate member %q is not compact: %v", k, c)
 			}
 		}
 	}
-	if b := d["bindings"].([]any); len(b) != 1 || b[0].(map[string]any)["name"] != "change-module" {
-		t.Fatalf("bindings = %v", d["bindings"])
-	}
 
-	text := agent.ok(t, "read", `{"repository":"github.com/example/service","binding":"change-module","environment":"ci.test"}`)
+	text := agent.ok(t, "read", `{"key":"go.module.change","snapshot":"`+string(snap)+`","inputs":{"module":"example.com/m"}}`)
 	g := decodeJSON(t, text)
-	if g["procedure_id"] != root || g["version"] != 1.0 || g["method"] != "Change, tidy, check." || g["binding"].(map[string]any)["revision"] != 1.0 {
-		t.Fatalf("read binding = %s", text)
+	if g["snapshot"] != string(snap) || g["key"] != "go.module.change" || g["method"] != "Change, tidy, check." {
+		t.Fatalf("read = %v", g)
 	}
-	for _, absent := range []string{"philosophy", "revision_reason", "created_at", "versions"} {
-		if _, ok := g[absent]; ok {
-			t.Fatalf("read returned %q by default: %s", absent, text)
-		}
+	if _, ok := g["procedure_id"]; ok {
+		t.Fatalf("read must not expose procedure_id: %v", g)
+	}
+	if _, ok := g["version"]; ok {
+		t.Fatalf("read must not expose version: %v", g)
+	}
+	if _, ok := g["philosophy"]; ok {
+		t.Fatalf("read without full must not expose philosophy: %v", g)
 	}
 	refs := g["references"].([]any)
-	tidy, latest := refs[0].(map[string]any), refs[1].(map[string]any)
-	if tidy["version"] != 1.0 || latest["version"] != 2.0 || latest["condition"] != "Only when dependencies changed." || tidy["condition"] != nil {
+	if len(refs) != 2 {
 		t.Fatalf("references = %v", refs)
 	}
-	if !strings.Contains(text, `"inputs":{"module":"example.com/m","strict":true}`) {
-		t.Fatalf("mapped child inputs missing: %s", text)
+	plain := refs[0].(map[string]any)
+	if plain["key"] != "go.module.tidy" || plain["inputs"].(map[string]any)["module"] != "example.com/m" {
+		t.Fatalf("plain reference = %v", plain)
+	}
+	conditional := refs[1].(map[string]any)
+	if conditional["condition"] != cond {
+		t.Fatalf("conditional reference = %v", conditional)
 	}
 
-	// The mapped inputs equal the full API's own derivation for the child.
-	plan := decodeJSON(t, full.ok(t, "prepare_execution", `{"binding_id":"`+g["binding"].(map[string]any)["id"].(string)+`","environment":"ci.test","commit":"`+commit40+`","inputs":{"module":"example.com/m"},"decisions":{"tidy-latest":true}}`))
-	for _, s := range plan["steps"].([]any) {
-		step := s.(map[string]any)
-		for _, r := range refs {
-			ref := r.(map[string]any)
-			if step["path"] == ref["name"] {
-				want, _ := json.Marshal(step["inputs"])
-				got, _ := json.Marshal(ref["inputs"])
-				if string(got) != string(want) {
-					t.Fatalf("%s: read inputs %s, prepare_execution inputs %s", ref["name"], got, want)
-				}
-			}
-		}
+	full := decodeJSON(t, agent.ok(t, "read", `{"key":"go.module.change","snapshot":"`+string(snap)+`","full":true}`))
+	if full["philosophy"] != "Why it works." {
+		t.Fatalf("full read = %v", full)
+	}
+	noInputs := decodeJSON(t, agent.ok(t, "read", `{"key":"go.module.change","snapshot":"`+string(snap)+`"}`))
+	if m, ok := noInputs["references"].([]any)[0].(map[string]any)["input_mapping"]; !ok || m == nil {
+		t.Fatalf("read without inputs must carry input_mapping: %v", noInputs)
 	}
 
-	byKey := agent.ok(t, "read", `{"canonical_key":"go.module.change","full":true}`)
-	if m := decodeJSON(t, byKey); m["philosophy"] != "Why it works." || m["revision_reason"] != "r" || !strings.Contains(byKey, `"input_mapping":{"module":{"input":"module"}}`) {
-		t.Fatalf("full read without inputs = %s", byKey)
+	errRes := agent.call(t, "read", `{"key":"does.not.exist","snapshot":"`+string(snap)+`"}`)
+	if !errRes.IsError {
+		t.Fatalf("read of an unknown key must fail")
 	}
-	if v := decodeJSON(t, agent.ok(t, "read", `{"procedure_id":"`+leaf+`","version":1,"inputs":{"module":"a"}}`)); v["version"] != 1.0 || v["latest_version"] != 2.0 {
-		t.Fatalf("read version 1 = %v", v)
-	}
-
-	agent.fail(t, "read", `{}`, "invalid_request")
-	agent.fail(t, "read", `{"binding":"change-module"}`, "invalid_request")
-	agent.fail(t, "read", `{"procedure_id":"`+leaf+`","inputs":[1]}`, "invalid_request")
-	agent.fail(t, "read", `{"repository":"github.com/example/service","binding":"change-module","version":1}`, "invalid_request")
-	agent.fail(t, "read", `{"repository":"github.com/example/service","binding":"missing"}`, "not_found")
-	agent.fail(t, "read", `{"procedure_id":"`+leaf+`","version":9}`, "not_found")
-
-	if got := full.ok(t, "list_executions", `{}`); got != `{"executions":[]}` {
-		t.Fatalf("agent mode wrote executions: %s", got)
-	}
-}
-
-// read never guesses an evidence-based selection: a binding whose version or
-// references are selected from evidence needs environment, and with it the
-// selection is resolve_binding's own.
-func TestAgentReadSelection(t *testing.T) {
-	full, agent := newAgentHarness(t)
-	const repo = "github.com/example/service"
-	def := `"philosophy":"p","method":"m","contract":{},"instructions":{},"revision_reason":"r"`
-	p := field(t, full.ok(t, "create_procedure", `{"canonical_key":"demo.sel",`+def+`}`), "id")
-	full.ok(t, "revise_procedure", `{"procedure_id":"`+p+`","base_version":1,`+def+`}`)
-	full.ok(t, "create_binding", `{"repository":"`+repo+`","name":"sel","procedure_id":"`+p+`","inputs":{},"version_policy":{"contextual":{}},"revision_reason":"r"}`)
-
-	e := agent.fail(t, "read", `{"repository":"`+repo+`","binding":"sel"}`, "invalid_request")
-	if got := e.fields(); len(got) != 1 || got[0] != "environment" || !strings.Contains(e.Message, "context required") {
-		t.Fatalf("contextual binding without environment = %+v", e)
-	}
-	if g := decodeJSON(t, agent.ok(t, "read", `{"repository":"`+repo+`","binding":"sel","environment":"ci.test"}`)); g["version"] != 2.0 || g["selected_by"] != "latest" {
-		t.Fatalf("without evidence: %v", g)
-	}
-
-	full.ok(t, "record_execution", `{"procedure_id":"`+p+`","version":1,"repository":"`+repo+`","commit":"`+commit40+`","environment":{"name":"ci.test","attributes":{}},"inputs":{},"outcome":"succeeded","evidence":{"ran":"x"}}`)
-	g := decodeJSON(t, agent.ok(t, "read", `{"repository":"`+repo+`","binding":"sel","environment":"ci.test"}`))
-	res := decodeJSON(t, full.ok(t, "resolve_binding", `{"binding_id":"`+g["binding"].(map[string]any)["id"].(string)+`","environment":"ci.test"}`))
-	if g["version"] != 1.0 || g["selected_by"] != "evidence" || g["latest_version"] != 2.0 || res["graph"].(map[string]any)["version"] != 1.0 {
-		t.Fatalf("evidence must select version 1, as resolve_binding does: read %v, resolve %v", g, res["graph"])
-	}
-
-	ref := func(name, policy string) string {
-		return `{"name":"` + name + `","procedure_id":"` + p + `","version_policy":` + policy + `,"inputs":{}}`
-	}
-	q := field(t, full.ok(t, "create_procedure", `{"canonical_key":"demo.sel-parent",`+def+`,"references":[`+ref("child", `{"contextual":{}}`)+`]}`), "id")
-	full.ok(t, "create_binding", `{"repository":"`+repo+`","name":"pinned-parent","procedure_id":"`+q+`","inputs":{},"version_policy":{"pin":1},"revision_reason":"r"}`)
-	e = agent.fail(t, "read", `{"repository":"`+repo+`","binding":"pinned-parent"}`, "invalid_request")
-	if !strings.Contains(e.Message, "composes a reference selected from evidence") {
-		t.Fatalf("pinned binding over a contextual reference = %+v", e)
-	}
-	child := decodeJSON(t, agent.ok(t, "read", `{"repository":"`+repo+`","binding":"pinned-parent","environment":"ci.test"}`))["references"].([]any)[0].(map[string]any)
-	if child["version"] != 1.0 || child["selected_by"] != "evidence" {
-		t.Fatalf("child with environment = %v", child)
-	}
-	if c := decodeJSON(t, agent.ok(t, "read", `{"procedure_id":"`+q+`"}`))["references"].([]any)[0].(map[string]any); c["version"] != 2.0 || c["selected_by"] != "latest" {
-		t.Fatalf("without a context a procedure read selects as get_graph does, and says so: %v", c)
-	}
-	if c := decodeJSON(t, agent.ok(t, "read", `{"procedure_id":"`+q+`","repository":"`+repo+`","environment":"ci.test"}`))["references"].([]any)[0].(map[string]any); c["version"] != 1.0 || c["selected_by"] != "evidence" {
-		t.Fatalf("procedure read in a context = %v", c)
-	}
-	agent.fail(t, "read", `{"procedure_id":"`+q+`","environment":"ci.test"}`, "invalid_request")
-
-	r := field(t, full.ok(t, "create_procedure", `{"canonical_key":"demo.sel-pinned",`+def+`,"references":[`+ref("child", `{"pin":2}`)+`]}`), "id")
-	full.ok(t, "create_binding", `{"repository":"`+repo+`","name":"all-pinned","procedure_id":"`+r+`","inputs":{},"version_policy":{"pin":1},"revision_reason":"r"}`)
-	if g := decodeJSON(t, agent.ok(t, "read", `{"repository":"`+repo+`","binding":"all-pinned"}`)); g["selected_by"] != "pin" || g["references"].([]any)[0].(map[string]any)["version"] != 2.0 {
-		t.Fatalf("a fully pinned binding needs no environment: %v", g)
-	}
-}
-
-// Shared guidance is a required reference pinned to an exact version: a
-// missing version is refused when written, and read reports the pin even
-// after the guidance moves on, so it cannot be silently omitted or drift.
-func TestAgentSharedGuidanceIsAPinnedReference(t *testing.T) {
-	full, agent := newAgentHarness(t)
-	def := `"philosophy":"p","method":"m","contract":{"rules":[{"id":"target"}]},"instructions":{},"revision_reason":"r"`
-	gid := field(t, full.ok(t, "create_procedure", `{"canonical_key":"agent.guidance.shared",`+def+`}`), "id")
-	guidance := func(pin string) string {
-		return `{"canonical_key":"demo.uses-guidance","philosophy":"p","method":"m","contract":{},"instructions":{},"revision_reason":"r","references":[{"name":"guidance","procedure_id":"` + gid + `","version_policy":{"pin":` + pin + `},"inputs":{}}]}`
-	}
-	if e := full.fail(t, "create_procedure", guidance("2"), "invalid_request"); !slices.Contains(e.fields(), "references[0].version_policy.pin") {
-		t.Fatalf("a pin to a missing guidance version = %+v", e)
-	}
-	p := field(t, full.ok(t, "create_procedure", guidance("1")), "id")
-	full.ok(t, "revise_procedure", `{"procedure_id":"`+gid+`","base_version":1,`+def+`}`)
-	ref := decodeJSON(t, agent.ok(t, "read", `{"procedure_id":"`+p+`"}`))["references"].([]any)[0].(map[string]any)
-	if ref["name"] != "guidance" || ref["version"] != 1.0 || ref["selected_by"] != "pin" || ref["condition"] != nil {
-		t.Fatalf("guidance reference = %v", ref)
-	}
-	full.ok(t, "retire_procedure", `{"procedure_id":"`+gid+`","base_event":0,"reason":"superseded","actor":"test.agent"}`)
-	full.fail(t, "create_procedure", strings.Replace(guidance("1"), "demo.uses-guidance", "demo.uses-retired", 1), "procedure_retired")
-}
-
-// Nested references: a contextual reference two levels below a binding needs
-// a context, and a child read in the binding's repository and environment
-// selects what resolve_binding selects at that depth; the pinned guidance of
-// the middle procedure is validated and reported the same way.
-func TestAgentReadNestedSelection(t *testing.T) {
-	full, agent := newAgentHarness(t)
-	const repo = "github.com/example/service"
-	def := `"philosophy":"p","method":"m","contract":{},"instructions":{},"revision_reason":"r"`
-	ref := func(name, id, policy string) string {
-		return `{"name":"` + name + `","procedure_id":"` + id + `","version_policy":` + policy + `,"inputs":{}}`
-	}
-	leaf := field(t, full.ok(t, "create_procedure", `{"canonical_key":"demo.leaf",`+def+`}`), "id")
-	full.ok(t, "revise_procedure", `{"procedure_id":"`+leaf+`","base_version":1,`+def+`}`)
-	g := field(t, full.ok(t, "create_procedure", `{"canonical_key":"demo.guidance",`+def+`}`), "id")
-	mid := field(t, full.ok(t, "create_procedure", `{"canonical_key":"demo.mid",`+def+`,"references":[`+ref("guidance", g, `{"pin":1}`)+`,`+ref("leaf", leaf, `{"contextual":{}}`)+`]}`), "id")
-	root := field(t, full.ok(t, "create_procedure", `{"canonical_key":"demo.root",`+def+`,"references":[`+ref("mid", mid, `{"pin":1}`)+`]}`), "id")
-	bid := field(t, full.ok(t, "create_binding", `{"repository":"`+repo+`","name":"nested","procedure_id":"`+root+`","inputs":{},"version_policy":{"pin":1},"revision_reason":"r"}`), "id")
-	full.ok(t, "record_execution", `{"procedure_id":"`+leaf+`","version":1,"repository":"`+repo+`","commit":"`+commit40+`","environment":{"name":"ci.test","attributes":{}},"inputs":{},"outcome":"succeeded","evidence":{"ran":"x"}}`)
-
-	if e := agent.fail(t, "read", `{"repository":"`+repo+`","binding":"nested"}`, "invalid_request"); !strings.Contains(e.Message, "context required") {
-		t.Fatalf("contextual reference two levels down, no environment = %+v", e)
-	}
-	b := decodeJSON(t, agent.ok(t, "read", `{"repository":"`+repo+`","binding":"nested","environment":"ci.test"}`))
-	if r := b["references"].([]any)[0].(map[string]any); r["procedure_id"] != mid || r["version"] != 1.0 || r["selected_by"] != "pin" {
-		t.Fatalf("binding read reference = %v", r)
-	}
-	res := decodeJSON(t, full.ok(t, "resolve_binding", `{"binding_id":"`+bid+`","environment":"ci.test"}`))
-	var resolved map[string]any
-	for _, e := range res["graph"].(map[string]any)["references"].([]any)[0].(map[string]any)["node"].(map[string]any)["references"].([]any) {
-		if e := e.(map[string]any); e["name"] == "leaf" {
-			resolved = e
-		}
-	}
-	if resolved["node"].(map[string]any)["version"] != 1.0 || resolved["selected_by"] != "evidence" {
-		t.Fatalf("resolve_binding leaf = %v", resolved)
-	}
-
-	refs := func(args string) map[string]map[string]any {
-		out := map[string]map[string]any{}
-		for _, r := range decodeJSON(t, agent.ok(t, "read", args))["references"].([]any) {
-			out[r.(map[string]any)["name"].(string)] = r.(map[string]any)
-		}
-		return out
-	}
-	if instr := agent.session.InitializeResult().Instructions; !strings.Contains(instr, "same repository and environment as the binding") {
-		t.Fatalf("agent instructions do not say how to read a binding's children: %q", instr)
-	}
-	in := refs(`{"procedure_id":"` + mid + `","version":1,"repository":"` + repo + `","environment":"ci.test"}`)
-	if in["leaf"]["version"] != 1.0 || in["leaf"]["selected_by"] != "evidence" || in["guidance"]["version"] != 1.0 || in["guidance"]["selected_by"] != "pin" {
-		t.Fatalf("child read in the binding's context must match resolve_binding: %v", in)
-	}
-	if out := refs(`{"procedure_id":"` + mid + `","version":1}`); out["leaf"]["version"] != 2.0 || out["leaf"]["selected_by"] != "latest" {
-		t.Fatalf("child read without a context selects as get_graph does, and says so: %v", out)
-	}
-
-	if e := full.fail(t, "revise_procedure", `{"procedure_id":"`+mid+`","base_version":1,`+def+`,"references":[`+ref("guidance", g, `{"pin":2}`)+`]}`, "invalid_request"); !slices.Contains(e.fields(), "references[0].version_policy.pin") {
-		t.Fatalf("nested guidance pinned to a missing version = %+v", e)
-	}
-	full.ok(t, "retire_procedure", `{"procedure_id":"`+g+`","base_event":0,"reason":"superseded","actor":"test.agent"}`)
-	if r := decodeJSON(t, agent.ok(t, "read", `{"procedure_id":"`+g+`","version":1}`)); r["retired"] != true {
-		t.Fatalf("retired guidance read = %v", r)
-	}
-	full.fail(t, "revise_procedure", `{"procedure_id":"`+mid+`","base_version":1,`+def+`,"references":[`+ref("guidance", g, `{"pin":1}`)+`]}`, "procedure_retired")
 }
 
 func TestAgentFeedback(t *testing.T) {
-	full, agent := newAgentHarness(t)
-	p := field(t, full.ok(t, "create_procedure", `{"canonical_key":"demo.fb","philosophy":"p","method":"m","contract":{},"instructions":{},"revision_reason":"r"}`), "id")
-	args := func(classification string) string {
-		return `{"procedure_id":"` + p + `","version":1,"classification":"` + classification + `","summary":"Step 2 needs go 1.27","details":"go vet failed with go1.26; the contract names no toolchain.","reporter":"copilot.agent","repository":"github.com/example/service","evidence":{"step":"checks","exit":1}}`
+	agent := newKnowledgeHarness(t)
+	proc := &knowledge.Procedure{
+		Key: "go.module.tidy", Goal: "Tidy a Go module's dependencies.", Philosophy: "p", Method: "m",
+		Contract: jsontext.Value(`{}`), Instructions: jsontext.Value(`{}`),
 	}
-	res := decodeJSON(t, agent.ok(t, "feedback", args("missing_precondition")))
-	if res["classification"] != "missing_precondition" || len(res) != 3 {
-		t.Fatalf("feedback result = %v", res)
+	snap := agent.publish(t, proc)
+
+	text := agent.ok(t, "feedback", `{"key":"go.module.tidy","snapshot":"`+string(snap)+`","classification":"incorrect_instruction","summary":"the step is wrong","details":"it does not account for vendoring","reporter":"test.agent"}`)
+	f := decodeJSON(t, text)
+	if f["classification"] != "incorrect_instruction" || f["id"] == "" {
+		t.Fatalf("feedback result = %v", f)
 	}
-	stored := full.ok(t, "get_feedback", `{"id":"`+res["id"].(string)+`"}`)
-	for _, want := range []string{`"kind":"problem"`, `"context":{"classification":"missing_precondition","evidence":{"step":"checks","exit":1}}`, p, `"version":1`} {
-		if !strings.Contains(stored, want) {
-			t.Fatalf("stored feedback %s lacks %s", stored, want)
-		}
+
+	if res := agent.call(t, "feedback", `{"key":"go.module.tidy","snapshot":"`+string(snap)+`","classification":"environment_problem","summary":"s","reporter":"r"}`); !res.IsError {
+		t.Fatalf("feedback must refuse a non-procedural classification")
 	}
-	if s := full.ok(t, "get_feedback", `{"id":"`+decodeJSON(t, agent.ok(t, "feedback", args("improved_method")))["id"].(string)+`"}`); !strings.Contains(s, `"kind":"suggestion"`) {
-		t.Fatalf("improved_method is a suggestion: %s", s)
-	}
-	for _, c := range []string{"product_defect", "environment_problem", "transient_failure"} {
-		e := agent.fail(t, "feedback", args(c), "invalid_request")
-		if !strings.Contains(e.Message, "not procedural knowledge") {
-			t.Fatalf("%s: %s", c, e.Message)
-		}
-	}
-	agent.fail(t, "feedback", args("bogus"), "invalid_request")
-	agent.fail(t, "feedback", `{"procedure_id":"`+p+`","classification":"missing_precondition","summary":"s","details":"d","reporter":"r"}`, "invalid_request")
-	if got := full.ok(t, "list_feedback", `{}`); strings.Count(got, `"id"`) != 2 {
-		t.Fatalf("refused feedback was stored: %s", got)
+	if res := agent.call(t, "feedback", `{"key":"go.module.tidy","snapshot":"not-a-real-snapshot","classification":"incorrect_instruction","summary":"s","reporter":"r"}`); !res.IsError {
+		t.Fatalf("feedback must refuse a snapshot that never served the key")
 	}
 }

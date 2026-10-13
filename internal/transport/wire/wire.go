@@ -1256,7 +1256,10 @@ func Classify(err error) (status int, detail ErrorDetail, ok bool) {
 	var lifecycleConflict *memory.LifecycleConflictError
 	var retired *memory.RetiredProcedureError
 	var tooLarge *memory.LimitError
+	var known *KnowledgeError
 	switch {
+	case errors.As(err, &known):
+		return known.Status, known.Detail, true
 	case errors.As(err, &invalid):
 		detail = ErrorDetail{Code: "invalid_request", Message: invalid.Error()}
 		for _, p := range invalid.Problems {
