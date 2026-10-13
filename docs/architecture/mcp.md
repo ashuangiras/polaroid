@@ -17,6 +17,7 @@ Arguments are flat JSON objects, named after the record fields in [records.md](r
 
 - **Decoding is strict, as for HTTP request bodies.** Unknown or duplicate members are rejected, and so are values of the wrong JSON type. Free-form objects (`contract`, `instructions`, `inputs`, `evidence`, `environment.attributes`, reference `inputs`, feedback `context`, toil `assessment` and `proposal`) are stored with their member order intact, as Polaroid receives it. MCP clients may reorder members before sending (VS Code Copilot chat does), so keep order-sensitive data in arrays ([records.md](records.md#procedure-version-implemented)).
 - **Schemas:** every tool advertises an input schema generated from its argument type.
+- **Contract:** this table, and the argument names, JSON types, nesting and requiredness in [`internal/transport/mcp/testdata/full-mode-tools.json`](../../internal/transport/mcp/testdata/full-mode-tools.json), are the v1 contract of `/mcp` ([ADR-0038](decisions/0038-stable-releases-and-compatibility.md)). Tests compare the served schemas with that file, and that file with this table, so any change to a tool's arguments must be made deliberately in both.
 
 | Tool | Read-only | Arguments | Result |
 | --- | --- | --- | --- |
@@ -76,6 +77,8 @@ A failed call is a tool error (`isError: true`). It carries the HTTP API's error
 Field names in `fields` are the flat argument names. For example, a missing `philosophy` is reported as `philosophy`, not `version.philosophy`, and a reference to a retired procedure as `references[0].procedure_id`. A reference is still reported as `references[i]…`. An unexpected failure is logged, and only `internal` is returned.
 
 ## Agent mode (`/mcp/agent`)
+
+**Experimental.** This endpoint is outside the v1 compatibility guarantee ([ADR-0038](decisions/0038-stable-releases-and-compatibility.md), amended by [ADR-0043](decisions/0043-knowledge-first-agent-mode.md)) until its Git-backed interface is final. That interface will read knowledge by key from a snapshot, so the version, binding and selection arguments and results below will change. Use `/mcp` where a stable contract is needed.
 
 A second endpoint on the same listener, with the same transport rules, serves only the three tools everyday procedural-knowledge use needs ([ADR-0043](decisions/0043-knowledge-first-agent-mode.md)). A client connected to it never loads the full API's schemas, and nothing it does records an execution.
 

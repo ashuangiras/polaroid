@@ -1,6 +1,6 @@
 # 0038. Stable releases and the compatibility policy
 
-**Status:** Accepted.
+**Status:** Accepted. Amended by [ADR-0043](0043-knowledge-first-agent-mode.md): the experimental agent endpoint `/mcp/agent` is outside this guarantee.
 **Date:** 2026-10-11
 
 ## Context
