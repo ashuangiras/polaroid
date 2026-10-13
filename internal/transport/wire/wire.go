@@ -1034,17 +1034,21 @@ func (r FeedbackRecord) Domain() memory.FeedbackRecord {
 
 // Feedback is a stored report. context is always present, {} when none was
 // given; subject, repository and execution_id are omitted when absent.
+// status is open or resolved (ADR-0040); resolution is present only once
+// resolved.
 type Feedback struct {
-	ID          string         `json:"id"`
-	Kind        string         `json:"kind"`
-	Summary     string         `json:"summary"`
-	Details     string         `json:"details"`
-	Reporter    string         `json:"reporter"`
-	Context     jsontext.Value `json:"context"`
-	Subject     *Subject       `json:"subject,omitzero"`
-	Repository  string         `json:"repository,omitzero"`
-	ExecutionID string         `json:"execution_id,omitzero"`
-	CreatedAt   time.Time      `json:"created_at"`
+	ID          string              `json:"id"`
+	Kind        string              `json:"kind"`
+	Summary     string              `json:"summary"`
+	Details     string              `json:"details"`
+	Reporter    string              `json:"reporter"`
+	Context     jsontext.Value      `json:"context"`
+	Subject     *Subject            `json:"subject,omitzero"`
+	Repository  string              `json:"repository,omitzero"`
+	ExecutionID string              `json:"execution_id,omitzero"`
+	CreatedAt   time.Time           `json:"created_at"`
+	Status      string              `json:"status"`
+	Resolution  *FeedbackResolution `json:"resolution,omitzero"`
 }
 
 func NewFeedback(f memory.Feedback) Feedback {
@@ -1059,7 +1063,55 @@ func NewFeedback(f memory.Feedback) Feedback {
 		Repository:  f.Repository,
 		ExecutionID: f.ExecutionID,
 		CreatedAt:   f.CreatedAt,
+		Status:      string(f.Status()),
+		Resolution:  newFeedbackResolution(f.Resolution),
 	}
+}
+
+// FeedbackResolutionRequest asks to resolve a feedback report (ADR-0040).
+type FeedbackResolutionRequest struct {
+	Outcome    string              `json:"outcome" jsonschema:"addressed, declined, not_reproduced or duplicate"`
+	Reason     string              `json:"reason" jsonschema:"how the report was handled"`
+	Actor      string              `json:"actor" jsonschema:"who resolves it, in canonical-key form: lowercase letters and digits joined by single '.', '-' or '_', for example copilot.vscode"`
+	References []ExternalReference `json:"references,omitzero" jsonschema:"issue URLs, PRs, commits, or the procedure version or execution that addressed the report"`
+}
+
+// Domain returns r in domain form.
+func (r FeedbackResolutionRequest) Domain() memory.FeedbackResolutionRequest {
+	return memory.FeedbackResolutionRequest{Outcome: memory.FeedbackOutcome(r.Outcome), Reason: r.Reason, Actor: r.Actor,
+		References: externalReferences(r.References)}
+}
+
+// FeedbackResolution is a report's stored resolution.
+type FeedbackResolution struct {
+	Outcome    string              `json:"outcome"`
+	Reason     string              `json:"reason"`
+	Actor      string              `json:"actor"`
+	References []ExternalReference `json:"references,omitzero"`
+	CreatedAt  time.Time           `json:"created_at"`
+}
+
+func newFeedbackResolution(r *memory.FeedbackResolution) *FeedbackResolution {
+	if r == nil {
+		return nil
+	}
+	return &FeedbackResolution{Outcome: string(r.Outcome), Reason: r.Reason, Actor: r.Actor,
+		References: newOptionalExternalReferences(r.References), CreatedAt: r.CreatedAt}
+}
+
+func NewFeedbackResolution(r memory.FeedbackResolution) FeedbackResolution {
+	return *newFeedbackResolution(&r)
+}
+
+// newOptionalExternalReferences is like newExternalReferences, but nil
+// stays nil instead of becoming an empty array: references is omitted
+// entirely when none were given (ADR-0040), unlike a toil validation's,
+// which always returns both of its arrays.
+func newOptionalExternalReferences(in []memory.ExternalReference) []ExternalReference {
+	if len(in) == 0 {
+		return nil
+	}
+	return newExternalReferences(in)
 }
 
 type FeedbackList struct {
@@ -1229,6 +1281,8 @@ func Classify(err error) (status int, detail ErrorDetail, ok bool) {
 		return http.StatusConflict, ErrorDetail{Code: "lifecycle_unchanged", Message: err.Error()}, true
 	case errors.Is(err, memory.ErrExecutionInvalidated):
 		return http.StatusConflict, ErrorDetail{Code: "execution_invalidated", Message: err.Error()}, true
+	case errors.Is(err, memory.ErrFeedbackResolved):
+		return http.StatusConflict, ErrorDetail{Code: "feedback_resolved", Message: err.Error()}, true
 	case errors.As(err, &conflict):
 		return http.StatusConflict, ErrorDetail{Code: "version_conflict", Message: conflict.Error(), LatestVersion: conflict.LatestVersion}, true
 	case errors.As(err, &revisionConflict):

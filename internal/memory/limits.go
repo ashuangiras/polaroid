@@ -28,6 +28,7 @@ const (
 	recInvalidation = "execution_invalidation"
 	recLifecycle    = "procedure_lifecycle_event"
 	recFeedback     = "feedback"
+	recResolution   = "feedback_resolution"
 	recRepository   = "repository"
 	recAlias        = "repository_alias"
 	recToil         = "toil_revision"
@@ -73,6 +74,9 @@ var writeLimits = []FieldLimit{
 	{recFeedback, "summary", LimitText, MaxLineBytes},
 	{recFeedback, "details", LimitText, MaxTextBytes},
 	{recFeedback, "context", LimitJSON, MaxObjectBytes},
+	{recResolution, "reason", LimitText, MaxTextBytes},
+	{recResolution, "references[].uri", LimitText, MaxLineBytes},
+	{recResolution, "references[].note", LimitText, MaxTextBytes},
 	{recRepository, "name", LimitText, MaxLineBytes},
 	{recAlias, "reason", LimitText, MaxTextBytes},
 	{recToil, "revision.activity", LimitText, MaxLineBytes},
@@ -252,5 +256,19 @@ func measureReferences(s *sizes, prefix string, refs []ExternalReference) {
 func measureReason(record, reason string) error {
 	var s sizes
 	s.text(record, "reason", reason)
+	return s.err()
+}
+
+// measureFeedbackResolution checks the bounded fields of a feedback
+// resolution: its reason and its declared references.
+func measureFeedbackResolution(reason string, refs []ExternalReference) error {
+	var s sizes
+	s.text(recResolution, "reason", reason)
+	for i, r := range refs {
+		s.text(recResolution, "references[].uri", r.URI, i)
+		if r.Note != "" {
+			s.text(recResolution, "references[].note", r.Note, i)
+		}
+	}
 	return s.err()
 }

@@ -150,6 +150,11 @@ type Store interface {
 	// extra item when f.Page.Limit is set and more exist.
 	ListFeedback(ctx context.Context, f FeedbackFilter) ([]Feedback, error)
 
+	// ResolveFeedback stores r. It returns an error wrapping ErrNotFound if
+	// the report does not exist, and ErrFeedbackResolved if it already has a
+	// resolution.
+	ResolveFeedback(ctx context.Context, r FeedbackResolution) error
+
 	// CreateToilItem stores t together with its first revision and its
 	// links. It returns an error wrapping ErrCanonicalKeyExists if the key
 	// is used by another toil item; then nothing is stored.

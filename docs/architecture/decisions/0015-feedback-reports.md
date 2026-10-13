@@ -1,6 +1,6 @@
 # 0015. Feedback reports are immutable, untriaged records about Polaroid itself
 
-**Status:** Accepted
+**Status:** Accepted; resolution added by [ADR-0040](0040-feedback-resolution.md)
 **Date:** 2026-10-09
 
 ## Context

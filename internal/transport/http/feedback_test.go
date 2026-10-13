@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -14,13 +15,25 @@ import (
 
 // feedbackJSON restates the documented feedback shape.
 type feedbackJSON struct {
-	ID        string         `json:"id"`
-	Kind      string         `json:"kind"`
-	Summary   string         `json:"summary"`
-	Details   string         `json:"details"`
-	Reporter  string         `json:"reporter"`
-	Context   jsontext.Value `json:"context"`
-	CreatedAt time.Time      `json:"created_at"`
+	ID         string          `json:"id"`
+	Kind       string          `json:"kind"`
+	Summary    string          `json:"summary"`
+	Details    string          `json:"details"`
+	Reporter   string          `json:"reporter"`
+	Context    jsontext.Value  `json:"context"`
+	CreatedAt  time.Time       `json:"created_at"`
+	Status     string          `json:"status"`
+	Resolution *resolutionJSON `json:"resolution"`
+}
+
+// resolutionJSON restates the documented feedback-resolution shape
+// (ADR-0040).
+type resolutionJSON struct {
+	Outcome    string    `json:"outcome"`
+	Reason     string    `json:"reason"`
+	Actor      string    `json:"actor"`
+	References []toilRef `json:"references"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // feedbackRequest returns a report-feedback body. fields overrides or adds
@@ -69,7 +82,7 @@ func TestReportAndReadFeedback(t *testing.T) {
 	}
 	want := fmt.Sprintf(`{"id":%q,"kind":"problem","summary":"record_execution rejected a short commit without saying why",`+
 		`"details":"I passed a 7-character hash.\nThe error named the field but not the rule.","reporter":"copilot.vscode",`+
-		`"context":{"tool":"record_execution","procedure_id":"0192f7e4"},"created_at":%q}`, fb.ID, fb.CreatedAt.Format(time.RFC3339Nano))
+		`"context":{"tool":"record_execution","procedure_id":"0192f7e4"},"created_at":%q,"status":"open"}`, fb.ID, fb.CreatedAt.Format(time.RFC3339Nano))
 	if got := strings.TrimSpace(string(created.body)); got != want {
 		t.Fatalf("feedback =\n %s\nwant\n %s", got, want)
 	}
@@ -187,4 +200,114 @@ func TestListFeedbackQuery(t *testing.T) {
 	expect(t, s.call(t, http.MethodGet, "/v1/feedback/0192f7e4-0000-7000-8000-000000000000", ""), http.StatusNotFound, "not_found")
 	expect(t, s.call(t, http.MethodDelete, "/v1/feedback/"+ids[0], ""), http.StatusMethodNotAllowed, "method_not_allowed")
 	expect(t, s.call(t, http.MethodPut, "/v1/feedback/"+ids[0], feedbackRequest(nil)), http.StatusMethodNotAllowed, "method_not_allowed")
+}
+
+const resolveBody = `{"outcome": "addressed", "reason": "record_execution's error now states the commit-hash length it requires.", ` +
+	`"actor": "copilot.vscode", "references": [{"uri": "https://github.com/ashuangiras/polaroid/pull/74"}]}`
+
+// TestFeedbackResolutionOverHTTP: a resolution is irreversible, is read
+// back on the report, and status filters the list without changing the
+// unfiltered one (ADR-0040).
+func TestFeedbackResolutionOverHTTP(t *testing.T) {
+	s := newTestServer(t)
+	_, open := s.report(t, nil)
+	_, resolved := s.report(t, map[string]string{"summary": `"a second report"`})
+	path := "/v1/feedback/" + resolved.ID + "/resolution"
+
+	if open.Status != "open" || open.Resolution != nil || resolved.Status != "open" || resolved.Resolution != nil {
+		t.Fatalf("reports before resolution: %+v, %+v", open, resolved)
+	}
+	before := s.call(t, http.MethodGet, "/v1/feedback/"+resolved.ID, "").body
+
+	bad := s.call(t, http.MethodPost, path, `{"outcome": "wontfix", "reason": " ", "actor": "Copilot VS Code"}`)
+	expect(t, bad, http.StatusBadRequest, "invalid_request")
+	if f := fieldsOf(t, bad); !slices.Equal(f, []string{"outcome", "reason", "actor"}) {
+		t.Fatalf("fields = %v", f)
+	}
+	expect(t, s.call(t, http.MethodPost, "/v1/feedback/0192f7e4-0000-7000-8000-000000000000/resolution", resolveBody), http.StatusNotFound, "not_found")
+
+	created := s.call(t, http.MethodPost, path, resolveBody)
+	expect(t, created, http.StatusCreated, "")
+	if loc := created.header.Get("Location"); loc != "/v1/feedback/"+resolved.ID {
+		t.Fatalf("Location = %q", loc)
+	}
+	res := decodeStrict[resolutionJSON](t, created.body)
+	if res.Outcome != "addressed" || res.Actor != "copilot.vscode" || !strings.HasPrefix(res.Reason, "record_execution's error") ||
+		len(res.References) != 1 || res.References[0].URI != "https://github.com/ashuangiras/polaroid/pull/74" {
+		t.Fatalf("resolution = %+v", res)
+	}
+
+	again := s.call(t, http.MethodPost, path, resolveBody)
+	expect(t, again, http.StatusConflict, "feedback_resolved")
+
+	// The report is unchanged; only its status and resolution are added.
+	after := s.call(t, http.MethodGet, "/v1/feedback/"+resolved.ID, "").body
+	recordOf := func(b []byte) string { return string(b[:bytes.Index(b, []byte(`,"status":`))]) }
+	if recordOf(after) != recordOf(before) {
+		t.Fatalf("report after resolution:\n%s\nbefore:\n%s", after, before)
+	}
+	got := decodeStrict[feedbackJSON](t, after)
+	if got.Status != "resolved" || got.Resolution == nil || !reflect.DeepEqual(*got.Resolution, res) {
+		t.Fatalf("read back %+v, want resolution %+v", got, res)
+	}
+
+	list := func(query string) []string {
+		resp := s.call(t, http.MethodGet, "/v1/feedback"+query, "")
+		expect(t, resp, http.StatusOK, "")
+		var ids []string
+		for _, f := range decodeStrict[struct {
+			Feedback []feedbackJSON `json:"feedback"`
+		}](t, resp.body).Feedback {
+			ids = append(ids, f.ID)
+		}
+		return ids
+	}
+	for query, want := range map[string][]string{
+		"":                 {open.ID, resolved.ID},
+		"?status=open":     {open.ID},
+		"?status=resolved": {resolved.ID},
+	} {
+		if got := list(query); !slices.Equal(got, want) {
+			t.Errorf("status%s = %v, want %v", query, got, want)
+		}
+	}
+	expect(t, s.call(t, http.MethodGet, "/v1/feedback?status=closed", ""), http.StatusBadRequest, "invalid_request")
+}
+
+// TestInvalidFeedbackResolutionReferencesAreRejected: a malformed reference
+// is Service.ResolveFeedback's contract to reject (ADR-0040); the schema
+// itself only guards references_json's own shape (TestSchemaGuardsFeedback
+// Resolutions in internal/storage/sqlite covers that boundary).
+func TestInvalidFeedbackResolutionReferencesAreRejected(t *testing.T) {
+	s := newTestServer(t)
+	cases := map[string]struct {
+		references string
+		field      string // "" for a decode-level type mismatch: no field is named
+	}{
+		"missing uri":    {`[{}]`, "references[0].uri"},
+		"blank uri":      {`[{"uri": " "}]`, "references[0].uri"},
+		"multi-line uri": {`[{"uri": "one\ntwo"}]`, "references[0].uri"},
+		"blank note":     {`[{"uri": "u", "note": "\n"}]`, "references[0].note"},
+		"non-string uri": {`[{"uri": 1}]`, ""},
+		"not an array":   {`{}`, ""},
+		"array of nulls": {`[null]`, "references[0].uri"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, fb := s.report(t, nil)
+			body := fmt.Sprintf(`{"outcome": "addressed", "reason": "fixed", "actor": "copilot.vscode", "references": %s}`, tc.references)
+			resp := s.call(t, http.MethodPost, "/v1/feedback/"+fb.ID+"/resolution", body)
+			expect(t, resp, http.StatusBadRequest, "invalid_request")
+			f := fieldsOf(t, resp)
+			switch {
+			case tc.field == "" && len(f) != 0:
+				t.Fatalf("fields = %v, want none; body: %s", f, resp.body)
+			case tc.field != "" && (len(f) != 1 || f[0] != tc.field):
+				t.Fatalf("fields = %v, want [%s]; body: %s", f, tc.field, resp.body)
+			}
+			if got := s.call(t, http.MethodGet, "/v1/feedback/"+fb.ID, ""); decodeStrict[feedbackJSON](t, got.body).Status != "open" {
+				t.Fatalf("a rejected resolution left %s resolved", fb.ID)
+			}
+		})
+	}
 }

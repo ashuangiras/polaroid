@@ -69,6 +69,7 @@ func NewHandler(svc *memory.Service, logger *slog.Logger) http.Handler {
 	a.mux.HandleFunc("POST /v1/feedback", a.reportFeedback)
 	a.mux.HandleFunc("GET /v1/feedback", a.listFeedback)
 	a.mux.HandleFunc("GET /v1/feedback/{id}", a.getFeedback)
+	a.mux.HandleFunc("POST /v1/feedback/{id}/resolution", a.resolveFeedback)
 	a.mux.HandleFunc("POST /v1/repositories", a.registerRepository)
 	a.mux.HandleFunc("GET /v1/repositories", a.listRepositories)
 	a.mux.HandleFunc("GET /v1/repositories/by-identifier/{identifier...}", a.getRepositoryByIdentifier)

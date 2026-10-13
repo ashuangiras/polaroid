@@ -18,7 +18,7 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0012](0012-derived-verification.md) | Verification is derived on read from executions, per combination, and the latest execution decides | Accepted |
 | [0013](0013-evidence-based-resolution.md) | Contextual references resolve from evidence in a repository and environment, following verified combinations | Accepted; reporting extended by ADR-0018 |
 | [0014](0014-mcp-transport.md) | MCP is served over stateless streamable HTTP at /mcp, with flat tool arguments and the API's record shapes | Accepted; protocol clause superseded by ADR-0016 |
-| [0015](0015-feedback-reports.md) | Feedback reports are immutable, untriaged records about Polaroid itself | Accepted; subjects added by ADR-0021 |
+| [0015](0015-feedback-reports.md) | Feedback reports are immutable, untriaged records about Polaroid itself | Accepted; subjects added by ADR-0021, resolution by ADR-0040 |
 | [0016](0016-mcp-protocol-2025-11-25.md) | /mcp also accepts protocol 2025-11-25, through the handshake but without sessions | Accepted |
 | [0017](0017-development-procedures-as-records.md) | Polaroid's development procedures are records, loaded from fixtures by canonical key | Accepted |
 | [0018](0018-selection-evidence-and-target-verification.md) | Resolution separates selection evidence from target verification | Accepted |
@@ -43,5 +43,6 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0037](0037-size-limits-on-new-writes.md) | Size limits on new writes | Accepted |
 | [0038](0038-stable-releases-and-compatibility.md) | Stable releases and the compatibility policy | Accepted |
 | [0039](0039-read-only-snapshot-transactions.md) | Multi-statement reads use read-only snapshot transactions | Accepted |
+| [0040](0040-feedback-resolution.md) | Feedback resolution: an append-only record of how a report was handled | Accepted |
 
 Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.

@@ -43,6 +43,9 @@ type statisticsJSON struct {
 		InvalidatedByOutcome      map[string]int64 `json:"invalidated_by_outcome"`
 		ValidWithInvalidatedChild int64            `json:"valid_with_invalidated_child"`
 	} `json:"executions"`
+	Feedback struct {
+		ByStatus map[string]int64 `json:"by_status"`
+	} `json:"feedback"`
 	ToilItems struct {
 		ByStatus map[string]int64 `json:"by_status"`
 	} `json:"toil_items"`
@@ -86,12 +89,13 @@ func counts(base map[string]int64, kv map[string]int64) map[string]int64 {
 var (
 	recordKinds = zeroCounts("procedures", "procedure_versions", "procedure_references", "procedure_origins", "procedure_lifecycle_events",
 		"repositories", "repository_aliases", "bindings", "binding_revisions", "executions", "execution_children", "execution_decisions",
-		"execution_invalidations", "feedback", "toil_items", "toil_revisions", "toil_revision_sources", "toil_revision_executions")
-	lifecycleKeys = zeroCounts("active", "retired")
-	scopeKeys     = zeroCounts("shared", "local", "unspecified")
-	outcomeKeys   = zeroCounts("succeeded", "failed")
-	evidenceKeys  = zeroCounts("valid", "invalidated")
-	toilKeys      = zeroCounts("observed", "candidate", "implemented", "validated", "retired")
+		"execution_invalidations", "feedback", "feedback_resolutions", "toil_items", "toil_revisions", "toil_revision_sources", "toil_revision_executions")
+	lifecycleKeys      = zeroCounts("active", "retired")
+	scopeKeys          = zeroCounts("shared", "local", "unspecified")
+	outcomeKeys        = zeroCounts("succeeded", "failed")
+	evidenceKeys       = zeroCounts("valid", "invalidated")
+	feedbackStatusKeys = zeroCounts("open", "resolved")
+	toilKeys           = zeroCounts("observed", "candidate", "implemented", "validated", "retired")
 )
 
 func sizeOf(values []jsontext.Value) payloadJSON {
@@ -127,6 +131,8 @@ func TestStatisticsOfAnEmptyCatalog(t *testing.T) {
 	case !maps.Equal(st.Executions.ByOutcome, outcomeKeys) || !maps.Equal(st.Executions.ByEvidenceStatus, evidenceKeys) ||
 		!maps.Equal(st.Executions.InvalidatedByOutcome, outcomeKeys) || st.Executions.ValidWithInvalidatedChild != 0:
 		t.Fatalf("executions = %+v", st.Executions)
+	case !maps.Equal(st.Feedback.ByStatus, feedbackStatusKeys):
+		t.Fatalf("feedback = %+v", st.Feedback)
 	case !maps.Equal(st.ToilItems.ByStatus, toilKeys):
 		t.Fatalf("toil items = %+v", st.ToilItems)
 	}
@@ -138,7 +144,7 @@ func TestStatisticsOfAnEmptyCatalog(t *testing.T) {
 		t.Fatalf("payloads = %+v", st.Payloads)
 	}
 	g := st.Storage
-	if g.SchemaVersion != 10 || g.PageSize <= 0 || g.PageCount <= 0 || g.DatabaseBytes != g.PageSize*g.PageCount || len(g.Files) != 3 {
+	if g.SchemaVersion != 11 || g.PageSize <= 0 || g.PageCount <= 0 || g.DatabaseBytes != g.PageSize*g.PageCount || len(g.Files) != 3 {
 		t.Fatalf("storage = %+v", g)
 	}
 	for _, name := range []string{"database", "wal", "shm"} {
@@ -298,6 +304,9 @@ func TestStatisticsCountIdentitiesHistoryAndLatestState(t *testing.T) {
 	}
 	if want := counts(toilKeys, map[string]int64{"candidate": 1}); !maps.Equal(st.ToilItems.ByStatus, want) {
 		t.Errorf("toil by_status = %v, want %v", st.ToilItems.ByStatus, want)
+	}
+	if want := counts(feedbackStatusKeys, map[string]int64{"open": 1}); !maps.Equal(st.Feedback.ByStatus, want) {
+		t.Errorf("feedback by_status = %v, want %v", st.Feedback.ByStatus, want)
 	}
 
 	outcomes := map[string]int64{"succeeded": 8, "failed": 1}
