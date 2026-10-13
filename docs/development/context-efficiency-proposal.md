@@ -1,10 +1,10 @@
 # Context-efficient interface: a proposal (#131)
 
-**Status: proposed, not yet implemented.** This page is the architecture proposal asked for in [#131](https://github.com/ashuangiras/polaroid/issues/131), to be read with its measured baseline, [context-efficiency-baseline.md](context-efficiency-baseline.md). No code here has shipped; a follow-up work item implements it, each piece as its own change with its own contract-impact statement and tests, per [AGENTS.md](../../AGENTS.md).
+**Status: pieces 2 and 3 below are implemented and measured ([ADR-0042](../architecture/decisions/0042-context-efficient-projections.md)); piece 1 (conditional fetch of immutable records) remains open.** This page is the architecture proposal asked for in [#131](https://github.com/ashuangiras/polaroid/issues/131), to be read with its measured baseline, [context-efficiency-baseline.md](context-efficiency-baseline.md), which now reports before/after/cold/warm figures for what shipped.
 
 ## Context
 
-The baseline shows, for one cold `verify-change` run: 65% of all response bytes are full `contract`/`instructions` text for versions that do not change between runs, and a second `resolve_binding` call (to confirm what a run just verified) repeats 99.48% of the first call's bytes unchanged. Neither is a defect in what is stored or returned — every field documented in [http-api.md](../architecture/http-api.md) is there because some client needs it, at least once. The cost is in always sending everything, every time, to every client, whether or not it already has it or needs it yet.
+The baseline (measured over the real MCP transport, [context-efficiency-baseline.md](context-efficiency-baseline.md)) shows, for one `verify-change` run: 56% of all response tokens are full `contract`/`instructions` text for versions that do not change between runs, and a second `resolve_binding` call (to confirm what a run just verified) repeats 99.45% of the first call's bytes unchanged. Neither is a defect in what is stored or returned — every field documented in [http-api.md](../architecture/http-api.md) is there because some client needs it, at least once. The cost is in always sending everything, every time, to every client, whether or not it already has it or needs it yet.
 
 ## Goals
 
@@ -27,46 +27,51 @@ A client that sends no new parameter and no new header gets **byte-identical** r
 
 ### 1. Minimal repetition of immutable records: conditional fetch by content
 
-A procedure version, a binding revision, an execution and a toil revision are each immutable once written ([ADR-0004](../architecture/decisions/0004-append-only-versions-with-expected-base.md) and its successors). That means a stable content identifier for one is possible, and safe to cache forever: a content hash over its canonical (already-compacted) stored bytes.
+**Not implemented by ADR-0042; still open.** A procedure version, a binding revision, an execution and a toil revision are each immutable once written ([ADR-0004](../architecture/decisions/0004-append-only-versions-with-expected-base.md) and its successors). That means a stable content identifier for one is possible, and safe to cache forever: a content hash over its canonical (already-compacted) stored bytes.
 
 - Add an `ETag` (the content hash) to the single-record GET endpoints that return one immutable record by ID: `GET /v1/procedures/{id}/versions/{n}`, `GET /v1/bindings/{id}/revisions/{n}`, `GET /v1/executions/{id}`, `GET /v1/toil-items/{id}/revisions/{n}`.
 - Honor standard conditional `If-None-Match`: a match is a `304 Not Modified` with no body. A client (an agent's own session cache, or a longer-lived cache keyed by `(procedure_id, version)`) that already holds the exact content never pays for it again.
 - Nothing stored, validated or derived changes: this is a read-path cache-validation header, computed from bytes already produced for the existing response.
+- This is why the baseline's **optimized-warm** variant states its assumption explicitly rather than claiming it: without this piece, a client's belief that it already has a version's content is its own bookkeeping, not something Polaroid lets it check cheaply over the wire.
 
 ### 2. Selective procedure and response projections
 
-Add an optional `fields` query parameter (a comma-separated list, repeated-member rules as elsewhere in the API) to the endpoints that return a full version or a full execution: `GET /v1/procedures/{id}/versions/{n}` (`philosophy`, `method`, `goal`, `contract`, `instructions`, `references`), `GET /v1/executions/{id}` (`inputs`, `evidence`, `children`, `decisions`).
+**Implemented ([ADR-0042](../architecture/decisions/0042-context-efficient-projections.md)): `fields=` on `GET /v1/procedures/{id}/versions/{n}` and MCP `get_version`**, a comma-separated list from `philosophy`, `method`, `goal`, `applicability`, `contract`, `instructions`, `references`, `revision_reason` (execution reads are not projected by this increment; see Suggested sequencing).
 
 - Without `fields`, the response is exactly as documented today (default = everything), so every existing client is unaffected.
-- With `fields`, only the named members are included, alongside the identity members every response already always carries (`procedure_id`, `version`, `created_at`, and so on) so the response is still self-describing and still fetchable in full by the same ID.
+- With `fields`, only the named members are included, alongside the identity members every response already always carries (`procedure_id`, `version`, `scope`, `created_at`) so the response is still self-describing and still fetchable in full by the same ID.
 - An agent that already has `philosophy`/`method`/`goal` cached from an earlier read of the same version (or from discovery) can ask for `fields=instructions` alone; one that only needs to confirm which version it is can ask for no optional fields at all.
 - An unknown field name is `400 invalid_request`, naming it, exactly as other unknown-parameter cases already are.
 
 ### 3. Compact execution plans
 
-`resolve_binding` and `get_graph` already compute, in one read-only snapshot, exactly what a calling agent needs to decide what to run next ([records.md](../architecture/records.md#composition-graph-implemented)). Today that computation is reported as a full nested tree, every time, including the parts that answer "what does this binding compose" (stable, changes only when a version or binding revision is appended) mixed with the parts that answer "is it verified here, right now" (the only thing a repeated call after recording usually wants).
+**Implemented ([ADR-0042](../architecture/decisions/0042-context-efficient-projections.md)): `format=plan` on `GET .../graph` and `GET .../resolution` (MCP `get_graph`/`resolve_binding`), and the new `GET /v1/bindings/{id}/preparation` (MCP `prepare_execution`)**, the same projection with its target required. All three compute the identical resolution and target verification `resolve_binding`/`get_graph` already did ([records.md](../architecture/records.md#composition-graph-implemented)); the projection changes only what is reported.
 
-- Add `format=plan` to both endpoints. The default (no `format`, or `format=full`) is the existing nested tree, unchanged.
-- `format=plan` returns, per node: `procedure_id`, `version`, `selected_by`, `decision`/`skipped_by` (for conditional references), and `target_verification` when a target was given — no `canonical_key`, `scope`, `applicability` or nested nodes beyond what identifies them. A client that has already read the full graph once (for example at `resolve_binding_pre` in the baseline) has everything it needs to interpret a later plan response against it; a client that has not can still ask for the full tree, or fetch one node's full record by its `procedure_id`/`version`.
-- This directly targets the baseline's second call: a `resolve_binding_post` made only to confirm what just verified can use `format=plan` and carry none of the 99.48% that did not change.
+- The default (no `format`, or `format=full`) is the existing nested tree, unchanged.
+- `format=plan` returns a flattened, dependency-ordered list of steps, each with `path`, `procedure_id`, `version`, `selected_by`, `decision` (conditional references only) and `status` (`selected`, `decision_required`, `skipped`, `verified` or `pending`) — no `canonical_key`, `scope`, `applicability` or nested nodes. `next_action` names the first step still needing a decision or a run. A client that has already read the full graph once has everything it needs to interpret a later plan response against it; a client that has not can still ask for the full tree, or fetch one node's full record by its `procedure_id`/`version`.
+- This directly targets the baseline's second call: a confirmation read made only to learn what just verified can use `format=plan` and carry none of the 99.45%/97.04% that did not change (measured in [context-efficiency-baseline.md](context-efficiency-baseline.md)).
+- `prepare_execution` is the same projection with its target (`commit`, `inputs`) required, since preparing to run something always implies an exact one; it is `resolve_binding` plus that requirement and that projection, not a new engine.
 
 ### 4. On-demand access to full contracts and evidence
 
-Nothing above drops anything from the catalog or makes it unreachable: every compact or projected response still carries the identifiers (`procedure_id` + `version`, `execution_id`, `binding_id` + `revision`) needed to fetch the full record, in full, whenever the agent actually needs it — to read a contract before following it for the first time, to quote evidence text in a report, or to audit history. "On demand" means deferred until asked for, never replaced by a summary that cannot be escaped.
+**Implemented, as a property of 2 and 3, not a separate mechanism.** Nothing above drops anything from the catalog or makes it unreachable: every compact or projected response still carries the identifiers (`procedure_id` + `version`, `execution_id`, `binding_id` + `revision`) needed to fetch the full record, in full, whenever the agent actually needs it — to read a contract before following it for the first time, to quote evidence text in a report, or to audit history. "On demand" means deferred until asked for, never replaced by a summary that cannot be escaped.
 
 ## Measurement plan
 
-Extend [scripts/benchmark-context.py](../../scripts/benchmark-context.py) to run the same `verify-change` workflow twice: once cold (as the baseline does), and once **warm**, with `ETag`/`fields`/`format=plan` used as a conforming client would (conditional fetch on the three version reads, `format=plan` on `resolve_binding_post`). Compare `summary.json` totals to [context-efficiency-baseline.md](context-efficiency-baseline.md) before reporting any reduction:
+**Done, for pieces 2 and 3.** [scripts/benchmark-context.py](../../scripts/benchmark-context.py) runs the same `verify-change` workflow in three variants — baseline, optimized-cold and optimized-warm — over the real MCP transport, with `fields`/`format=plan`/`prepare_execution` used as a conforming client would. Results, correctness-checked before being trusted, are in [context-efficiency-baseline.md](context-efficiency-baseline.md):
 
-- Warm `verify-change`: target **≥70% fewer response tokens** (the estimate defined in the baseline), the measure asked for in [#131](https://github.com/ashuangiras/polaroid/issues/131).
-- Cold `verify-change`: report the actual reduction honestly; it is expected to be smaller, bounded by content that must cross the wire at least once.
-- Decision and verification correctness: the warm run must reach the identical `verified: true` conclusion, for the identical combination, as the cold run and as today's interface: the benchmark harness itself asserts this before any token count is trusted, exactly as the baseline's harness already records a real `succeeded` outcome and a real `get_verification` before reporting sizes.
+- **Warm `verify-change`: 79.6% fewer response tokens**, exceeding the ≥70% target in [#131](https://github.com/ashuangiras/polaroid/issues/131).
+- **Cold `verify-change`: 23.4% fewer response tokens**, reported honestly as the smaller figure it is: this increment does not change how many bytes a first-ever version read costs (piece 1 would).
+- **Decision and verification correctness:** every variant reaches the identical `verified: true` conclusion, for the identical combination and the identical selected `(procedure_id, version)` per reference path as the unoptimized interface; the benchmark asserts this and exits non-zero on any mismatch, before reporting any reduction.
 
-## Suggested sequencing for implementation (a later item, not this one)
+Still to measure, once piece 1 ships: a conditional-fetch-aware warm run's further reduction, and whether it changes the cold figure (it should not: a first-ever read still has no `ETag` to send).
 
-1. `fields` projection on version and execution reads — smallest change, highest measured value (65% of baseline bytes).
-2. `ETag`/`If-None-Match` on the four single-record GET endpoints — reuse one content-hash function from `internal/transport/wire` so both transports agree.
-3. `format=plan` on `resolve_binding`/`get_graph` — addresses the pre/post repetition directly.
-4. MCP tool surface: expose the same parameters on the corresponding tools, additively (new optional arguments on existing tools, not new tools), being mindful that MCP clients can cache a stale tool schema after an upgrade (noted in [mcp.md](../architecture/mcp.md) and in this repository's own operating notes) — ship with a clear restart/verification step, as every earlier MCP-visible change here has.
+## Suggested sequencing for implementation
 
-Each step above ships as its own change, with its own `make check`/`make demo`/`make e2e`/`make e2e-mcp` evidence and its own documentation update (`http-api.md`, `records.md`, `mcp.md` as applicable), per AGENTS.md. None of them is implemented by this proposal.
+1. ~~`fields` projection on version reads~~ — **done** (ADR-0042).
+2. ~~`format=plan` on `resolve_binding`/`get_graph`, and `prepare_execution`~~ — **done** (ADR-0042).
+3. ~~MCP tool surface for both~~ — **done** (ADR-0042): additive optional arguments on `get_version`, `get_graph`, `resolve_binding`, and one new tool, `prepare_execution` (39 tools total, 25 read-only).
+4. `fields` projection on `GET /v1/executions/{id}` (`inputs`, `evidence`, `children`, `decisions`) — not yet done; smaller measured value than the version projection, since an execution's own response is already far smaller than a version's.
+5. `ETag`/`If-None-Match` on the four single-record GET endpoints (procedure version, binding revision, execution, toil revision) — reuse one content-hash function from `internal/transport/wire` so both transports agree. This is the piece that would let the baseline's `optimized-warm` assumption be checked cheaply over the wire instead of trusted client-side.
+
+Each step ships as its own change, with its own `make check`/`make demo`/`make e2e`/`make e2e-mcp` evidence and its own documentation update (`http-api.md`, `records.md`, `mcp.md` as applicable), per AGENTS.md. Steps 1-3 above are this change (ADR-0042, PR #132); 4 and 5 are proposed, not yet filed as separate work items.

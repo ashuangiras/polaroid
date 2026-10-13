@@ -1,42 +1,52 @@
 # Context-efficiency baseline (#131)
 
-This page is a measurement, not a work log: it records what today's interface costs an agent, in bytes and estimated tokens, for one representative workflow, before any change. [context-efficiency-proposal.md](context-efficiency-proposal.md) is the design that follows from it.
+This page is a measurement, not a work log: it records what the interface costs an agent, in tokens, for one representative workflow, both before and after [ADR-0042](../architecture/decisions/0042-context-efficient-projections.md). [context-efficiency-proposal.md](context-efficiency-proposal.md) is the design; this page is the evidence.
 
 ## Method
 
-[scripts/benchmark-context.py](../../scripts/benchmark-context.py) drives the workflow directly over HTTP, against an isolated `polaroidd` (temporary database, loopback port, started and torn down by the script). No LLM is in the loop, and nothing it does is sent to a model: every request and response is captured verbatim to `bin/benchmark/<timestamp>/` (git-ignored, like `bin/dogfood`), and this document is the durable, human-readable summary of one representative run.
+[scripts/benchmark-context.py](../../scripts/benchmark-context.py) drives the workflow over the **real MCP transport** (`tools/call` JSON-RPC, the exact envelope, headers and `_meta` an MCP client sends), against an isolated `polaroidd` (temporary database, loopback port, started and torn down by the script). No LLM is in the loop, and nothing it does is sent to a model: every request and response is captured verbatim to `bin/benchmark/<timestamp>/` (git-ignored, like `bin/dogfood`), and this document is the durable, human-readable summary of one representative run.
 
-**Token counts are a local, deterministic estimate** (`approx_tokens` in the script): a run of letters or digits counts as one token, and every other non-space character (so every piece of JSON punctuation) counts as one. This is not a real tokenizer and is not meant to predict any model's exact count; it is applied identically to every payload captured, so the *relative* comparison between today's interface and a proposed one is meaningful without ever calling a model.
+**Tokens:** the script prefers a real tokenizer (`tiktoken`'s `o200k_base`); this environment has no network access to install it, so the figures below use its documented, deterministic fallback estimate (a run of letters/digits counts as one token, every other non-space character as one), applied identically to every call and every variant, so the *relative* comparison is meaningful without ever calling a model. **What is counted** is the tool result text (`content[0].text`), what a conforming agent client forwards to the model — not the outer JSON-RPC envelope, which the script also records separately as a measure of MCP's own transport overhead.
 
-## Workflow benchmarked
+## Workflow and variants
 
-The `verify-change` workflow exactly as bound and documented ([AGENTS.md](../../AGENTS.md), [procedural-loop.md](procedural-loop.md)): `dev.change.verify` version 4 (the version on `main` as of this measurement — none of the unmerged, frozen `#127`/`#128`/`#129`/`#130` work is in this baseline), with its `build` reference conditional (applicable, since the effective inputs name a `build_command`), `checks` pinned at version 4, and `hosted-ci` decided not applicable (this repository's recorded policy is local-only). The store starts empty and is loaded only with `examples/development`'s fixtures, so this is a **cold** run: nothing is yet verified at the target commit.
+The `verify-change` workflow exactly as bound and documented ([AGENTS.md](../../AGENTS.md), [procedural-loop.md](procedural-loop.md)): `dev.change.verify` version 4 (the version on `main`; none of the unmerged, frozen `#127`/`#128`/`#129`/`#130` work is in this measurement), `build` applicable, `checks` pinned at version 4, `hosted-ci` decided not applicable (this repository's recorded policy is local-only). Three variants, each at its own fresh target commit so none can rely on another's recorded evidence:
 
-Nine calls, matching what an agent following the procedure's own `instructions` makes one for one:
+- **baseline**: today's full interface before [ADR-0042](../architecture/decisions/0042-context-efficient-projections.md) — `resolve_binding` (full graph) before and after recording, `get_version` in full for every node.
+- **optimized-cold**: `prepare_execution` (compact) instead of `resolve_binding` before running, `format=plan` instead of the full graph to confirm; `get_version` is still read in full for every node, because a cold agent (or a fresh session) has no cached content yet.
+- **optimized-warm**: the same, but the three `get_version` calls are **not made at all**: this variant states, explicitly, that it simulates a session that has already read these exact, immutable `(procedure_id, version)` pairs before, which [ADR-0004](../architecture/decisions/0004-append-only-versions-with-expected-base.md) makes safe to assume. It is **not** a claim that conditional fetch (`ETag`/`If-None-Match`) is implemented over the wire to make that assumption checkable at low cost: that remains open, named in the proposal.
 
-| # | Step | Method | Response bytes | Response tokens (est.) |
-| --- | --- | --- | ---: | ---: |
-| 1 | `resolve_binding_pre` (before anything ran) | GET | 3,452 | 1,262 |
-| 2 | `read_version_root` (`dev.change.verify` v4, in full) | GET | 13,903 | 3,387 |
-| 3 | `read_version_build` (`go.module.build` v3, in full) | GET | 3,316 | 911 |
-| 4 | `read_version_checks` (`go.module.checks` v4, in full) | GET | 4,663 | 1,196 |
-| 5 | `record_execution_build` | POST | 649 | 253 |
-| 6 | `record_execution_checks` | POST | 904 | 378 |
-| 7 | `record_execution_parent` | POST | 1,191 | 449 |
-| 8 | `get_verification_parent` | GET | 701 | 262 |
-| 9 | `resolve_binding_post` (after recording, to confirm) | GET | 4,777 | 1,673 |
+**Correctness, checked before any number is trusted:** the script asserts every variant's parent execution is `verified: true`, with the identical `outcome` and the identical selected `(procedure_id, version)` per reference path as the baseline, and that each variant's own pre- and post-run reads agree with each other. A variant that is cheaper but reaches a different answer fails the script, not just the comparison.
 
-**Totals for this one cold run:** 9 calls, 33,556 response bytes (9,771 estimated tokens), 3,673 request bytes (1,310 estimated tokens). Request cost is already small; the interface's cost to an agent is almost entirely in what it reads back.
+## Results
 
-## Two concrete sources of repeated or deferrable content
+| Variant | Calls | Response tokens (tool result) | Reduction vs. baseline |
+| --- | ---: | ---: | ---: |
+| baseline | 9 | 9,771 | — |
+| optimized-cold | 9 | 7,486 | 23.4% |
+| optimized-warm | 6 | 1,992 | **79.6%** |
 
-1. **`resolve_binding` is called twice in one workflow (before and after recording), and 99.48% of the first call's bytes reappear, byte-identical, in the second** (3,434 of the first call's 3,452 bytes, measured with a byte-level longest-common-subsequence match). The only information the second call actually adds is which nodes are now verified and by which execution. Today's interface has no way to ask for only that.
-2. **The three full version reads are 21,882 bytes, 65% of all response bytes in the workflow**, almost entirely `contract` and `instructions` prose that is immutable for that exact `(procedure_id, version)` ([ADR-0004](../architecture/decisions/0004-append-only-versions-with-expected-base.md)) and already known to any agent (or any earlier run in the same session) that has read that version before. This repository's own [status.md](status.md) records dozens of `verify-change` runs against the same four versions of `dev.change.verify`; a **warm** run (any run after the first against an unchanged version) pays this cost again for no new information.
+The **warm** figure exceeds the ≥70% target in [#131](https://github.com/ashuangiras/polaroid/issues/131) for the realistic, repeated case this repository's own [status.md](status.md) history shows: the same few versions of `dev.change.verify` run dozens of times. The **cold** figure is smaller, as expected: a first-ever read of a version's content must cross the wire at least once, and `optimized-cold` only removes the resolution-side repetition (`prepare_execution` and `format=plan`), not the three full version reads.
+
+Per-call detail (response tokens, tool result only):
+
+| Step | baseline | optimized-cold | optimized-warm |
+| --- | ---: | ---: | ---: |
+| resolve/prepare (before running) | 1,262 (`resolve_binding`) | 300 (`prepare_execution`) | 300 (`prepare_execution`) |
+| `get_version` × 3 (root, build, checks) | 3,387 + 911 + 1,196 = 5,494 | 5,494 (unchanged: cold) | *not read* |
+| `record_execution` × 3 | 253 + 378 + 449 = 1,080 | 1,080 | 1,080 |
+| `get_verification` | 262 | 262 | 262 |
+| resolve/confirm (after running) | 1,673 (`resolve_binding`) | 350 (`format=plan`) | 350 (`format=plan`) |
+| **Total** | **9,771** | **7,486** | **1,992** |
+
+**Repeated content**, measured as the byte-level overlap between each variant's first and last call: baseline's two `resolve_binding` calls share 99.45% of their bytes unchanged; `optimized-cold`/`optimized-warm`'s `prepare_execution` and `format=plan` confirmation share 97.04%. `format=plan` already removed the large, repeated graph structure (`canonical_key`, `scope`, nested nodes); what remains shared is mostly identifiers and the step shape itself, a smaller further opportunity this page does not claim to have closed.
+
+**Tool schema list** (`tools/list`): 14,433 tokens, 46,650 bytes. This is a one-time, per-connection cost, not paid per workflow call: a conforming client fetches it once per session, not on every turn, so it is reported separately here, never added into a per-workflow total.
 
 ## Reading this baseline
 
-- **Cold-run floor.** Some of this cost cannot be removed without changing what is verified: the first time an agent (or a fresh session) follows a version, its contract and instructions must cross the wire at least once. A 70% reduction is not expected on a true first-ever cold run.
-- **Warm runs are the realistic case**, and are where the two findings above apply almost in full: a client that already holds a version's content, or a binding's already-seen graph shape, needs only confirmation of what changed. [context-efficiency-proposal.md](context-efficiency-proposal.md) targets this case for the ≥70% response-token reduction in [#131](https://github.com/ashuangiras/polaroid/issues/131), and states how to measure both cases honestly after implementing.
+- **Cold-run floor.** The first time an agent (or a fresh session) reads a version's content, it must cross the wire; `optimized-cold`'s 23.4% is the honest ceiling for that case with this increment alone.
+- **Warm runs are the realistic case**: a client that already holds a version's content, or has already seen a binding's graph shape, needs only confirmation of what changed. 79.6% is measured, not projected, with the correctness assertions above holding throughout.
 - **Scope of this baseline.** Only `verify-change` is measured here. Discovery, feedback and toil workflows are not, and should be benchmarked the same way before generalizing any conclusion to them.
 
 ## Reproducing
@@ -46,4 +56,4 @@ make build
 python3 scripts/benchmark-context.py   # needs bin/polaroidd, bin/polaroid
 ```
 
-Prints the path to `summary.json`; per-call request/response bodies and `manifest.json` sit beside it, under `bin/benchmark/<timestamp>/` (git-ignored). The figures above are one such run's `summary.json`, copied in by hand.
+Prints a compact table and the path to `summary.json`; per-call request/response bodies, `manifest.json` and `tools_list.json` sit beside it, under `bin/benchmark/<timestamp>/` (git-ignored). The figures above are one such run's `summary.json`, copied in by hand.
