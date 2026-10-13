@@ -1,6 +1,6 @@
 # Dependencies and licenses
 
-Polaroid keeps third-party code to a minimum. The `polaroid` CLI links only the Go standard library. `polaroidd` links two direct dependencies, the SQLite driver and the MCP Go SDK, and the modules that they need.
+Polaroid keeps third-party code to a minimum. The `polaroid` CLI links only the Go standard library. `polaroidd` links two direct dependencies, the SQLite driver and the MCP Go SDK, and the modules that they need. The Git-core package (`internal/gitcore`, [ADR-0044](../architecture/decisions/0044-git-core.md)) adds go-git and the modules it needs; it uses only go-git's object, storage and plumbing packages, so no Git transport, SSH or HTTP client code is compiled yet.
 
 `make deps-check` ([scripts/check-deps.sh](../../scripts/check-deps.sh)) enforces this file. The check fails if any of these is true:
 
@@ -36,6 +36,19 @@ Licenses were verified on 2026-10-09. Each module's own LICENSE file in the Go m
 | `golang.org/x/oauth2` | `v0.35.0` | BSD-3-Clause | linux, darwin | Compiled in through the MCP SDK's authorization support, which Polaroid does not use. |
 | `golang.org/x/sync` | `v0.23.0` | BSD-3-Clause | linux, darwin | Needed by the MCP SDK. |
 | `golang.org/x/time` | `v0.15.0` | BSD-3-Clause | linux, darwin | Rate limiting inside the MCP SDK. |
+| `github.com/go-git/go-git/v5` | `v5.19.3` | Apache-2.0 | linux, darwin | Direct: reads and decodes Git objects for Git-core ([ADR-0044](../architecture/decisions/0044-git-core.md)). Only its plumbing, object and filesystem storage packages are compiled. |
+| `github.com/go-git/go-billy/v5` | `v5.9.2` | Apache-2.0 | linux, darwin | Direct: the filesystem abstraction go-git's storage takes. |
+| `github.com/go-git/gcfg` | `v1.5.1-0.20230307220236-3a3c6141e376` | BSD-3-Clause | linux, darwin | Git config parsing, needed by go-git. |
+| `gopkg.in/warnings.v0` | `v0.1.2` | BSD-2-Clause | linux, darwin | Needed by github.com/go-git/gcfg. |
+| `github.com/ProtonMail/go-crypto` | `v1.1.6` | BSD-3-Clause | linux, darwin | OpenPGP for commit signatures in go-git's object package; Git-core does not sign or verify yet. |
+| `github.com/cloudflare/circl` | `v1.6.3` | BSD-3-Clause | linux, darwin | Curves needed by github.com/ProtonMail/go-crypto. |
+| `github.com/cyphar/filepath-securejoin` | `v0.6.1` | BSD-3-Clause | linux, darwin | Safe path joining in go-billy's osfs. The module also ships MPL-2.0 code (`pathrs-lite`), which Polaroid does not compile; the compiled packages carry BSD-3-Clause SPDX headers, and the check reads `LICENSE.BSD`. |
+| `github.com/emirpasic/gods` | `v1.18.1` | BSD-2-Clause | linux, darwin | Data structures used by go-git's object package. |
+| `github.com/jbenet/go-context` | `v0.0.0-20150711004518-d14ea06fba99` | MIT | linux, darwin | Context-aware readers in go-git's utilities. |
+| `github.com/pjbgf/sha1cd` | `v0.7.0` | Apache-2.0 | linux, darwin | SHA-1 with collision detection, go-git's object hash. |
+| `github.com/sergi/go-diff` | `v1.3.2-0.20230802210424-5b0b94c5c0d3` | MIT | linux, darwin | Text diffs in go-git's object package. Also ships `APACHE-LICENSE-2.0` for the diff-match-patch algorithm it ports. |
+| `golang.org/x/crypto` | `v0.57.0` | BSD-3-Clause | linux, darwin | Needed by github.com/ProtonMail/go-crypto. govulncheck lists GO-2026-5932 (the deprecated `x/crypto/openpgp` package) for this module; that package is not compiled. |
+| `golang.org/x/net` | `v0.60.0` | BSD-3-Clause | linux, darwin | Only `x/net/context`, through github.com/jbenet/go-context. Raised from v0.57.0, which go-git requires, to the release that fixes GO-2026-6603, -6610, -6611, -6612 and -6617. |
 
 The module graph also references modules that are never compiled into Polaroid. modernc.org/sqlite's notice lists them, for example `github.com/hashicorp/golang-lru/v2` (MPL-2.0). `go.sum` holds checksums for some of their `go.mod` files. They carry no license obligation for Polaroid's binaries, and the check above ignores them by design.
 
