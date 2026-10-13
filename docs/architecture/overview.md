@@ -36,8 +36,9 @@ flowchart LR
 | `internal/lifecycle` | Per-user installation and the managed service: layout, launchd and systemd definitions and adapters, ownership-aware status, staged install, upgrade and uninstall ([ADR-0026](decisions/0026-per-user-installation-and-managed-service.md)) | Standard library, `version` |
 | `internal/recovery` | Catalog backup (consistent `VACUUM INTO` snapshot, validated, published atomically with versioned metadata), inspection, and restore (plan, staged copy, recovery backup, managed-service coordination, atomic replacement, rollback) ([ADR-0030](decisions/0030-catalog-backup-and-restore.md)) | `storage/sqlite`, `lifecycle`, `version` |
 | `internal/version` | The build identity embedded by the Go toolchain | Standard library only |
+| `internal/gitcore` | Knowledge snapshots in a bare Git repository: atomic, durable publication of files under one active ref, published-snapshot reads, history with provenance trailers, diff, verification and recovery; no procedure rules ([ADR-0044](decisions/0044-git-core.md)). Not yet used by the daemon (milestone B) | go-git (objects, storage), standard library |
 
-Each internal package is tested on its own against its contract: validation rules in `memory`, persistence and concurrency in `storage/sqlite` (real database files), and the full stack through real HTTP in `transport/http` and `transport/mcp` (the latter through the SDK's own client). `internal/archtest` fails the build if `memory` imports HTTP, SQL or storage code, if storage imports transport, if a transport imports storage, or if the two transports import each other. It also keeps `lifecycle` free of storage and `recovery`, and allows `cmd/polaroid` to reach storage only through `recovery`.
+Each internal package is tested on its own against its contract: validation rules in `memory`, persistence and concurrency in `storage/sqlite` (real database files), and the full stack through real HTTP in `transport/http` and `transport/mcp` (the latter through the SDK's own client). `internal/archtest` fails the build if `memory` imports HTTP, SQL or storage code, if storage imports transport, if a transport imports storage, or if the two transports import each other. It also keeps `lifecycle` free of storage and `recovery`, and allows `cmd/polaroid` to reach storage only through `recovery`. It keeps `gitcore` free of `memory`, transports, SQL and `recovery`, and `memory` free of `gitcore`.
 
 There is deliberately one interface (`memory.Store`): it lets the domain stay ignorant of SQLite. No other abstraction exists until a second implementation or a test needs one.
 
@@ -73,4 +74,4 @@ Binding to a non-loopback address is possible (`-addr`) but logs a warning: anyo
 
 ## Planned components (not implemented)
 
-No planned component is scoped yet. See the [roadmap](../development/roadmap.md).
+The knowledge kernel on Git-core, remote synchronisation, the agent interface on it and migration from the SQLite catalog are planned as milestones B–E of [ADR-0044](decisions/0044-git-core.md). See the [roadmap](../development/roadmap.md).

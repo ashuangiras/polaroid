@@ -2,6 +2,23 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
+**Git-core, milestone A ([ADR-0044](../architecture/decisions/0044-git-core.md)), on branch `git-core`, as of 2026-10-13.**
+
+- **Done:** `internal/gitcore`. It provides durable, atomic publication of a file tree under one active ref; reads of published snapshots only; history with provenance trailers; diff; `Verify`; and `Recover`. It is not yet used by the daemon; no API, record or CLI changes.
+- **Tested** (`go test -race ./internal/gitcore/`):
+  - real processes killed at five publication stages;
+  - one winner among racing writers, in one process and across six processes;
+  - reads during publication;
+  - damaged, substituted and missing objects, and a damaged ref, all detected and recovered;
+  - unpublished commits unreadable;
+  - Git CLI interoperability: `fsck --strict`, `log`, `reflog`, `gc` and `pack-refs`.
+
+  Mutation checks fail the tests without compare-and-swap, `flock`, the published-snapshot guard, temp cleanup or the hash check.
+- **Dependencies:** go-git v5.19.3 plus 12 modules (all permissive), and `golang.org/x/net` v0.60.0; govulncheck reports no reachable vulnerability.
+- **Experiment preserved:** branch `exp/git-native-knowledge` at `f5780a5` on GitHub (public; no PR). Benchmark outputs were not published.
+
+Next action: milestone B, the knowledge kernel on Git-core.
+
 **Maintenance release `v1.0.1` in progress ([#120](https://github.com/ashuangiras/polaroid/issues/120)), as of 2026-10-11.**
 
 - **Merged:**

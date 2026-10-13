@@ -112,6 +112,16 @@ Second-repository adoption trials are paused while the existing features are pre
 3. [#118](https://github.com/ashuangiras/polaroid/issues/118) External ItsDangerous acceptance reports with their provenance: **done** (PR #119).
 4. [#120 Release `v1.0.1` and adopt it](https://github.com/ashuangiras/polaroid/issues/120): the #111 fix as a patch release.
 
+## Git-core: living knowledge in Git ([ADR-0044](../architecture/decisions/0044-git-core.md))
+
+One integration branch, `git-core`, and at most one production PR. Each milestone ends with executable acceptance tests.
+
+1. **A — Production Git-core: done on the branch.** `internal/gitcore`: durable, atomic publication under one active ref, concurrency across processes, crash, damage and recovery tests, Git CLI interoperability.
+2. **B — Knowledge kernel on Git-core (planned):** stable keys, active knowledge, references, validation and publication policy, independent of Git types; current APIs kept compatible where practical.
+3. **C — Remote synchronisation (planned):** configured remotes (HTTPS and SSH credentials kept out of knowledge, logs and responses), fetch, explicit validation and authorised activation, fast-forward only, explicit divergence, configurable branches per instance, no forced pushes.
+4. **D — Agent interface (planned):** `discover`, `read` and `feedback` on the Git-backed kernel with one snapshot per task; depends on the disposition of PR #132.
+5. **E — Migration and recovery (planned):** a controlled, non-destructive path from the SQLite catalog with audit mapping, recovery and rollback.
+
 ## Later (unordered, not yet scoped)
 
 - **The #85 assessment's automation (proposed, not filed):** a committed tool that applies `dev.change.classify` rules mechanically. Its inputs, outputs and acceptance criteria are in the live toil item `polaroid.change-classification.manual` (`candidate`; [#89](https://github.com/ashuangiras/polaroid/issues/89)) ([status](status.md)). Filing it as an issue is a decision for the owner.
