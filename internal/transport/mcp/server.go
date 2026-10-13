@@ -35,16 +35,27 @@ const instructions = `Polaroid stores procedures: versioned, shared instructions
 3. Follow the selected versions' instructions with your own tools. If target_verification.verified is false or target_verification is absent, the work is not verified there until you run it and record it. A reference with a condition applies only when the condition holds for your task: decide each one yourself (Polaroid never evaluates conditions), run the applicable ones, and pass your decisions to get_graph or resolve_binding to see target_verification.
 4. Record each run with record_execution, children first, then the parent with "children" linking them. The commit claims that exactly that commit ran: commit uncommitted changes locally before the run you record. A child must have run with the inputs its reference maps from the parent's. List a decision for every conditional reference: applicable with its child, or not applicable with a concrete rationale and no child. Required references cannot be skipped. Keep evidence concise: results, short excerpts and references (commits, URLs, log locations), never whole logs; a value over its size limit is refused with value_too_large, and get_catalog_statistics lists the limits.
 5. Improve a procedure with revise_procedure, passing the version you read as base_version; a version_conflict means re-read and try again. Before creating or revising one, check the proposal with suggest_duplicates (exclude_procedure_id when revising): key_collision means the key is taken, and suggestions are overlapping procedures to read and reuse, bind or revise if they fit; the decision is yours. A new procedure declares its applicability (shared, or local to a repository) and origin.
-6. When Polaroid itself gets in your way (a confusing error, a missing capability, a tool that misbehaved) or you see how it could serve you better, say so with report_feedback, naming its subject (the service, a repository, procedure version, binding or execution).
+6. When Polaroid itself gets in your way (a confusing error, a missing capability, a tool that misbehaved) or you see how it could serve you better, check list_feedback with status open first, then say so with report_feedback, naming its subject (the service, a repository, procedure version, binding or execution). When your own work addresses an open report, resolve_feedback it with the outcome and a reference to what you changed.
 7. When you see repetitive, mechanical work that a tool might replace, look for an existing toil item with list_toil_items (by procedure_id, repository or status) before creating one with create_toil_item, and revise it with revise_toil_item when you observe the same activity again. Cite exact procedure versions and executions, keep observed facts apart from hypotheses, and treat its status as your assessment, not verification.
 8. History is never rewritten. An execution recorded wrongly (it did not do what its version claims) is withdrawn as evidence with invalidate_execution and a precise reason: it stays readable with evidence_status invalidated, never supports selection or verification again, and its parents are unverified (child_invalidated); record a new genuine run to replace it. A procedure that should no longer be used is retired with retire_procedure (base_event from get_procedure_lifecycle): discovery and list_procedures hide it unless lifecycle is retired or all, new versions of it, new bindings and binding revisions of it and new references to it are refused, and graph nodes of it carry retirement while keeping their evidence. reactivate_procedure reverses it.
 Lists take limit and return next to continue after, with the same other arguments; list_procedures, list_bindings and list_toil_items also take snapshot to page a fixed snapshot. Tool errors carry an error object with a stable code (invalid_request, not_found, version_conflict, ...).`
 
-// NewHandler returns the MCP endpoint over svc. It applies the same
-// cross-origin protection as the HTTP API; wrap it with a loopback-host
-// check when listening on loopback.
+// NewHandler returns the full MCP endpoint over svc: every operation of the
+// HTTP API as a tool, and the resources. It applies the same cross-origin
+// protection as the HTTP API; wrap it with a loopback-host check when
+// listening on loopback.
 func NewHandler(svc *memory.Service, logger *slog.Logger) http.Handler {
-	server := newServer(svc, logger)
+	return handler(newServer(svc, logger), logger)
+}
+
+// NewAgentHandler returns the agent-mode MCP endpoint over svc (ADR-0043):
+// only the few tools everyday procedural-knowledge use needs, so a client
+// that connects to it never loads the full API's schemas.
+func NewAgentHandler(svc *memory.Service, logger *slog.Logger) http.Handler {
+	return handler(newAgentServer(svc, logger), logger)
+}
+
+func handler(server *sdk.Server, logger *slog.Logger) http.Handler {
 	h := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, &sdk.StreamableHTTPOptions{
 		Stateless:           true,
 		JSONResponse:        true,
@@ -55,7 +66,15 @@ func NewHandler(svc *memory.Service, logger *slog.Logger) http.Handler {
 }
 
 func newServer(svc *memory.Service, logger *slog.Logger) *sdk.Server {
-	s := sdk.NewServer(&sdk.Implementation{Name: "polaroid", Title: "Polaroid procedural memory", Version: "v1"}, &sdk.ServerOptions{
+	s := baseServer(instructions, logger)
+	t := &tools{svc: svc, logger: logger}
+	t.register(s)
+	t.registerResources(s)
+	return s
+}
+
+func baseServer(instructions string, logger *slog.Logger) *sdk.Server {
+	return sdk.NewServer(&sdk.Implementation{Name: "polaroid", Title: "Polaroid procedural memory", Version: "v1"}, &sdk.ServerOptions{
 		Instructions:              instructions,
 		Logger:                    logger,
 		Capabilities:              &sdk.ServerCapabilities{},
@@ -64,10 +83,6 @@ func newServer(svc *memory.Service, logger *slog.Logger) *sdk.Server {
 		// never serve a cached discover, list or read result (SEP-2549).
 		SetCacheable: func(_ context.Context, _ sdk.Request, c *sdk.Cacheable) { c.TTLMs = 0 },
 	})
-	t := &tools{svc: svc, logger: logger}
-	t.register(s)
-	t.registerResources(s)
-	return s
 }
 
 type tools struct {

@@ -182,6 +182,7 @@ func run(ctx context.Context, cfg config, logger *slog.Logger, ready func(net.Ad
 	svc := memory.NewService(store)
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", mcptransport.NewHandler(svc, logger))
+	mux.Handle("/mcp/agent", mcptransport.NewAgentHandler(svc, logger))
 	mux.Handle("/", httptransport.NewHandler(svc, logger))
 	var handler http.Handler = mux
 	if tcp, ok := ln.Addr().(*net.TCPAddr); ok && tcp.IP.IsLoopback() {

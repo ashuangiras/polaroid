@@ -591,7 +591,7 @@ check "graph context needs both parameters; resolution needs an environment" equ
 
 ########################################################################
 section "Use Polaroid from an agent over MCP" \
-	"\`polaroidd\` serves MCP at \`/mcp\` (ADR-0014): stateless streamable HTTP, protocols 2026-07-28 and 2025-11-25 (ADR-0016), behind the same loopback and cross-origin checks. 38 tools mirror the HTTP API with flat arguments named after record fields; results are the API's record shapes, errors are tool errors with the API's codes, and three read-only resource templates serve procedures, versions and bindings. Below, raw JSON-RPC over curl shows exactly what an MCP client sends." \
+	"\`polaroidd\` serves MCP at \`/mcp\` (ADR-0014): stateless streamable HTTP, protocols 2026-07-28 and 2025-11-25 (ADR-0016), behind the same loopback and cross-origin checks. 40 tools mirror the HTTP API with flat arguments named after record fields; results are the API's record shapes, errors are tool errors with the API's codes, and three read-only resource templates serve procedures, versions and bindings. Below, raw JSON-RPC over curl shows exactly what an MCP client sends." \
 	"Point an MCP client at \`http://127.0.0.1:7417/mcp\`, e.g. VS Code \`.vscode/mcp.json\`: \`{\"servers\": {\"polaroid\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:7417/mcp\"}}}\`."
 MCP_META='{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/clientInfo":{"name":"manual-test","version":"1"}}'
 rpc() { # rpc METHOD NAME PARAMS [PROTOCOL]: one JSON-RPC request; NAME may be empty
@@ -606,7 +606,7 @@ tool() { rpc tools/call "$1" "$(jq -cn --arg n "$1" --argjson a "$2" '{name: $n,
 show 'rpc server/discover "" "{}" | jq -c "{versions: .result.supportedVersions, capabilities: (.result.capabilities | keys), server: .result._meta[\"io.modelcontextprotocol/serverInfo\"].name}"'
 check "server/discover: protocols 2026-07-28 and 2025-11-25, tools and resources" json_has '.versions == ["2026-07-28","2025-11-25"] and .capabilities == ["resources","tools"] and .server == "polaroid"'
 show 'rpc tools/list "" "{}" | jq -c "{tools: (.result.tools | length), read_only: [.result.tools[] | select(.annotations.readOnlyHint) | .name] | length, names: [.result.tools[].name] | sort}"'
-check "38 tools, 24 of them read-only" json_has '.tools == 38 and .read_only == 24'
+check "40 tools, 25 of them read-only" json_has '.tools == 40 and .read_only == 25'
 show 'tool get_procedure "{\"canonical_key\": \"go.dependency.add\"}" | jq -S .result.structuredContent | shasum -a 256 | cut -c1-16; get /v1/procedures/by-key/go.dependency.add | jq -S . | shasum -a 256 | cut -c1-16'
 check "get_procedure over MCP returns the same document as GET /v1/procedures/by-key" equal "$(sed -n 1p <<<"$LAST")" "$(sed -n 2p <<<"$LAST")"
 show 'tool create_procedure "{\"canonical_key\": \"mcp.created\", \"philosophy\": \"p\", \"method\": \"m\", \"contract\": {\"z\": 1, \"a\": 2}, \"instructions\": {}, \"revision_reason\": \"Created by an agent over MCP.\"}" | jq -r ".result.content[0].text" | jq -c "{id, canonical_key, contract: .versions[0].contract}"'
@@ -628,8 +628,8 @@ check "a foreign Host on /mcp gets 403" equal "$LAST" 403
 
 ########################################################################
 section "Feedback box: report problems and suggestions about Polaroid" \
-	"Agents (and people) record what got in their way, or what would help, as immutable feedback reports (ADR-0015): \`kind\` problem or suggestion, a one-line \`summary\`, \`details\`, a canonical-key \`reporter\` and an optional free-form \`context\`. Polaroid stores and lists them but tracks no triage state; triage happens elsewhere, for example as GitHub issues. Reporting changes no other record." \
-	"\`bin/polaroid feedback report.json\` (or stdin), \`bin/polaroid feedbacks [problem|suggestion]\`, \`bin/polaroid get-feedback ID\`; agents use the MCP tool \`report_feedback\`."
+	"Agents (and people) record what got in their way, or what would help, as immutable feedback reports (ADR-0015): \`kind\` problem or suggestion, a one-line \`summary\`, \`details\`, a canonical-key \`reporter\` and an optional free-form \`context\`. Polaroid stores and lists them, never changed or deleted. How a report was handled is a separate, append-only resolution (ADR-0040): \`outcome\` (addressed, declined, not_reproduced or duplicate), a reason, an actor and optional references; a second resolution is refused. Reports carry \`status\` (open or resolved), and the list takes a \`status\` filter." \
+	"\`bin/polaroid feedback report.json\` (or stdin), \`bin/polaroid feedbacks [problem|suggestion] [status=open|resolved]\`, \`bin/polaroid get-feedback ID\`, \`bin/polaroid resolve-feedback ID resolution.json\`; agents use the MCP tools \`report_feedback\` and \`resolve_feedback\`."
 FB_BEFORE="$(digest /v1/procedures)$(digest "/v1/procedures/$ID")$(digest "/v1/bindings/$BA")$(digest "/v1/executions?procedure_id=$SOLO")"
 jq -n '{kind: "problem", summary: "record_execution rejected a short commit without saying why", details: "I passed a 7-character hash.\nThe error named the field but not the rule.", reporter: "copilot.vscode", context: {tool: "record_execution", z: 1, a: 2}}' >"$WORK/feedback.json"
 show 'jq -c . "$WORK/feedback.json"'
@@ -659,6 +659,28 @@ show 'tool report_feedback "{\"kind\": \"problem\", \"summary\": \"Reported by a
 FB3="$(head -n1 <<<"$LAST" | jq -r .id)"
 check "an agent's report over MCP is stored and is byte-identical through the CLI" equal "$(bin/polaroid get-feedback "$FB3")" "$(head -n1 <<<"$LAST")"
 check "reporting feedback changed no other record" equal "$(digest /v1/procedures)$(digest "/v1/procedures/$ID")$(digest "/v1/bindings/$BA")$(digest "/v1/executions?procedure_id=$SOLO")" "$FB_BEFORE"
+
+show 'bin/polaroid get-feedback "$FB2" | jq -c "{status, resolution}"'
+check "an unresolved report has status open and no resolution" equal "$LAST" '{"status":"open","resolution":null}'
+jq -n '{outcome: "addressed", reason: "Listing by reporter is now the reporter filter.", actor: "copilot.vscode", references: [{uri: "https://github.com/ashuangiras/polaroid/issues/127"}]}' >"$WORK/resolution.json"
+show 'api POST "/v1/feedback/$FB2/resolution" @"$WORK/resolution.json"'
+check "201 Created" status_is 201
+check "Location is /v1/feedback/\$FB2" header_is "location: /v1/feedback/$FB2"
+check "the resolution is the request plus created_at" body_has '.outcome == "addressed" and .actor == "copilot.vscode" and (.references | length) == 1 and has("created_at")'
+show 'bin/polaroid get-feedback "$FB2" | jq -c "{status, outcome: .resolution.outcome}"'
+check "the report now reports resolved, with its resolution" equal "$LAST" '{"status":"resolved","outcome":"addressed"}'
+show 'api POST "/v1/feedback/$FB2/resolution" @"$WORK/resolution.json" | tail -n1 | jq -c .error.code'
+check "a second resolution is 409 feedback_resolved" equal "$LAST" '"feedback_resolved"'
+show 'bin/polaroid resolve-feedback "$FB2" "$WORK/resolution.json" 2>/dev/null'
+check "the CLI exits 1 on a repeated resolution" rc_is 1
+show 'api POST "/v1/feedback/0192f7e4-0000-7000-8000-000000000000/resolution" @"$WORK/resolution.json" | tail -n1 | jq -c .error.code'
+check "resolving an unknown report is not_found" equal "$LAST" '"not_found"'
+show 'bin/polaroid feedbacks status=open | jq -c "[.feedback[].id]"'
+check "status=open excludes the resolved report" equal "$LAST" "[\"$FB1\",\"$FB3\"]"
+show 'bin/polaroid feedbacks status=resolved | jq -c "[.feedback[].id]"'
+check "status=resolved lists only it" equal "$LAST" "[\"$FB2\"]"
+show 'bin/polaroid feedbacks | jq "[.feedback[].id] | length"'
+check "the unfiltered list still has every report" equal "$LAST" 3
 
 ########################################################################
 section "Several repositories in one catalog" \
@@ -842,7 +864,7 @@ section "Catalog statistics, read-only" \
 	"One request summarizes the whole catalog (ADR-0036): record counts (identities apart from their revisions and relationship records), procedures by lifecycle and scope, executions by recorded outcome and by evidence status, toil items by latest status, logical payload bytes (UTF-8 bytes of the stored JSON text: count, total, mean, max), and database pages and file sizes. Counts and payloads are one snapshot; file sizes are read just after it. It takes no parameters, writes nothing and names no path." \
 	"\`bin/polaroid statistics\`, or \`curl http://127.0.0.1:7417/v1/statistics\`; MCP \`get_catalog_statistics\`."
 show 'bin/polaroid statistics | jq -c "{statistics_version, records: (.records | {procedures, procedure_versions, executions, execution_invalidations}), executions: .executions | {by_outcome, by_evidence_status}, storage: .storage | {schema_version, files: (.files | map_values(.present))}}"'
-check "version 1, schema 10, with the database, WAL and shared-memory files present" json_has '.statistics_version == 1 and .storage.schema_version == 10 and .storage.files == {database: true, wal: true, shm: true}'
+check "version 1, schema 11, with the database, WAL and shared-memory files present" json_has '.statistics_version == 1 and .storage.schema_version == 11 and .storage.files == {database: true, wal: true, shm: true}'
 STATS="$(bin/polaroid statistics)"
 check "executions and invalidations match the execution lists" equal "$(jq -c '[.records.executions, .executions.by_evidence_status.invalidated]' <<<"$STATS")" "$(jq -sc '[(.[0].executions | length), (.[1].executions | length)]' <(bin/polaroid executions) <(bin/polaroid executions evidence_status=invalidated))"
 LAST="$STATS"
@@ -859,7 +881,7 @@ section "Size limits on new writes" \
 	"Every persisted text and JSON field has a byte limit, and so has the whole write (ADR-0037): 64 KiB for documents such as evidence, contracts and instructions, 16 KiB for inputs, contexts and decision evidence, 8 KiB for prose, 2 KiB for single lines, 256 KiB per write. JSON is measured after compaction, text as UTF-8 bytes. A value over its limit is refused with \`413 value_too_large\`, naming the field and both sizes, never the content; nothing is stored. The statistics report the policy validation enforces." \
 	"\`bin/polaroid statistics | jq .write_limits\`; any write, e.g. \`bin/polaroid record FILE\`."
 show 'bin/polaroid statistics | jq -c ".write_limits | {policy_version, write_max_bytes, request_max_bytes, fields: (.fields | length), evidence: [.fields[] | select(.record == \"execution\" and .field == \"evidence\") | .max_bytes][0]}"'
-check "policy 1: 37 bounded fields, 256 KiB per write, 1 MiB per request, evidence 64 KiB" json_has '. == {policy_version: 1, write_max_bytes: 262144, request_max_bytes: 1048576, fields: 37, evidence: 65536}'
+check "policy 1: 40 bounded fields, 256 KiB per write, 1 MiB per request, evidence 64 KiB" json_has '. == {policy_version: 1, write_max_bytes: 262144, request_max_bytes: 1048576, fields: 40, evidence: 65536}'
 run98() { jq -cn --arg p "$CHILD91" --arg c "$C91" --argjson n "$1" '{procedure_id: $p, version: 1, repository: "github.com/example/service-a", commit: $c,
 	environment: {name: "e2e", attributes: {}}, inputs: {}, outcome: "succeeded", evidence: {log: ("x" * ($n - 10))}}'; }
 RUNS98="$(bin/polaroid executions | jq '.executions | length')"
@@ -873,11 +895,11 @@ check "the refused writes stored nothing" equal "$(bin/polaroid executions | jq 
 
 ########################################################################
 section "The database enforces immutability itself" \
-	"Even a client that bypasses polaroidd cannot rewrite history: schema triggers reject UPDATE/DELETE of procedures, versions, bindings, binding revisions, references, executions and execution links and decisions, feedback reports, repositories, repository identifiers and procedure origins, gaps in numbering, and pins to missing versions. toil items, revisions and their links, execution invalidations and procedure lifecycle events, \`PRAGMA user_version\` records the schema version (10 migrations)." \
+	"Even a client that bypasses polaroidd cannot rewrite history: schema triggers reject UPDATE/DELETE of procedures, versions, bindings, binding revisions, references, executions and execution links and decisions, feedback reports, repositories, repository identifiers and procedure origins, gaps in numbering, and pins to missing versions. toil items, revisions and their links, execution invalidations, procedure lifecycle events and feedback resolutions, \`PRAGMA user_version\` records the schema version (11 migrations)." \
 	"Open the database with \`sqlite3 polaroid.db\` and try the statements below."
 SNAP_BEFORE="$(digest "/v1/procedures/$ID")$(digest "/v1/bindings/$BA")$(digest "/v1/bindings/$BB")$(digest "/v1/toil-items/$TOIL")"
 show 'sqlite3 "$DB" "PRAGMA user_version; SELECT name FROM sqlite_master WHERE type = '"'"'table'"'"' ORDER BY name;"'
-check "schema version is 10 with procedure, binding, reference, execution, execution-link, decision, feedback, repository, toil and lifecycle tables" equal "$(head -n1 <<<"$LAST")" 10
+check "schema version is 11 with procedure, binding, reference, execution, execution-link, decision, feedback, repository, toil and lifecycle tables" equal "$(head -n1 <<<"$LAST")" 11
 check "the procedure_lifecycle_events table exists" out_has "procedure_lifecycle_events"
 check "the execution_invalidations table exists" out_has "execution_invalidations"
 check "the toil_revisions table exists" out_has "toil_revisions"
@@ -959,7 +981,7 @@ show 'bin/polaroid bind <<<"$(bind_req scratch "{\"pin\": 1}" legacy old-1)" | j
 check "bindings work on the upgraded database" json_has '.procedure_id == "old-1"'
 stop_daemon
 show 'sqlite3 "$WORK/v1.db" "PRAGMA user_version"'
-check "schema version is now 10" equal "$LAST" 10
+check "schema version is now 11" equal "$LAST" 11
 show 'cp "$DB" "$WORK/newer.db" && sqlite3 "$WORK/newer.db" "PRAGMA user_version = 99" && HOME="$WORK/home" bin/polaroidd -addr 127.0.0.1:0 -db "$WORK/newer.db"'
 check "newer schema refused with exit 1" rc_is 1
 check "error says the schema is newer than this build supports" out_has "newer than this build supports"

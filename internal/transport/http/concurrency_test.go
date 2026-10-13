@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -182,6 +183,63 @@ func TestConcurrentExecutionsAndReads(t *testing.T) {
 		t.Fatalf("final statistics: %+v, %v", st, err)
 	}
 	t.Logf("reads per reader during the writes: %v", reads)
+}
+
+// TestConcurrentFeedbackResolutionConflict: of simultaneous attempts to
+// resolve the same report, exactly one succeeds (201); every other gets 409
+// feedback_resolved, never a database-lock error escaping as something else
+// (_txlock=immediate serializes writers; ADR-0040).
+func TestConcurrentFeedbackResolutionConflict(t *testing.T) {
+	s := newTestServer(t)
+	_, fb := s.report(t, nil)
+	path := "/v1/feedback/" + fb.ID + "/resolution"
+
+	const writers = 8
+	start := make(chan struct{})
+	results := make([]response, writers)
+	errs := make([]error, writers)
+	var wg sync.WaitGroup
+	for i := range writers {
+		wg.Go(func() {
+			<-start
+			results[i], errs[i] = s.send(http.MethodPost, path, resolveBody, nil)
+		})
+	}
+	close(start)
+	wg.Wait()
+
+	winner := -1
+	for i, resp := range results {
+		if errs[i] != nil {
+			t.Fatalf("writer %d: %v", i, errs[i])
+		}
+		switch resp.status {
+		case http.StatusCreated:
+			if winner >= 0 {
+				t.Fatalf("writers %d and %d both resolved %s", winner, i, fb.ID)
+			}
+			winner = i
+		case http.StatusConflict:
+			if code := errorOf(t, resp).Code; code != "feedback_resolved" {
+				t.Fatalf("writer %d: %s", i, resp.body)
+			}
+		default:
+			t.Fatalf("writer %d: status %d: %s", i, resp.status, resp.body)
+		}
+	}
+	if winner < 0 {
+		t.Fatal("no writer resolved the report")
+	}
+	got := s.call(t, http.MethodGet, "/v1/feedback/"+fb.ID, "")
+	expect(t, got, http.StatusOK, "")
+	decoded := decodeStrict[feedbackJSON](t, got.body)
+	if decoded.Status != "resolved" || decoded.Resolution == nil {
+		t.Fatalf("Feedback(%s) = %+v; want exactly one stored resolution", fb.ID, decoded)
+	}
+	won := decodeStrict[resolutionJSON](t, results[winner].body)
+	if !reflect.DeepEqual(*decoded.Resolution, won) {
+		t.Fatalf("the stored resolution differs from the winner's response:\n%+v\n%+v", *decoded.Resolution, won)
+	}
 }
 
 func executionIDs(t *testing.T, body []byte) []string {

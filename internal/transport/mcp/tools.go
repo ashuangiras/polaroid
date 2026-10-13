@@ -50,12 +50,14 @@ type (
 	versionRef struct {
 		ProcedureID string `json:"procedure_id"`
 		Version     int    `json:"version"`
+		Fields      string `json:"fields,omitzero" jsonschema:"a comma-separated subset of philosophy,method,goal,applicability,contract,instructions,references,revision_reason: return only those members (plus procedure_id, version, scope, created_at), never a member inside contract or instructions; omit for the complete version"`
 	}
 	graphArgs struct {
 		ProcedureID string `json:"procedure_id"`
 		Version     int    `json:"version"`
 		Repository  string `json:"repository,omitzero" jsonschema:"resolve contextual references from evidence in this repository; requires environment"`
 		Environment string `json:"environment,omitzero" jsonschema:"resolve contextual references from evidence in this environment; requires repository"`
+		Format      string `json:"format,omitzero" jsonschema:"full (default): the complete tree. plan: a compact, dependency-ordered projection (procedure_id, version, selected_by, decision, status), children before the parent they compose; see prepare_execution for the target-required, binding-level equivalent"`
 		targetArgs
 	}
 	// targetArgs ask for each selected combination's status at an exact
@@ -110,7 +112,15 @@ type (
 	resolveBindingArgs struct {
 		BindingID   string `json:"binding_id"`
 		Environment string `json:"environment"`
+		Format      string `json:"format,omitzero" jsonschema:"full (default): the complete graph. plan: a compact, dependency-ordered projection; see prepare_execution"`
 		targetArgs
+	}
+	prepareExecutionArgs struct {
+		BindingID   string         `json:"binding_id"`
+		Environment string         `json:"environment"`
+		Commit      string         `json:"commit" jsonschema:"the full commit you will run at (required: preparing an execution always needs an exact target)"`
+		Inputs      jsontext.Value `json:"inputs" jsonschema:"the root's effective inputs at that commit (required)"`
+		Decisions   jsontext.Value `json:"decisions,omitzero" jsonschema:"your applicability decisions for the conditional references, as in resolve_binding"`
 	}
 	listExecutionsArgs struct {
 		ProcedureID    string `json:"procedure_id,omitzero"`
@@ -147,7 +157,12 @@ type (
 		SubjectID      string `json:"subject_id,omitzero" jsonschema:"only reports about this record; requires subject_type"`
 		SubjectVersion int    `json:"subject_version,omitzero" jsonschema:"only reports about this procedure version or binding revision; requires subject_id"`
 		Repository     string `json:"repository,omitzero" jsonschema:"only reports made in, or about, this repository (by identity)"`
+		Status         string `json:"status,omitzero" jsonschema:"only reports with this status: open or resolved; omitted lists every report"`
 		pageArgs
+	}
+	resolveFeedbackArgs struct {
+		FeedbackID string `json:"feedback_id"`
+		wire.FeedbackResolutionRequest
 	}
 	createToilItemArgs struct {
 		CanonicalKey string `json:"canonical_key" jsonschema:"a new key in canonical-key form; an existing toil item's key is a canonical_key_exists conflict"`
@@ -244,19 +259,39 @@ func (t *tools) register(s *sdk.Server) {
 			}
 			return wire.NewHistory(h), err
 		})
-	add(s, t, "get_version", "Get one version of a procedure.", read,
+	add(s, t, "get_version", "Get one version of a procedure. Pass fields (for example instructions, or contract,instructions) to get only those top-level members plus its identity (procedure_id, version, scope, created_at), instead of the complete version; contract and instructions are each selected whole, never a member inside either.", read,
 		func(ctx context.Context, in versionRef) (any, error) {
 			v, err := t.svc.Version(ctx, in.ProcedureID, in.Version)
-			return wire.NewVersion(v), err
+			if err != nil {
+				return nil, err
+			}
+			if in.Fields == "" {
+				return wire.NewVersion(v), nil
+			}
+			fields, ferr := wire.ParseFields(in.Fields, wire.VersionFieldNames)
+			if ferr != nil {
+				return nil, &memory.ValidationError{Problems: []memory.FieldProblem{{Field: "fields", Message: ferr.Error()}}}
+			}
+			return wire.NewVersionProjection(v, fields), nil
 		})
 	add(s, t, "get_graph", "Get a version's composition graph with the exact version each reference selects. "+
 		"With repository and environment, contextual references resolve from verification evidence, reported per node as selection_evidence (any commit). "+
 		"Add commit and inputs to get target_verification: whether each selected combination is verified at that exact commit and inputs. "+
-		"References with a condition apply only when it holds: decide each for your task and pass decisions; the graph always shows every reference and its condition.", read,
+		"References with a condition apply only when it holds: decide each for your task and pass decisions; the graph always shows every reference and its condition. "+
+		"Pass format=plan for a compact, dependency-ordered projection instead of the complete tree.", read,
 		func(ctx context.Context, in graphArgs) (any, error) {
+			if in.Format != "" && in.Format != "full" && in.Format != "plan" {
+				return nil, &memory.ValidationError{Problems: []memory.FieldProblem{{Field: "format", Message: "must be full or plan"}}}
+			}
 			g, err := t.svc.CompositionGraph(ctx, in.ProcedureID, in.Version,
 				memory.ResolutionContext{Repository: in.Repository, Environment: in.Environment, Target: in.target()})
-			return wire.NewGraphNode(g), err
+			if err != nil {
+				return nil, err
+			}
+			if in.Format == "plan" {
+				return wire.NewGraphPlan(g), nil
+			}
+			return wire.NewGraphNode(g), nil
 		})
 	add(s, t, "create_procedure", "Create a procedure and its version 1. contract and instructions are free-form JSON objects. "+
 		`Declare applicability as {"shared": {}} or {"repository": "<repository id>"}, and origin if you know where the procedure comes from.`, write,
@@ -329,10 +364,29 @@ func (t *tools) register(s *sdk.Server) {
 		})
 	add(s, t, "resolve_binding", "Resolve a binding's latest revision in its repository and an environment. "+
 		"Versions are selected from earlier evidence, reported per node as selection_evidence with the commit it ran at; that is not verification of your checkout. "+
-		"Add commit and inputs to get target_verification for each selected combination at exactly that commit and inputs, and decisions for its conditional references.", read,
+		"Add commit and inputs to get target_verification for each selected combination at exactly that commit and inputs, and decisions for its conditional references. "+
+		"Pass format=plan for a compact, dependency-ordered projection instead of the complete graph; prepare_execution is the same projection with a target required.", read,
 		func(ctx context.Context, in resolveBindingArgs) (any, error) {
+			if in.Format != "" && in.Format != "full" && in.Format != "plan" {
+				return nil, &memory.ValidationError{Problems: []memory.FieldProblem{{Field: "format", Message: "must be full or plan"}}}
+			}
 			r, err := t.svc.ResolveBinding(ctx, in.BindingID, in.Environment, in.target())
-			return wire.NewBindingResolution(r), err
+			if err != nil {
+				return nil, err
+			}
+			if in.Format == "plan" {
+				return wire.NewBindingPlan(r), nil
+			}
+			return wire.NewBindingResolution(r), nil
+		})
+	add(s, t, "prepare_execution", "Before running anything, get a compact, dependency-ordered execution plan for a binding at an exact commit and inputs: one step per node (procedure_id, version, selected_by, decision, status), children before the parent they compose, and next_action naming the first step still needing a decision or a run. "+
+		"Uses the same resolution and verification as resolve_binding and get_graph, computed the same way: it is a thin, additive projection, not a new engine or stored state. A step's status verified reads the same derived verification as get_verification; the plan itself is never evidence of a successful run. Fetch a step's full version with get_version (optionally with fields) when you need its contract or instructions.", read,
+		func(ctx context.Context, in prepareExecutionArgs) (any, error) {
+			r, err := t.svc.ResolveBinding(ctx, in.BindingID, in.Environment, &memory.Target{Commit: in.Commit, Inputs: in.Inputs, Decisions: in.Decisions})
+			if err != nil {
+				return nil, err
+			}
+			return wire.NewBindingPlan(r), nil
 		})
 	add(s, t, "create_binding", "Bind a procedure in a repository under a local name, with inputs and a version policy.", write,
 		func(ctx context.Context, in createBindingArgs) (any, error) {
@@ -384,16 +438,23 @@ func (t *tools) register(s *sdk.Server) {
 			f, err := t.svc.ReportFeedback(ctx, in.Domain())
 			return wire.NewFeedback(f), err
 		})
-	add(s, t, "list_feedback", "List feedback reports, oldest first, optionally by kind, subject and repository.", read,
+	add(s, t, "list_feedback", "List feedback reports, oldest first, optionally by kind, subject, repository and status. Without status, every report is listed, open and resolved alike; status=open answers what is still unresolved.", read,
 		func(ctx context.Context, in listFeedbackArgs) (any, error) {
 			fs, next, err := t.svc.ListFeedback(ctx, memory.FeedbackFilter{Kind: memory.FeedbackKind(in.Kind), SubjectType: memory.SubjectType(in.SubjectType),
-				SubjectID: in.SubjectID, SubjectVersion: in.SubjectVersion, Repository: in.Repository, Page: in.page()})
+				SubjectID: in.SubjectID, SubjectVersion: in.SubjectVersion, Repository: in.Repository, Status: memory.FeedbackStatus(in.Status), Page: in.page()})
 			return wire.NewFeedbackList(fs, next), err
 		})
 	add(s, t, "get_feedback", "Get one feedback report.", read,
 		func(ctx context.Context, in byID) (any, error) {
 			f, err := t.svc.Feedback(ctx, in.ID)
 			return wire.NewFeedback(f), err
+		})
+	add(s, t, "resolve_feedback", "Record how a feedback report was handled, permanently: outcome is addressed, declined, not_reproduced or duplicate. "+
+		"actor names you in canonical-key form, like report_feedback's reporter. references is optional: issue URLs, PRs, commits, or the procedure version or execution that addressed it. "+
+		"The report stays unchanged and readable; a second resolution is feedback_resolved. If the problem comes back, report it again rather than reopening this one.", write,
+		func(ctx context.Context, in resolveFeedbackArgs) (any, error) {
+			r, err := t.svc.ResolveFeedback(ctx, in.FeedbackID, in.Domain())
+			return wire.NewFeedbackResolution(r), err
 		})
 	t.registerToil(s)
 	t.registerLifecycle(s)

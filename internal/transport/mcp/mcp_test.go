@@ -169,9 +169,9 @@ func (b *syncBuffer) String() string {
 var (
 	readTools = []string{"discover_procedures", "get_binding", "get_binding_revision", "get_catalog_statistics", "get_execution", "get_execution_invalidation", "get_feedback", "get_graph", "get_procedure",
 		"get_procedure_lifecycle", "get_repository", "get_toil_item", "get_toil_revision", "get_verification", "get_version",
-		"list_bindings", "list_executions", "list_feedback", "list_procedures", "list_repositories", "list_toil_items", "list_verifications", "resolve_binding", "suggest_duplicates"}
+		"list_bindings", "list_executions", "list_feedback", "list_procedures", "list_repositories", "list_toil_items", "list_verifications", "prepare_execution", "resolve_binding", "suggest_duplicates"}
 	writeTools = []string{"add_repository_alias", "create_binding", "create_procedure", "create_toil_item", "invalidate_execution", "reactivate_procedure",
-		"record_execution", "record_procedure_origin", "register_repository", "report_feedback", "retire_procedure", "revise_binding", "revise_procedure", "revise_toil_item"}
+		"record_execution", "record_procedure_origin", "register_repository", "report_feedback", "resolve_feedback", "retire_procedure", "revise_binding", "revise_procedure", "revise_toil_item"}
 )
 
 func TestToolsAndResourcesAreAdvertised(t *testing.T) {
@@ -466,6 +466,30 @@ func TestFeedbackThroughTools(t *testing.T) {
 		t.Fatalf("invalid kind: %+v", e)
 	}
 	h.fail(t, "get_feedback", `{"id":"missing"}`, "not_found")
+
+	if open := h.ok(t, "get_feedback", `{"id":"`+id+`"}`); !strings.Contains(open, `"status":"open"`) || strings.Contains(open, `"resolution"`) {
+		t.Fatalf("open report = %s", open)
+	}
+	if e := h.fail(t, "resolve_feedback", `{"feedback_id":"`+id+`","outcome":"wontfix","reason":"","actor":"A"}`, "invalid_request"); !slices.Equal(e.fields(), []string{"outcome", "reason", "actor"}) {
+		t.Fatalf("invalid resolution: %+v", e)
+	}
+	resolution := h.ok(t, "resolve_feedback", `{"feedback_id":"`+id+`","outcome":"addressed","reason":"The description now states the format.",`+
+		`"actor":"copilot.vscode","references":[{"uri":"https://github.com/ashuangiras/polaroid/pull/74"}]}`)
+	if !strings.Contains(resolution, `"outcome":"addressed"`) || !strings.Contains(resolution, `"references":[{"uri":"https://github.com/ashuangiras/polaroid/pull/74"}]`) {
+		t.Fatalf("resolution = %s", resolution)
+	}
+	h.fail(t, "resolve_feedback", `{"feedback_id":"`+id+`","outcome":"addressed","reason":"again","actor":"copilot.vscode"}`, "feedback_resolved")
+	h.fail(t, "resolve_feedback", `{"feedback_id":"missing","outcome":"addressed","reason":"r","actor":"copilot.vscode"}`, "not_found")
+	resolved := h.ok(t, "get_feedback", `{"id":"`+id+`"}`)
+	if !strings.Contains(resolved, `"status":"resolved","resolution":`+resolution) {
+		t.Fatalf("resolved report = %s, resolution %s", resolved, resolution)
+	}
+	if got := h.ok(t, "list_feedback", `{"status":"resolved"}`); got != `{"feedback":[`+resolved+`]}` {
+		t.Fatalf("list_feedback status=resolved = %s", got)
+	}
+	if got := h.ok(t, "list_feedback", `{"status":"open"}`); got != `{"feedback":[`+suggestion+`]}` {
+		t.Fatalf("list_feedback status=open = %s", got)
+	}
 
 	if got := h.ok(t, "get_procedure", `{"canonical_key":"demo.fb"}`); got != p {
 		t.Fatalf("reporting feedback changed the procedure:\n%s\n%s", got, p)

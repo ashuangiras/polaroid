@@ -352,6 +352,12 @@ func (t *Target) expected(node *GraphNode, path string, undecided *[]string) []C
 	return out
 }
 
+// MapInputs is mapInputs for transports that report a child's effective
+// inputs without resolving a graph (the MCP agent mode's read, ADR-0043).
+func MapInputs(mapping, parent jsontext.Value) (jsontext.Value, error) {
+	return mapInputs(mapping, parent)
+}
+
 // mapInputs applies a reference's input mapping (ADR-0008) to the parent's
 // effective inputs: {"input": p} takes the parent's member p, {"value": v}
 // takes v. A child input whose parent member is absent is left out.

@@ -71,11 +71,11 @@ These tools are not Go module dependencies. They are not linked into or shipped 
 | sqlite3 CLI | any | Public domain | `scripts/e2e.sh` only: shows that raw SQL cannot change history. Preinstalled on the CI runner. |
 | `@modelcontextprotocol/sdk` (npm) | 1.32.1 | MIT | `scripts/e2e-mcp.sh` only: an independent MCP client. Installed into a temporary directory; the checks are skipped without npm, and with `E2E_INTEROP=0`, so CI never installs it. |
 | `@modelcontextprotocol/inspector` (npm) | 2.10.1 | MIT and Apache-2.0 (relicensing in progress; both permissive) | `scripts/e2e-mcp.sh` only, as above. |
-| `actions/checkout` | v7.0.1 (`3d3c42e5aac5ba805825da76410c181273ba90b1`) | MIT | CI |
-| `actions/setup-go` | v7.0.0 (`b7ad1dad31e06c5925ef5d2fc7ad053ef454303e`) | MIT | CI |
+| `actions/checkout` | v7.0.1 (`3d3c42e5aac5ba805825da76410c181273ba90b1`) | MIT | CI, artifact.yml |
+| `actions/setup-go` | v7.0.0 (`b7ad1dad31e06c5925ef5d2fc7ad053ef454303e`) | MIT | CI, artifact.yml |
 | `golangci/golangci-lint-action` | v9.3.0 (`ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a`) | MIT | CI. Installs golangci-lint. |
-| `actions/upload-artifact` | v7.0.2 (`cf430e030ddbb5b0abf93d22962f4752f3646cd9`) | MIT | Release workflow: hands the packaged assets to the test and publish jobs. |
-| `actions/download-artifact` | v8.0.2 (`9000827ccba6bdab643e8b6fd33ac0654aef8333`) | MIT | Release workflow. Digest mismatches fail the download (its default). |
+| `actions/upload-artifact` | v7.0.2 (`cf430e030ddbb5b0abf93d22962f4752f3646cd9`) | MIT | Release workflow: hands the packaged assets to the test and publish jobs. artifact.yml (ADR-0041): hands off the verification artifact the same way. |
+| `actions/download-artifact` | v8.0.2 (`9000827ccba6bdab643e8b6fd33ac0654aef8333`) | MIT | Release workflow. Digest mismatches fail the download (its default). artifact.yml: an independent-consumer job downloads and verifies it. |
 | `alpine` container image | 3.24.2 (`sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6`) | Various (Alpine packages; BusyBox is GPL-2.0) | Release workflow only: a Linux environment without systemd in which the packaged linux/amd64 archive is smoke-tested. Never linked or shipped. |
 
 Each action is pinned to the full commit SHA of its release tag. Tags and SHAs were resolved with the GitHub API on 2026-10-09 (checkout, setup-go, golangci-lint-action) and 2026-10-10 (the artifact actions); the Alpine digest from Docker Hub on 2026-10-10.

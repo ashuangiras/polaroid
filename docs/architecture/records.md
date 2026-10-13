@@ -49,6 +49,8 @@ Polaroid checks the shape of `contract` and `instructions`, never their meaning.
 
 Member order is kept as Polaroid receives it, but JSON gives it no meaning (RFC 8259), and some clients reorder members before sending; VS Code Copilot chat does so over MCP. Keep order-sensitive data, such as steps, in arrays, never as ordered object members. This applies to every free-form object on this page.
 
+**Selective projection (`fields=`, #131, [ADR-0042](decisions/0042-context-efficient-projections.md)):** a read of one version may name a subset of `philosophy`, `method`, `goal`, `applicability`, `contract`, `instructions`, `references`, `revision_reason`, getting only those plus the identity above (`procedure_id`, `version`, `scope`, `created_at`, always present). `contract` and `instructions` are each returned whole or not at all: a projection never selects a member inside either, because Polaroid never interprets their content. Without `fields`, the response is the complete version, unchanged.
+
 ### Subprocedure reference (implemented)
 
 A reference is a named use of another procedure by a version. It is part of the version, so it is immutable with it ([ADR-0008](decisions/0008-subprocedure-references.md)).
@@ -75,6 +77,8 @@ A version's references, their targets' references, and so on, form its compositi
 - **No cycles:** a path may not reach a procedure that is already on it, at any version. `A → A` and `A v2 → B → A v1` are both cycles. Every write of a version with references expands its graph in the same transaction. A cycle gets `409 reference_cycle`, and nothing is stored. This includes a cycle closed by a later revision of a contextually referenced target.
 - **Limits:** a graph may be at most **32** references deep and **2048** nodes in the expanded tree. A target shared by two references counts under each. A larger graph gets `422 graph_too_large`, never partial data. Writes check the new version's graph. A later revision elsewhere can still push an existing version's graph over the limits, and reading that graph then returns `422`.
 - Versions stored before cycle checking existed are never rewritten. If one holds a cycle, reading its graph returns `409 reference_cycle`.
+
+**Compact projection (`format=plan`, `prepare_execution`, #131, [ADR-0042](decisions/0042-context-efficient-projections.md)):** the same resolved graph, flattened to one step per node in dependency order (a node's own references before the node itself) with only `procedure_id`, `version`, `selected_by`, a conditional reference's `decision`, its effective `inputs` at the target, and a `status` derived from the same target verification this section describes — never a second derivation. `next_action` prefers a `decision_required` step over a `pending` one, whatever their relative order, since deciding a conditional reference's applicability always precedes running anything. It is a read-time projection of this graph, not a different record: see [http-api.md](http-api.md#compact-execution-plans-formatplan-and-prepare_execution) for its exact shape.
 
 ### Versioning rules (implemented)
 
@@ -251,7 +255,7 @@ Resolution answers two different questions, and reports them separately ([ADR-00
 
 ### Feedback report (implemented)
 
-A feedback report tells Polaroid's maintainers about a problem with Polaroid or with a record it holds, or suggests an improvement. It is written once and never changed or deleted. It has no triage state ([ADR-0015](decisions/0015-feedback-reports.md), [ADR-0021](decisions/0021-targeted-feedback-and-bounded-lists.md)).
+A feedback report tells Polaroid's maintainers about a problem with Polaroid or with a record it holds, or suggests an improvement. It is written once and never changed or deleted ([ADR-0015](decisions/0015-feedback-reports.md), [ADR-0021](decisions/0021-targeted-feedback-and-bounded-lists.md)). Its disposition is a separate record, [feedback resolution](#feedback-resolution-implemented), that never changes it.
 
 | Field | Type | Set by | Rules |
 | --- | --- | --- | --- |
@@ -265,12 +269,31 @@ A feedback report tells Polaroid's maintainers about a problem with Polaroid or 
 | `repository` | string | client | Optional. The repository identifier the report was made in, registered or not. Omitted when absent. |
 | `execution_id` | string | client | Optional. A related execution, which must exist. Omitted when absent. |
 | `created_at` | RFC 3339 timestamp, UTC | server | |
+| `status` | string | derived | `open` or `resolved`: whether the report has a resolution ([ADR-0040](decisions/0040-feedback-resolution.md)). Always present. |
+| `resolution` | object | derived | The report's [resolution](#feedback-resolution-implemented). Present only once resolved. |
 
 `subject` says what the report is about; `repository` and `execution_id` say where it was made. They must agree: the execution ran in that repository (by identity); for a procedure subject, it ran that procedure and version; for a binding subject, it used that binding and revision; for an execution subject, it is that execution; and the repository of a repository, binding or execution subject is the report's repository. A disagreement is `400` naming the field.
 
 A report without `subject`, including every report stored before subjects existed, keeps the meaning ADR-0015 gave it: it is about the Polaroid service, and the `subject_type=service` filter includes it. Its stored fields are never changed. A later alias makes an older report's identifier match its repository in filters, and a later applicability change does not affect reports at all.
 
 Reporting feedback changes no other record. The database enforces the field rules with `CHECK` constraints, checks that a subject exists with a trigger, and rejects `UPDATE` and `DELETE`.
+
+### Feedback resolution (implemented)
+
+A resolution records how a feedback report was handled, without changing the report: it is lifecycle metadata, stored apart from it, exactly as an [execution-evidence invalidation](#execution-evidence-invalidation-implemented) is stored apart from its execution ([ADR-0040](decisions/0040-feedback-resolution.md)).
+
+| Field | Type | Set by | Rules |
+| --- | --- | --- | --- |
+| `outcome` | string | client | `addressed`, `declined`, `not_reproduced` or `duplicate`. |
+| `reason` | string | client | Required, not blank: how the report was handled. |
+| `actor` | string | client | Who resolves it, in the canonical-key format (as a feedback `reporter`). Not authenticated. |
+| `references` | array | client | Optional. Declared `{uri, note?}` values, as a toil item's: issue URLs, PRs, commits, or the procedure version or execution that addressed the report. Stored and returned, never fetched. |
+| `created_at` | RFC 3339 timestamp, UTC | server | |
+
+- **Irreversible and single.** A report has at most one resolution; a second one is `409 feedback_resolved`. There is no reopening: a report that recurs is answered by a new report, which may cite the old one in `context`.
+- **Separate from the report.** The report keeps every field it was written with; only its derived `status` and `resolution` change.
+- **No lighter state.** `outcome` is always one of the four final values; there is no "tracked" status linking a report to work in progress. That link, like all triage, stays outside Polaroid, in `references` once resolved, exactly as ADR-0015 already left it for every report.
+- **Listing.** `GET /v1/feedback`'s `status` filter (`open` or `resolved`) narrows the list; without it, every report is listed, open and resolved alike, so a client that never learns of `status` sees no change.
 
 ### Toil item (implemented)
 
@@ -395,3 +418,4 @@ No records are planned in the current increments. Later work (semantic discovery
 - Migration 8 ([#50](https://github.com/ashuangiras/polaroid/issues/50), [ADR-0029](decisions/0029-conditional-references-and-applicability-decisions.md)) adds `condition` to references (NULL: required, which every existing reference is) and the `execution_decisions` table. Every stored version, execution, verification, combination and selection reads back unchanged; the new fields are additive and omitted when absent.
 - Migration 9 ([#87](https://github.com/ashuangiras/polaroid/issues/87), [ADR-0034](decisions/0034-toil-items.md)) adds `toil_items`, `toil_revisions`, `toil_revision_sources` and `toil_revision_executions`. No existing row or response changes, and toil items affect no other record's verification, selection or discovery. Builds before schema 9 cannot open a migrated catalog or restore a schema-9 backup.
 - Migration 10 ([#91](https://github.com/ashuangiras/polaroid/issues/91), [ADR-0035](decisions/0035-evidence-invalidation-and-procedure-retirement.md)) adds `execution_invalidations` and `procedure_lifecycle_events`, and triggers that refuse new versions, references, bindings and binding revisions of retired procedures. No existing row changes: every stored execution is valid and every procedure active, so verification, combinations, selection, target verification, lists and discovery read back as before. Responses add `evidence_status` and `lifecycle_status` (always) and `invalidation`, `lifecycle_event`, `retirement` and `invalidated_execution_ids` (when they apply). Builds before schema 10 cannot open a migrated catalog or restore a schema-10 backup.
+- Migration 11 ([#127](https://github.com/ashuangiras/polaroid/issues/127), [ADR-0040](decisions/0040-feedback-resolution.md)) adds `feedback_resolutions`. No existing row changes: every stored report is open, so every existing response is the same apart from the new `status` (always) and `resolution` (once resolved) fields, and `GET /v1/feedback` without `status` still lists every report. Builds before schema 11 cannot open a migrated catalog or restore a schema-11 backup.

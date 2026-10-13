@@ -11,12 +11,12 @@
 # the fixtures extend its stored history instead of conflicting with it.
 #
 # Usage: scripts/check-records.sh [DIR...]   (default: examples/development
-#   examples/task-aware; run `make records-check`, which builds bin/ first;
+#   examples/task-aware examples/knowledge-first; run `make records-check`, which builds bin/ first;
 #   needs jq)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 command -v jq >/dev/null 2>&1 || { echo "records-check: jq is required" >&2; exit 2; }
-(($# > 0)) || set -- examples/development examples/task-aware
+(($# > 0)) || set -- examples/development examples/task-aware examples/knowledge-first
 
 work="$(mktemp -d)"
 pid=""

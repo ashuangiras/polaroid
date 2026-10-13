@@ -1,0 +1,68 @@
+{
+  "canonical_key": "go.module.artifact",
+  "version": {
+    "philosophy": "A verified commit is proof for whoever ran the gate. An independent reviewer needs something to run: exact binaries from that same commit, with a manifest naming what was built and how, so they can check it without trusting the agent's report. Building it is not reviewing it: an artifact's existence says only that the build succeeded, never that anyone outside tested it, and it is never a release, a tag or an upload.",
+    "method": "Confirm the toolchain, build the module's executables for the requested targets from a clean checkout at the verified commit, write each binary beside a manifest naming the repository, the full commit, the Go toolchain, each target's OS, architecture, executable name and SHA-256, and the build command, and confirm every checksum in the manifest matches the file on disk and every binary's embedded commit matches. Reuse an existing artifact whose provenance (commit, targets, build command) matches and whose checksums still verify instead of rebuilding.",
+    "goal": "Build a cross-compiled, checksummed artifact of a Go module's executables from one verified commit, with a manifest for an independent reviewer, without publishing a release.",
+    "applicability": {
+      "shared": {}
+    },
+    "contract": {
+      "inputs": {
+        "module_packages": "The module's executable packages to build, space-separated, for example \"./cmd/polaroid ./cmd/polaroidd\".",
+        "targets": "OS/ARCH pairs to build, for example [\"linux/amd64\"]. Default linux/amd64 for portable third-party execution; add the local OS/ARCH (for example darwin/arm64) when local testing is useful.",
+        "output_dir": "A gitignored directory to hold <commit>/, its binaries and manifest.json.",
+        "working_tree": "Must be `clean`, as recorded by the caller: this procedure only ever builds a committed state."
+      },
+      "preconditions": [
+        "The commit was already verified by a dev.change.verify run (or the procedure that references this one); this procedure runs no tests, lint or other check of its own.",
+        "A clean checkout at that exact commit.",
+        "working_tree is clean; a modified tree is refused, not built."
+      ],
+      "expected_outcome": "output_dir/<commit>/ holds one binary per module_packages x targets pair and a manifest.json whose checksums match every binary on disk, each binary's embedded vcs.revision equals commit and vcs.modified is false.",
+      "verification": [
+        "Evidence lists each target, its executables' SHA-256, the manifest path, and whether this run built fresh or reused an existing, checksum-verified artifact."
+      ],
+      "boundaries": [
+        "Does not run tests, lint or any other check: this procedure assumes its commit is already verified, and never certifies that this build is independently reviewed.",
+        "Never records, claims or implies independent_review beyond not_reviewed in the manifest it writes: that status changes only when a separate reviewer performs and records one, outside this procedure.",
+        "Does not tag a version, publish a GitHub release, upload anywhere, or sign anything. For an official, fully cross-platform release, use polaroid.packaging.change/polaroid.release.publish instead.",
+        "Rebuilding is explicit: this procedure only reuses an existing artifact whose provenance and checksums match; it never silently serves a stale one.",
+        "Does not merge, push or close work items."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        {
+          "id": "toolchain",
+          "action": "Run `go version`, and read go.mod. If go.mod has a toolchain line, the version must be exactly that toolchain. If go.mod has only a go line, the version must be that release or newer. Record go.mod's lines and the version. If go cannot start, that is an environment blocker: repair the environment and record it; do not change this procedure."
+        },
+        {
+          "id": "tree",
+          "action": "Run `git status --porcelain`. It must print nothing (working_tree clean); otherwise stop: this procedure never builds a modified tree."
+        },
+        {
+          "id": "reuse-check",
+          "action": "If output_dir/<commit>/manifest.json already exists, names the same targets and module_packages, and re-hashing every executable it lists matches the manifest's sha256, the artifact is already built: record this run's outcome from it, with evidence noting it was reused, and stop; do not rebuild."
+        },
+        {
+          "id": "build",
+          "action": "Otherwise, for each target, cross-compile module_packages into output_dir/<commit>/<os>_<arch>/ with CGO_ENABLED=0 GOOS=<os> GOARCH=<arch> go build -trimpath, from the clean checkout at commit."
+        },
+        {
+          "id": "confirm",
+          "action": "For each built executable, confirm its embedded vcs.revision (go version -m) equals commit and vcs.modified is false; stop and report a defect if either does not hold."
+        },
+        {
+          "id": "manifest",
+          "action": "Write output_dir/<commit>/manifest.json: format, repository, commit, go (the toolchain version), build {packages, flags, cgo}, assets (each target's os, arch and each executable's path and sha256), and verification {local_gate, independent_review: {status: \"not_reviewed\"}}. local_gate cites the dev.change.verify (or caller) execution that verified this commit, when the caller supplies one; otherwise null. Never set independent_review to anything but not_reviewed."
+        },
+        {
+          "id": "record",
+          "action": "Record outcome succeeded only if every expected executable exists, every checksum in the manifest matches the file on disk, and every embedded vcs.revision/vcs.modified check held; otherwise failed, naming the failing step. Evidence names the manifest path, each target's checksum, and whether this run built fresh or reused an existing artifact."
+        }
+      ]
+    },
+    "revision_reason": "Initial version, written for Polaroid's development (#129, ADR-0041): a lightweight, local, gitignored artifact for independent review, reusing go.module.build's toolchain and tree checks, never implying a release or an independent review by itself."
+  }
+}

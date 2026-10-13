@@ -1,0 +1,28 @@
+{
+  "canonical_key": "agent.guidance.shared",
+  "version": {
+    "philosophy": "Rules that hold for every procedure are stated once, versioned, and read once per session, instead of being copied into every procedure that needs them.",
+    "method": "Read this version once per session and apply its rules to every procedure version that references it.",
+    "goal": "State the universal rules an agent follows whenever it applies a procedure.",
+    "applicability": { "shared": {} },
+    "contract": {
+      "applies_to": "Every procedure version that references agent.guidance.shared, pinned to this version, as a required reference. That version's own contract wins where it is stricter.",
+      "rules": [
+        { "id": "target", "rule": "Work on one exact target: the repository, the full commit (git rev-parse HEAD), the working-tree state (git status --porcelain) and the environment. Another commit, even with an identical tree, is another target." },
+        { "id": "target-stable", "rule": "If the commit, the working tree, the inputs or the environment change during the work, stop and establish the target again." },
+        { "id": "decide-first", "rule": "Decide each conditional reference from its condition before running anything, and keep a one-line rationale for the decision." },
+        { "id": "scope", "rule": "Report a result only for the target and the commands that actually ran. A narrower scope never stands for the full gate." },
+        { "id": "no-implied-verification", "rule": "Following a procedure verifies nothing by itself. Claim a target verified only with evidence from the verification system that checked that exact target." },
+        { "id": "concise-evidence", "rule": "Keep evidence concise: each command, its exit status and a short deterministic excerpt. Never paste whole logs." },
+        { "id": "classify-failures", "rule": "Before changing anything after a failure, classify it. A product defect, an environment problem or a transient failure is handled where it belongs and is not procedural knowledge. Incorrect applicability, a missing precondition, an incorrect instruction, an inadequate verification criterion or an improved method is reported as feedback on the procedure version followed. Never revise a procedure because some command failed." },
+        { "id": "no-side-effects", "rule": "Do not merge, push, publish, release or close work items unless the procedure being followed says so." }
+      ]
+    },
+    "instructions": {
+      "steps": [
+        { "id": "apply", "action": "Treat each rule as a precondition and boundary of the procedure you follow, in addition to that procedure's own contract." }
+      ]
+    },
+    "revision_reason": "Knowledge-first representative example (#131, ADR-0043): the universal rules that dev.change.verify v4 repeats inline, stated once."
+  }
+}
