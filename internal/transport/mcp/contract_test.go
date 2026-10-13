@@ -9,15 +9,17 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// The full-mode /mcp tool contract under ADR-0038's v1 guarantee. The
-// reviewed contract is testdata/full-mode-tools.json, checked here against
-// both the live server and the tools table in docs/architecture/mcp.md, so a
-// change to any argument's name, type, nesting or requiredness, or to a
-// tool's read-only flag, fails until the contract and the documentation are
-// changed deliberately. Descriptions are wording, not contract. The
-// experimental /mcp/agent endpoint (ADR-0043) is outside this contract.
+// Both /mcp (full mode, ADR-0038's v1 guarantee) and /mcp/agent (agent
+// mode, finalized under the same guarantee by ADR-0049) have a reviewed
+// contract file, checked here against both the live server and the tools
+// table in docs/architecture/mcp.md: a change to any argument's name,
+// type, nesting or requiredness, or to a tool's read-only flag, fails
+// until the contract and the documentation are changed deliberately.
+// Descriptions are wording, not contract.
 
 type toolContract struct {
 	ReadOnly  bool              `json:"read_only"`
@@ -25,9 +27,9 @@ type toolContract struct {
 	Arguments map[string]string `json:"arguments"`
 }
 
-func loadContract(t *testing.T) map[string]toolContract {
+func loadContract(t *testing.T, path string) map[string]toolContract {
 	t.Helper()
-	b, err := os.ReadFile("testdata/full-mode-tools.json")
+	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,11 +77,12 @@ func signature(s map[string]any) string {
 	return out
 }
 
-func TestFullModeToolContract(t *testing.T) {
-	want := loadContract(t)
-	h := newHarness(t)
+// toolsOf collects the served contract of every tool in session, in the
+// same shape as the reviewed fixtures.
+func toolsOf(t *testing.T, session *sdk.ClientSession) map[string]toolContract {
+	t.Helper()
 	got := map[string]toolContract{}
-	for tool, err := range h.session.Tools(context.Background(), nil) {
+	for tool, err := range session.Tools(context.Background(), nil) {
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -108,6 +111,13 @@ func TestFullModeToolContract(t *testing.T) {
 		}
 		got[tool.Name] = c
 	}
+	return got
+}
+
+// checkToolContract asserts that got matches want exactly: the same tools,
+// with the same read-only flag, required fields and argument signatures.
+func checkToolContract(t *testing.T, want, got map[string]toolContract) {
+	t.Helper()
 	for _, name := range slices.Sorted(maps.Keys(want)) {
 		g, ok := got[name]
 		switch {
@@ -139,42 +149,62 @@ func TestFullModeToolContract(t *testing.T) {
 	}
 }
 
+func TestFullModeToolContract(t *testing.T) {
+	want := loadContract(t, "testdata/full-mode-tools.json")
+	h := newHarness(t)
+	checkToolContract(t, want, toolsOf(t, h.session))
+}
+
+func TestAgentModeToolContract(t *testing.T) {
+	want := loadContract(t, "testdata/agent-mode-tools.json")
+	agent := newKnowledgeHarness(t)
+	checkToolContract(t, want, toolsOf(t, agent.session))
+}
+
 var (
 	toolRow  = regexp.MustCompile("^\\| `([a-z_]+)` \\| (yes|no) \\| (.*?) \\| (.*) \\|$")
 	backtick = regexp.MustCompile("`([a-z_]+)`")
 )
 
-// The reviewed contract and the documented tools table agree: the same
-// tools, read-only flags, and every argument named in its tool's row.
-func TestFullModeContractIsDocumented(t *testing.T) {
-	contract := loadContract(t)
+type docRow struct {
+	readOnly bool
+	args     map[string]bool
+}
+
+// toolsDocumentedUnder parses the tools table of mcp.md's section starting
+// at startMarker, up to the next "## " heading (or the end of the file).
+func toolsDocumentedUnder(t *testing.T, startMarker string) map[string]docRow {
+	t.Helper()
 	b, err := os.ReadFile("../../../docs/architecture/mcp.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, tools, ok := strings.Cut(string(b), "\n## Tools\n")
-	tools, _, _ = strings.Cut(tools, "\n## ")
+	_, section, ok := strings.Cut(string(b), startMarker)
 	if !ok {
-		t.Fatal("mcp.md has no Tools section")
+		t.Fatalf("mcp.md has no section starting %q", startMarker)
 	}
-	type row struct {
-		readOnly bool
-		args     map[string]bool
-	}
-	doc := map[string]row{}
-	for _, line := range strings.Split(tools, "\n") {
+	section, _, _ = strings.Cut(section, "\n## ")
+	doc := map[string]docRow{}
+	for _, line := range strings.Split(section, "\n") {
 		m := toolRow.FindStringSubmatch(line)
 		if m == nil {
 			continue
 		}
-		r := row{readOnly: m[2] == "yes", args: map[string]bool{}}
+		r := docRow{readOnly: m[2] == "yes", args: map[string]bool{}}
 		for _, a := range backtick.FindAllStringSubmatch(m[3], -1) {
 			r.args[a[1]] = true
 		}
 		doc[m[1]] = r
 	}
-	// Rows that say "then the same ... fields" document those fields once.
-	sameFields := map[string]string{"revise_procedure": "create_procedure", "revise_toil_item": "create_toil_item"}
+	return doc
+}
+
+// checkContractDocumented asserts that the reviewed contract and the
+// documented tools table agree: the same tools, read-only flags, and every
+// argument named in its tool's row (or, per sameFields, in another row that
+// says it shares the same fields).
+func checkContractDocumented(t *testing.T, contract map[string]toolContract, doc map[string]docRow, sameFields map[string]string) {
+	t.Helper()
 	if !slices.Equal(slices.Sorted(maps.Keys(doc)), slices.Sorted(maps.Keys(contract))) {
 		t.Fatalf("documented tools %v, contract %v", slices.Sorted(maps.Keys(doc)), slices.Sorted(maps.Keys(contract)))
 	}
@@ -189,4 +219,18 @@ func TestFullModeContractIsDocumented(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestFullModeContractIsDocumented(t *testing.T) {
+	contract := loadContract(t, "testdata/full-mode-tools.json")
+	doc := toolsDocumentedUnder(t, "\n## Tools\n")
+	// Rows that say "then the same ... fields" document those fields once.
+	sameFields := map[string]string{"revise_procedure": "create_procedure", "revise_toil_item": "create_toil_item"}
+	checkContractDocumented(t, contract, doc, sameFields)
+}
+
+func TestAgentModeContractIsDocumented(t *testing.T) {
+	contract := loadContract(t, "testdata/agent-mode-tools.json")
+	doc := toolsDocumentedUnder(t, "\n## Agent mode (`/mcp/agent`)\n")
+	checkContractDocumented(t, contract, doc, nil)
 }
