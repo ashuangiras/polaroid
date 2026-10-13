@@ -11,7 +11,16 @@ Polaroid is a versioned procedural memory service for agents, written in Go, wit
    - [docs/architecture/overview.md](docs/architecture/overview.md): boundaries and dependency direction.
 3. Identify the work item and its acceptance criteria. Work items are [GitHub issues](https://github.com/ashuangiras/polaroid/issues); [docs/development/roadmap.md](docs/development/roadmap.md) gives their order. If the criteria are missing or ambiguous, settle them before writing code.
 4. Inspect the implementation and its tests before proposing a change. Do not design from the docs alone.
-5. Find the procedure for the work in Polaroid: the bindings of `github.com/ashuangiras/polaroid` cover verification (below); for anything else, describe the task to `discover_procedures` with that repository and read the candidates. Before creating or revising a procedure, follow the `discover` and `bind-or-wrap-or-create` steps of `repo.polaroid.adopt` (latest version), including `suggest_duplicates`. Choosing to reuse, revise or create remains yours.
+5. Consult Polaroid's knowledge for the task: call `discover` on the installed service's `/mcp/agent` with repository `github.com/ashuangiras/polaroid`, then `read` the relevant candidates with the snapshot it returned, and follow them. If nothing relevant is published, say so and continue; do not claim knowledge-guided work. Verification follows the bindings below.
+
+## Development baseline
+
+- `main` is the baseline. Develop on a topic branch of `main` in this checkout; no separate repository or worktree is needed.
+- The installed service (`~/.local/bin/polaroid{,d}`, launchd, `127.0.0.1:7417`) runs a verified build of `main` and stays known-good while you work. Never start a development daemon on its port or catalog: the scripts and tests use `bin/`, random ports and temporary catalogs. Upgrade it only from a verified `main` commit, with `polaroid backup` first and `polaroid install -from DIR`.
+- Agents use `/mcp/agent` (`discover`, `read`, `feedback`) for procedural knowledge. Report a genuine deficiency of a procedure you followed with `feedback`, never an invented one, and never a product defect or environment problem. Only an operator publishes knowledge (`polaroid knowledge-publish`), after the owner approves the change.
+- `/mcp` (40 tools) and the CLI are the operator and evidence interfaces: verification bindings, executions, feedback triage. They are not the agent's knowledge interface.
+- Git-native knowledge lives in `~/.polaroid/data/knowledge`, never in this repository.
+- Run commands through Dispatch when it is available: it keeps the whole output, so read back the part you need instead of running a command again.
 
 ## Rules
 

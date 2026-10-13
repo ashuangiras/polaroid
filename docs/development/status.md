@@ -2,6 +2,20 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
+**Stable `main` baseline, as of 2026-10-14.** PR #133 merged as `acb5303` (tree identical to the gated `c2f5164`). Supersedes the integration handoff below, which is kept as history.
+
+- **Gate on `acb5303` itself:** `make check` (lint 0 issues, docs-check 782 links, loader-check 33/0, nothing cached), `make vuln` (0 affecting the code), `make demo`, `make e2e` 313/0, `make e2e-mcp E2E_INTEROP=0` 137/0, `make lifecycle` 69/0, Linux amd64/arm64 build, vet and lint, MCP contract tests, `-race` knowledge, sync and recovery packages, and the daemon knowledge tests: all pass.
+- **Installed:** `~/.local/bin/polaroid{,d}` built from `acb5303` with `scripts/build.sh`, version `v1.0.2-0.20261013220534-acb530335a61`, `modified: false`. Installed with `polaroid install -from`; `previous/` holds the earlier `a9ee66a` build.
+  - **How the identity stays clean:** the checkout's only local changes, `.vscode/mcp.json` and the untracked `.experiments/` module, are not compiled. The build used a temporary copy of the Git index in which `.vscode/mcp.json` is marked skip-worktree, with untracked files hidden from `git status`. The checkout's own index and files are unchanged.
+  - **Backups:** catalog `~/.polaroid/backups/polaroid-20261013T221708Z` (valid, schema 11); a copy of the knowledge repository and operator token in `~/.polaroid/backups/knowledge-20261013T221708Z`.
+  - **Preserved:** records, feedback and its resolution, bindings, toil items, the knowledge refs, log, instance, `git fsck`, and the token. A capture of all of these was byte-identical before the install, after it, and after a further restart.
+- **Development workflow:** this checkout is on `main`. `AGENTS.md` ("Development baseline") and `.github/copilot-instructions.md` name the conventions: `/mcp/agent` for knowledge, Dispatch for commands, operator-approved publication, and a known-good installed service.
+- **Open:**
+  - The Git catalog holds no Polaroid development procedures yet (only `go.validate.slug-string` and `deployment.smoke-test`), so `discover` for Polaroid's own verification finds nothing relevant. The verification bindings remain in the legacy catalog.
+  - `scripts/benchmark-knowledge.py` and `scripts/agent-compare.py` are stale: they use the former `/mcp/agent` arguments, and `benchmark-knowledge.py` also expects 39 `/mcp` tools.
+
+Next action: author Polaroid's own development knowledge in Git, after owner approval.
+
 **Git-core integration into `main`, as of 2026-10-13.** Ready for owner review; not merged. Supersedes the "milestone E" handoff below, which is kept as history.
 
 - **Priority (owner):** stop legacy removal, consolidation and new features; make `main` a stable baseline holding the complete Git-native implementation, then resume developing Polaroid with Polaroid.
