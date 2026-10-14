@@ -225,9 +225,9 @@ func (s *Syncer) Validate(ctx context.Context, c *Candidate) error {
 // trailers are the remote's claims. A parent fetched earlier but never
 // activated is not readable and its edge is not checked here; activation
 // checks the transition from the active knowledge to its target, and a
-// rollback to imported knowledge gets no exemption, so an unchecked
-// intermediate snapshot can neither become active nor be restored as
-// governed knowledge.
+// rollback to such an intermediate snapshot gets no exemption, so an
+// unchecked snapshot can neither be the active target of an activation
+// nor be restored as governed knowledge.
 func (s *Syncer) checkTransition(ctx context.Context, cm gitcore.Commit, cat *knowledge.Catalog, cats map[knowledge.Snapshot]*knowledge.Catalog) (problem, err error) {
 	if len(cm.Parents) == 0 {
 		return nil, nil

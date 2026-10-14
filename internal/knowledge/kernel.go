@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -366,16 +368,23 @@ func (k *Kernel) Rollback(ctx context.Context, base, to Snapshot, pv Provenance)
 	if len(changes)+len(records) == 0 {
 		return "", &ValidationError{Problems: []Problem{{Field: "to", Message: "the active knowledge already equals that snapshot"}}}
 	}
-	// Only knowledge published here was governed edge by edge. A snapshot
-	// that arrived through an activation may be an intermediate one whose
-	// own transition was never checked, so restoring it gets no exemption.
+	// Only governed knowledge is restored under the exemption: a snapshot
+	// published here, or the target of an activation, whose move from the
+	// active knowledge was checked. An intermediate snapshot an activation
+	// brought in was never checked itself, so restoring it gets none.
 	restoring := old
 	imported, err := k.store.Imported(ctx, to)
 	if err != nil {
 		return "", err
 	}
 	if imported {
-		restoring = nil
+		acts, err := k.store.Activations(ctx, math.MaxInt)
+		if err != nil {
+			return "", err
+		}
+		if !slices.ContainsFunc(acts, func(a ActivationEntry) bool { return a.Target == to }) {
+			restoring = nil
+		}
 	}
 	return k.publish(ctx, Proposal{Base: base, Changes: changes, Records: records, Provenance: pv}, []Trailer{{TrailerRollback, string(to)}}, restoring)
 }

@@ -56,8 +56,18 @@ func TestRollbackToImportedKnowledgeIsGoverned(t *testing.T) {
 		!strings.Contains(err.Error(), "records[rule.software.tests].revision: is 1, below the published revision 2") {
 		t.Fatalf("rollback to an ungoverned imported snapshot: %v", err)
 	}
+	// An activation target was checked as a whole, so undoing a later
+	// activation that raised the revision restores it under the exemption.
+	raised := stage(restored, "Every software procedure requires passing tests, without exception.", 3)
+	if err := k.Activate(ctx, knowledge.Activation{Base: restored, Target: raised, Provenance: decision()}); err != nil {
+		t.Fatal(err)
+	}
+	back, err := k.Rollback(ctx, raised, restored, prov())
+	if err != nil {
+		t.Fatalf("rollback to an earlier activation target: %v", err)
+	}
 	// Knowledge published here keeps its exemption.
-	if _, err := k.Rollback(ctx, restored, s1, prov()); err != nil {
+	if _, err := k.Rollback(ctx, back, s1, prov()); err != nil {
 		t.Fatalf("rollback to local knowledge: %v", err)
 	}
 }

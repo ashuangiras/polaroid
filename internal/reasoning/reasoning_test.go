@@ -270,6 +270,25 @@ func TestUnknownsAreEnumerated(t *testing.T) {
 	}
 }
 
+// When the probe budget runs out, when keeps the untested names, so it
+// still suffices, and its reason says it may not be minimal.
+func TestWhenBudgetIsDisclosed(t *testing.T) {
+	w := newWorld(t)
+	var clauses []string
+	for i := range 70 {
+		clauses = append(clauses, fmt.Sprintf(`obligation(P, "check.review") :- %s, context("n%02d", "v").`, goProc, i))
+	}
+	w.publish(goRule("rule.many", strings.Join(clauses, "\n")))
+	r := w.resolve("go.verify.concurrent", map[string]string{"concurrency": "true"})
+	if len(r.Unknowns) != 1 || !r.Complete {
+		t.Fatalf("unknowns %+v complete %v %v", r.Unknowns, r.Complete, r.Incomplete)
+	}
+	u := r.Unknowns[0]
+	if !strings.Contains(u.Reason, "not every one was tested as necessary") || len(u.When) != 6 || u.When[0].Name != "n64" {
+		t.Fatalf("unknown %+v", u)
+	}
+}
+
 // What cannot be enumerated makes the resolution explicitly incomplete.
 func TestIncompleteIsExplicit(t *testing.T) {
 	w := newWorld(t)
