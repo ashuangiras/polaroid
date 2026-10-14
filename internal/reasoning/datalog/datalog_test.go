@@ -89,6 +89,59 @@ func TestBudgets(t *testing.T) {
 	}
 }
 
+// TestCompileRunsManyFactSets: Compile analyzes a program once; Run then
+// evaluates it against any number of independent fact sets, each giving
+// the same result Evaluate would for the same program and facts (#144).
+func TestCompileRunsManyFactSets(t *testing.T) {
+	p := program(`obligation(P, "r") :- record(P, "Procedure"), context("env", "ci").`)
+	compiled, err := ev.Compile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name  string
+		extra reasoning.Fact
+		want  string
+	}{
+		{"matching context", reasoning.Fact{Predicate: "context", Args: []string{"env", "ci"}}, "[[p r rule.0 p] [q r rule.0 p]]"},
+		{"non-matching context", reasoning.Fact{Predicate: "context", Args: []string{"env", "dev"}}, "[]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			facts := append([]reasoning.Fact{tc.extra}, p.Facts...)
+			got, err := compiled.Run(context.Background(), facts, p.Query, p.Limits)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fmt.Sprint(got["obligation_of"]) != tc.want {
+				t.Fatalf("obligation_of = %v, want %s", got["obligation_of"], tc.want)
+			}
+			want, err := ev.Evaluate(context.Background(), reasoning.Program{System: p.System, Rules: p.Rules, Heads: p.Heads,
+				EDB: p.EDB, Facts: facts, Query: p.Query, Limits: p.Limits})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fmt.Sprint(got) != fmt.Sprint(want) {
+				t.Fatalf("Run and Evaluate disagree:\nRun      %v\nEvaluate %v", got, want)
+			}
+		})
+	}
+	// Compile checks Rules and ProgramBytes; Run checks Facts and Derived,
+	// against the limits it is given, independently of what Compile saw.
+	if _, err := compiled.Run(context.Background(), p.Facts, p.Query, reasoning.Limits{Rules: 10, ProgramBytes: 1 << 20, Facts: 0, Derived: 1 << 20}); !errors.Is(err, datalog.ErrBudget) {
+		t.Fatalf("facts budget not enforced by Run: %v", err)
+	}
+	for name, l := range map[string]reasoning.Limits{
+		"rules": {Rules: 0, ProgramBytes: 1 << 20, Facts: 1 << 20, Derived: 1 << 20},
+		"bytes": {Rules: 10, ProgramBytes: 10, Facts: 1 << 20, Derived: 1 << 20},
+	} {
+		q := program(`obligation(P, "r") :- record(P, "Procedure").`)
+		q.Limits = l
+		if _, err := ev.Compile(q); !errors.Is(err, datalog.ErrBudget) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
 func TestCancellationDiscardsResult(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

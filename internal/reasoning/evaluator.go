@@ -67,6 +67,16 @@ type Literal struct {
 	Args []Term
 }
 
+// Compiled is one program's System, Rules, Heads and EDB, parsed and
+// analyzed once by Compile. Run evaluates it to a fixed point against
+// different extensional facts without repeating that analysis, so a
+// caller that evaluates the same program many times (resolve's missing
+// context hypotheses, #144) pays parsing and analysis once, not per
+// evaluation.
+type Compiled interface {
+	Run(ctx context.Context, facts []Fact, query []string, limits Limits) (Result, error)
+}
+
 // Evaluator evaluates programs to a fixed point. internal/reasoning/datalog
 // implements it on Mangle.
 type Evaluator interface {
@@ -75,4 +85,9 @@ type Evaluator interface {
 	// bodies, or in their heads (before provenance is added) when head is
 	// true.
 	Literals(rules []Rule, predicate string, arity int, head bool) ([]Literal, error)
+	// Compile analyzes p's System, Rules, Heads and EDB once; p.Facts and
+	// p.Query are ignored, since Run takes its own per call. p.Limits.Rules
+	// and ProgramBytes are checked here; Facts and Derived are checked by
+	// Run, against the limits it is given.
+	Compile(p Program) (Compiled, error)
 }

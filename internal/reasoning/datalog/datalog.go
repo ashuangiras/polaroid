@@ -253,7 +253,34 @@ func (s *store) Contains(a ast.Atom) bool {
 // text is untrusted input) is returned as an error, never propagated.
 func (Evaluator) Evaluate(ctx context.Context, p reasoning.Program) (res reasoning.Result, err error) {
 	defer contain(&err)
-	return evaluate(ctx, p)
+	info, err := compileProgram(p)
+	if err != nil {
+		return nil, err
+	}
+	return runProgram(ctx, info, p.EDB, p.Facts, p.Query, p.Limits)
+}
+
+// compiled is a program's System, Rules, Heads and EDB, parsed and
+// analyzed once by Compile (reasoning.Compiled).
+type compiled struct {
+	info *analysis.ProgramInfo
+	edb  map[string]int
+}
+
+// Compile implements reasoning.Evaluator.
+func (Evaluator) Compile(p reasoning.Program) (res reasoning.Compiled, err error) {
+	defer contain(&err)
+	info, err := compileProgram(p)
+	if err != nil {
+		return nil, err
+	}
+	return &compiled{info: info, edb: p.EDB}, nil
+}
+
+// Run implements reasoning.Compiled.
+func (c *compiled) Run(ctx context.Context, facts []reasoning.Fact, query []string, limits reasoning.Limits) (res reasoning.Result, err error) {
+	defer contain(&err)
+	return runProgram(ctx, c.info, c.edb, facts, query, limits)
 }
 
 // contain turns a panic in the Datalog engine into an error. Its value is
@@ -265,7 +292,11 @@ func contain(err *error) {
 	}
 }
 
-func evaluate(ctx context.Context, p reasoning.Program) (reasoning.Result, error) {
+// compileProgram parses p.System, declares p.EDB and p.Heads, restricts
+// and appends p.Rules, and analyzes the result: everything Run needs that
+// does not depend on the facts or query of one evaluation, so it is done
+// once per program, not once per fact set (#144).
+func compileProgram(p reasoning.Program) (*analysis.ProgramInfo, error) {
 	l := p.Limits
 	size := 0
 	for _, r := range p.Rules {
@@ -276,8 +307,6 @@ func evaluate(ctx context.Context, p reasoning.Program) (reasoning.Result, error
 		return nil, fmt.Errorf("%w: %d rules exceed %d", ErrBudget, len(p.Rules), l.Rules)
 	case size > l.ProgramBytes:
 		return nil, fmt.Errorf("%w: %d bytes of rules exceed %d", ErrBudget, size, l.ProgramBytes)
-	case len(p.Facts) > l.Facts:
-		return nil, fmt.Errorf("%w: %d facts exceed %d", ErrBudget, len(p.Facts), l.Facts)
 	}
 	system, err := parse.Unit(strings.NewReader(p.System))
 	if err != nil {
@@ -308,9 +337,20 @@ func evaluate(ctx context.Context, p reasoning.Program) (reasoning.Result, error
 	if err != nil {
 		return nil, &RuleError{Rule: "program", Reason: "analysis: " + firstLine(err.Error())}
 	}
+	return info, nil
+}
+
+// runProgram loads facts (checked against edb) into a fresh store and
+// evaluates info, the analysis compileProgram already did, to a fixed
+// point, then reads back query. It never mutates info or edb, so one
+// compiled program runs any number of independent fact sets.
+func runProgram(ctx context.Context, info *analysis.ProgramInfo, edb map[string]int, facts []reasoning.Fact, query []string, limits reasoning.Limits) (reasoning.Result, error) {
+	if len(facts) > limits.Facts {
+		return nil, fmt.Errorf("%w: %d facts exceed %d", ErrBudget, len(facts), limits.Facts)
+	}
 	s := &store{SimpleInMemoryStore: factstore.NewSimpleInMemoryStore(), ctx: ctx}
-	for _, f := range p.Facts {
-		if arity, ok := p.EDB[f.Predicate]; !ok || arity != len(f.Args) {
+	for _, f := range facts {
+		if arity, ok := edb[f.Predicate]; !ok || arity != len(f.Args) {
 			return nil, fmt.Errorf("fact %s/%d is not declared", f.Predicate, len(f.Args))
 		}
 		args := make([]ast.BaseTerm, len(f.Args))
@@ -319,7 +359,7 @@ func evaluate(ctx context.Context, p reasoning.Program) (reasoning.Result, error
 		}
 		s.Add(ast.NewAtom(f.Predicate, args...))
 	}
-	if err := engine.EvalProgram(info, s, engine.WithCreatedFactLimit(l.Derived)); err != nil {
+	if err := engine.EvalProgram(info, s, engine.WithCreatedFactLimit(limits.Derived)); err != nil {
 		if strings.Contains(err.Error(), "fact size limit") {
 			return nil, fmt.Errorf("%w: %w", ErrBudget, err)
 		}
@@ -332,19 +372,20 @@ func evaluate(ctx context.Context, p reasoning.Program) (reasoning.Result, error
 		return nil, err
 	}
 	out := reasoning.Result{}
-	for _, q := range p.Query {
+	for _, q := range query {
 		rows := [][]string{}
 		for _, pred := range s.ListPredicates() {
 			if pred.Symbol != q {
 				continue
 			}
-			err := s.SimpleInMemoryStore.GetFacts(ast.NewQuery(pred), func(a ast.Atom) error {
+			getErr := s.SimpleInMemoryStore.GetFacts(ast.NewQuery(pred), func(a ast.Atom) error {
 				row := make([]string, len(a.Args))
 				for i, arg := range a.Args {
 					c, ok := arg.(ast.Constant)
 					if !ok {
 						return fmt.Errorf("non-constant in derived fact %s", a)
 					}
+					var err error
 					if row[i], err = c.StringValue(); err != nil {
 						return fmt.Errorf("derived fact %s holds a non-string", a)
 					}
@@ -352,8 +393,8 @@ func evaluate(ctx context.Context, p reasoning.Program) (reasoning.Result, error
 				rows = append(rows, row)
 				return nil
 			})
-			if err != nil {
-				return nil, err
+			if getErr != nil {
+				return nil, getErr
 			}
 		}
 		slices.SortFunc(rows, func(a, b []string) int { return slices.Compare(a, b) })

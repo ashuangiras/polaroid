@@ -279,7 +279,11 @@ func Resolve(ctx context.Context, cat *knowledge.Catalog, ev Evaluator, trust po
 	}
 	facts, rules := Facts(cat, effective, goal.Key)
 	query := []string{"obligation_of", "derived_by", "relevant", "specializes_star"}
-	base, err := ev.Evaluate(ctx, Program{System: System, Rules: rules, Heads: Heads, EDB: EDB, Facts: facts, Query: query, Limits: limits})
+	compiled, err := ev.Compile(Program{System: System, Rules: rules, Heads: Heads, EDB: EDB, Limits: limits})
+	if err != nil {
+		return nil, err
+	}
+	base, err := compiled.Run(ctx, facts, query, limits)
 	if err != nil {
 		return nil, err
 	}
@@ -457,7 +461,7 @@ func Resolve(ctx context.Context, cat *knowledge.Catalog, ev Evaluator, trust po
 		}
 	}
 
-	unknowns, incomplete, err := hypothesize(ctx, ev, rules, facts, goal.Key, effective, base, limits, superseded)
+	unknowns, incomplete, err := hypothesize(ctx, ev, compiled, rules, facts, goal.Key, effective, base, limits, superseded)
 	if err != nil {
 		return nil, err
 	}
@@ -547,7 +551,7 @@ func termValues(t Term) []string {
 // base result. Absence is never read as "no". What cannot be enumerated
 // (an open name or value, too many combinations) is returned as
 // incompleteness, never silently skipped.
-func hypothesize(ctx context.Context, ev Evaluator, rules []Rule, facts []Fact, goal string, given map[string]string,
+func hypothesize(ctx context.Context, ev Evaluator, compiled Compiled, rules []Rule, facts []Fact, goal string, given map[string]string,
 	base Result, limits Limits, superseded map[string]bool) ([]Unknown, []string, error) {
 	lits, err := ev.Literals(rules, "context", 2, false)
 	if err != nil {
@@ -614,7 +618,9 @@ func hypothesize(ctx context.Context, ev Evaluator, rules []Rule, facts []Fact, 
 		return out
 	}
 	// conclusions evaluates the program with assignment i, without the
-	// names marked in skip, and returns the new conclusions.
+	// names marked in skip, and returns the new conclusions. The program
+	// itself (System, Rules, Heads, EDB) was analyzed once, by compiled;
+	// only its facts change per combination (#144).
 	conclusions := func(i int, skip []bool) (map[conclusion]bool, error) {
 		extra := slices.Clone(facts)
 		for j, v := range assignment(i) {
@@ -622,8 +628,7 @@ func hypothesize(ctx context.Context, ev Evaluator, rules []Rule, facts []Fact, 
 				extra = append(extra, Fact{Predicate: "context", Args: []string{names[j], v}})
 			}
 		}
-		res, err := ev.Evaluate(ctx, Program{System: System, Rules: rules, Heads: Heads, EDB: EDB, Facts: extra,
-			Query: []string{"obligation_of", "derived_by"}, Limits: limits})
+		res, err := compiled.Run(ctx, extra, []string{"obligation_of", "derived_by"}, limits)
 		if err != nil {
 			return nil, err
 		}
