@@ -2,6 +2,78 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
+**Corpus Logic v1, on branch `corpus-logic-v1` at `8df8641`, as of 2026-10-14.** Owner-approved; merge-ready. Supersedes the handoff below (`6773c8e`), which is kept as history.
+
+- **Found before merge, while checking the branch was actually complete:** `resolve`'s `superseded` result member was unreachable in the general case. A superseded rule's source was dropped before applicability was computed, so a rule could never be found both superseded and applicable at once; `superseded` stayed empty for every ordinary supersession. Fixed in `8df8641`: a superseded source's rows still reach `obligation_of` and `derived_by` (its program still evaluates), so they are now tracked separately (`silenced`) and reported in `superseded` instead of `obligations`, `derived` or `applicable`. `TestSupersessionIsGoverned` fails without the fix.
+- **Same commit, found independently while writing that test:** `RuleDigest` did not cover a rule's `Supersedes` or `Uses`, so changing which rule it retires, or which records it reads, was not a governed semantics change — it could be changed without a revision rise, silently invalidating what an exception approval's `rule_digest` was meant to guarantee. Both are now part of the digest.
+- **Hardening, not a new behaviour:** `policy.Establish` now also refuses a fractional-second assertion validity time, matching what `internal/knowledgeops` (the transport layer) already enforced and what `mcp.md` and ADR-0050 already documented.
+- **Docs:** `mcp.md` now documents the `superseded` result member, which the result shape listed but never explained.
+- **Verification (`verify-change`, full) at `8df8641`**, in a clean detached worktree, test cache cleaned first (nothing cached):
+  - `make check`: lint 0 issues, deps-check 44 modules, docs-check 802 links, records-check, loader-check 33/0.
+  - `make vuln`: 0 affecting the code. `make demo`: PASS.
+  - `make e2e` 313/0, `make e2e-mcp E2E_INTEROP=0` 137/0.
+  - `make lifecycle` was not run (this change is reasoning/knowledge only; it cannot alter installation or service behaviour).
+  - Verification artifact: `dist/artifacts/8df8641…/` (darwin/arm64 build and tests ran natively; the artifact itself is linux/amd64, gitignored, not reviewed independently).
+  - No mutation probing beyond the regression test added: this is a bounded fix on top of an already mutation-probed body of work (83/83 at `a617709`), not a new review round.
+- **Not done:** nothing published to the live Corpus; the installed service is not upgraded.
+
+Next action: merge PR #143; build and install from `main`; then decide whether to publish real Corpus records and who issues context assertions.
+
+**Corpus Logic v1, on branch `corpus-logic-v1` at `6773c8e`, as of 2026-10-14 (superseded).** Independent review and corrections done; ready for owner review; not merged, released or installed. Milestone [#134](https://github.com/ashuangiras/polaroid/issues/134); workstreams A–H are #135, #136, #137, #142, #138, #139, #140 and #141. [ADR-0050](../architecture/decisions/0050-corpus-logic.md) is proposed and describes what is implemented.
+
+- **Final semantic integrity gate** (after `bd634a4`), three corrections:
+  - **Rollback** is a governed publication with no exemptions.
+    - Restored semantics take a revision above the active one, so no earlier approval becomes valid again.
+    - A published rule is never removed or retyped, by any publication, rollback, activation or validated fetch; it is retired by a rule that supersedes it. A validated fetch checks every incoming edge, including one from a snapshot imported earlier and not yet activated, and refuses a parent it does not hold. A rule's revision therefore only rises along every history an instance can activate, and a rollback refuses to restore a rule that is not active.
+    - Protected invariants stay protected.
+    - The `Polaroid-Rollback-To` trailer is provenance only, and history is never rewritten.
+    - Operator API `POST /v1/knowledge/rollbacks` and CLI `polaroid knowledge-rollback`.
+  - **Trusted context** comes from signed context assertions (`resolve`'s `assertions`), verified against operator-held attestation keys bound to one repository and a set of names.
+    - An assertion must be valid both at the evaluation time and at the server's current time, with validity in whole seconds; at most 16 per request.
+    - Invalid assertions, or caller context that contradicts them, fail the request. No identity service.
+  - **Domain authority** signs the domain path from the rule's classification to the authority's domain. The exception applies only while that path holds, so hierarchy changes along it force a new approval, and a restored hierarchy revalidates.
+  - **Deterministic output:** MCP and operator responses now encode map keys in sorted order (`encoding/json/v2` does not by default), which `trusted` exposed.
+  - **Performance limitation:** resolving near the 64-combination limit takes about 0.3–1 s (`BenchmarkResolveMissingContext`), tracked in [#144](https://github.com/ashuangiras/polaroid/issues/144).
+  - **Independent review of `1eeb508`** (read-only CodeReviewer) found two blocking defects and two minor ones, all fixed in the next commit:
+    - A removed and re-added rule could repeat an earlier revision and digest, through rollback chains or ordinary publication, so a cancelled approval could match again.
+    - The caller chooses `at`, so a back-dated `at` revived an expired assertion.
+    - Sub-second validity times were accepted but not signed.
+    - A rollback with an empty `to` would have emptied the catalog.
+
+    It also recommended capping the number of assertions (done) and documenting the shared revocation list (done).
+  - **Re-review of `8f87b71`** found one more blocking path: a validated fetch skipped the edge from a snapshot imported earlier but never activated, so a remote could remove a rule and add it back at a cancelled revision. Fixed in the next commit: every fetched edge is checked (`gitcore.StoredTree` reads imported snapshots), a parent held nowhere is refused, and a rollback refuses to restore an absent rule. Approval validity stays judged at `at` (historical queries) and is documented as such.
+  - **Third review, of `a617709`:** no blocking defect. Its minor findings were fixed in the next commit: a `gitcore` test for `StoredTree`, local storage errors no longer reported as a rejected candidate, the rollback refusal in http-api.md, and ADR limitations for history entering by other means than a validated fetch, Git-core recovery, and rolling back past a rule's addition.
+  - **Mutation probes:** 83 of 83 removed protections were caught by their tests, including rollback revisions, rule removal, fetched edges from imported history, `StoredTree`, every assertion check, current-time validity, domain-path checks and deterministic encoding.
+  - `1eeb508` was verified (`verify-change` parent `01a139ee-ce8c-797c-bc21-79703dc6dbe3`) before that review; the review fixes supersede it.
+- **Review of PR #143 (`8067f8a`) found seven defects**, fixed in `6c5effd`, `ffbf946`, `9da95eb`, `d0cae8f` and `a45f3e2`:
+  - Exception approvals bound only to a rule's key and editable revision. They now sign a `rule_digest` of the rule's semantics, and every publication, rollback, activation and validated fetch enforces rule governance: a semantics change needs a higher revision, and a protected rule is never removed, unprotected, waivable, excepted or superseded by an unprotected rule.
+  - The caller's own `repository` and condition context activated project waivers. Only trusted context does now: signed assertions, added by the final gate.
+  - A protected invariant could be waived with corpus authority. Now no authority can.
+  - `Resolve` panicked on a derived requirement that is not a concept. It now reports an `undefined_requirement` conflict, and publication refuses such a constant.
+  - Unknowns were silently incomplete. Equality-bound values and multi-name combinations are now enumerated without conflating values; `when` is always sufficient; `complete` and `incomplete` say what was not examined.
+  - Composition read the caller's context. It now reads only the snapshot, and `resolve` serves it through `then`.
+  - Mangle panics were not contained. They now become fixed rule errors and are logged.
+- **Independent review:** three read-only CodeReviewer passes over the corrective diff. The last confirmed every security finding closed; its remaining notes are recorded as ADR-0050 limitations.
+- **Verification (`verify-change`, full) at `a45f3e2`**, in clean detached worktrees, with the test cache cleaned first (nothing cached):
+  - `make check`: lint 0 issues, deps-check 44 modules, docs-check 799 links, records-check, loader-check 33/0.
+  - `make vuln`: 0 affecting the code. `make demo`: PASS.
+  - `make e2e` 313/0, `make e2e-mcp E2E_INTEROP=0` 137/0, and `make lifecycle` 69/0 (not required for this change).
+  - Linux amd64/arm64 build, vet and lint; MCP contract tests; `-race` on the knowledge, reasoning, sync and operator packages; daemon tests.
+  - Executions: parent `dev.change.verify` v7 `01a1385d-fa4f-727a-ba37-3e9516ce1c51`, verified. Children: build `01a1385d-14fd-71c6-ba86-38f3cd4239c3`, checks `01a1385d-1527-707e-903f-f39cbe5c802e`, artifact `01a1385d-b971-7733-81d3-1b7a8995e4f6`. Hosted CI was skipped (local-only policy).
+  - `01a1385d-152f-7fef-a351-339f06d61e30` was invalidated: it recorded an artifact built before the recorded checks run.
+  - Verification artifact: `dist/artifacts/a45f3e2…/` (linux/amd64, gitignored, not reviewed independently).
+- **Mutation probes:** 52 of 52 removed protections were caught by their tests, and sources were restored byte-identical.
+- **Real agent:** Copilot CLI 1.0.97 (`gpt-5.3-codex`), connected only to `/mcp/agent/v2` on an isolated `a45f3e2` build (port 7593, its own HOME, snapshot `67bfad9`), made four `resolve` calls, two of them with `then`. Its plan was correct:
+  - The team's `go vet` waiver was `not_applicable`, because a caller-asserted repository does not authorise a waiver.
+  - The corpus race waiver applied only to the rule derivations, and the declared derivation kept `check.race` required.
+  - The resolution was complete, with `concurrency=true` as `when`.
+  - It reported `incompatible` for build then deploy (input `image` missing) and `compatible` for build then smoke.
+  - Two derivation ids it cited were recomputed independently.
+- **Not done:**
+  - Nothing was published to the live Corpus, and the installed service is not upgraded.
+
+Next action: owner review of ADR-0050 and PR #143; on approval, merge, then decide whether to publish real Corpus records and who issues context assertions.
+
 **Knowledge remote, as of 2026-10-14.**
 
 - **The installed instance now has a remote:** a private knowledge repository, configured as source `corpus` (HTTPS, branch `main`, publisher `operator.deploy-check`, push permitted) in `~/.polaroid/data/knowledge-sources.json`.

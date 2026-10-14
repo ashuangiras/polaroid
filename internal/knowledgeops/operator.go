@@ -51,6 +51,9 @@ func (o *Operator) Status(ctx context.Context) (wire.KnowledgeStatus, error) {
 		return wire.KnowledgeStatus{}, classify(err)
 	}
 	st := wire.KnowledgeStatus{Snapshot: string(cat.Snapshot()), Empty: cat.Snapshot() == "", Instance: inst, Keys: cat.Len()}
+	if cat.Format() > 1 {
+		st.Format, st.Records = cat.Format(), len(cat.RecordKeys())
+	}
 	for _, src := range o.policy.Sources {
 		st.Sources = append(st.Sources, wire.KnowledgeSource{Name: src.Name, URL: src.URL, Branch: src.Branch, Publish: src.Publish})
 	}
@@ -88,6 +91,19 @@ func (o *Operator) Publish(ctx context.Context, in wire.KnowledgePublishRequest)
 		}
 		prop.Changes = append(prop.Changes, knowledge.Change{Key: c.Key, Procedure: proc})
 	}
+	for i, c := range in.Records {
+		var r *knowledge.Record
+		switch {
+		case c.Remove && len(c.Document) > 0:
+			return wire.KnowledgePublishResult{}, invalidField(fmt.Sprintf("records[%d]", i), "names either a document or remove, not both")
+		case !c.Remove:
+			var err error
+			if r, err = knowledge.ParseRecord(c.Document); err != nil {
+				return wire.KnowledgePublishResult{}, invalidField(fmt.Sprintf("records[%d].document", i), err.Error())
+			}
+		}
+		prop.Records = append(prop.Records, knowledge.RecordChange{Key: c.Key, Record: r})
+	}
 	snap, err := o.kernel.Publish(ctx, prop)
 	if err != nil {
 		return wire.KnowledgePublishResult{}, classify(err)
@@ -101,6 +117,19 @@ func (o *Operator) Publish(ctx context.Context, in wire.KnowledgePublishRequest)
 		result.Reconciliation = &rec
 	}
 	return result, nil
+}
+
+// Rollback restores an earlier published snapshot's knowledge as a new
+// publication: restored rules take new revisions, and rule governance
+// applies as to any publication (ADR-0050).
+func (o *Operator) Rollback(ctx context.Context, in wire.KnowledgeRollbackRequest) (wire.KnowledgeRollbackResult, error) {
+	snap, err := o.kernel.Rollback(ctx, knowledge.Snapshot(in.Base), knowledge.Snapshot(in.To), knowledge.Provenance{
+		Author: in.Author, Summary: in.Summary, Rationale: in.Rationale, Validation: in.Validation,
+	})
+	if err != nil {
+		return wire.KnowledgeRollbackResult{}, classify(err)
+	}
+	return wire.KnowledgeRollbackResult{Snapshot: string(snap)}, nil
 }
 
 // Fetch transfers a source's knowledge into quarantine, replacing any
@@ -252,7 +281,7 @@ func (o *Operator) findLocalPublication(ctx context.Context, findingID, key stri
 		if p.Provenance.Finding != findingID {
 			continue
 		}
-		if !slices.ContainsFunc(p.Changed, func(c knowledge.KeyChange) bool { return c.Key == key }) {
+		if !slices.ContainsFunc(p.Changed, func(c knowledge.KeyChange) bool { return c.Key == key && !c.Record }) {
 			continue
 		}
 		origin, err := o.kernel.Origin(ctx, p.Snapshot)

@@ -2,14 +2,25 @@ package knowledge
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"slices"
 	"time"
 )
 
 // Load validates the files of a complete snapshot as a catalog, exactly as
 // every read does. It is how knowledge that arrives from elsewhere is
-// checked before it is accepted.
-func Load(s Snapshot, f Files) (*Catalog, error) { return loadCatalog(s, f) }
+// checked before it is accepted. Without validators, a snapshot holding
+// typed records is refused.
+func Load(ctx context.Context, s Snapshot, f Files, vs ...RecordValidator) (*Catalog, error) {
+	return loadCatalog(ctx, s, f, vs)
+}
+
+// Check validates the files of a complete snapshot as this kernel reads
+// them, with its record validators.
+func (k *Kernel) Check(ctx context.Context, s Snapshot, f Files) (*Catalog, error) {
+	return loadCatalog(ctx, s, f, k.validators)
+}
 
 // Activation makes knowledge that arrived from elsewhere the active
 // knowledge, as a fast-forward: nothing published here is lost.
@@ -46,12 +57,22 @@ func (k *Kernel) Activate(ctx context.Context, a Activation) error {
 		trailers = append(trailers, Trailer{TrailerValidation, pv.Validation})
 	}
 	trailers = append(trailers, Trailer{TrailerAccepted, "complete catalog: documents, references, applicability, cycles, limits"})
+	base, err := k.At(ctx, a.Base)
+	if errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("%w: base %s is not published here", ErrStale, a.Base)
+	}
+	if err != nil {
+		return err
+	}
 	var cat *Catalog
-	err := k.store.Advance(ctx, Advance{Expected: a.Base, Target: a.Target, Author: pv.Author, Subject: pv.Summary, Body: pv.Rationale, Trailers: trailers,
+	err = k.store.Advance(ctx, Advance{Expected: a.Base, Target: a.Target, Author: pv.Author, Subject: pv.Summary, Body: pv.Rationale, Trailers: trailers,
 		Check: func(f Files) error {
-			c, err := loadCatalog(a.Target, f)
+			c, err := loadCatalog(ctx, a.Target, f, k.validators)
+			if err != nil {
+				return err
+			}
 			cat = c
-			return err
+			return CheckTransition(base, c)
 		}})
 	if err != nil {
 		return err

@@ -683,11 +683,29 @@ Example `invalid_request` response:
 - **Credentials:** `fetch` and `push` take `{"credentials": {"username","password","ssh_key","ssh_passphrase","known_hosts"}}`, used for that one call only, and never stored, logged or returned.
 - **Remotes:** sources come from the trust-policy file `<knowledge-dir>-sources.json`, read at start. [knowledge-remotes.md](../development/knowledge-remotes.md) gives its format and the operator workflow.
 - **Readiness:** `GET status`'s `"empty": true` means no knowledge has been published or activated yet; this is a normal, expected state, not an error. If the knowledge path could not start (for example its directory could not be created), the daemon logs why and serves neither `/mcp/agent` nor `/v1/knowledge/*`; the legacy API and full-mode MCP are unaffected.
+- **Typed records** ([ADR-0050](decisions/0050-corpus-logic.md)): a publication may also carry `records`. These are domains, concepts, claims, rules, procedure semantics, evidence and exceptions, each a JSON-LD document using only the bundled context `urn:polaroid:context:v1`. The whole resulting catalog is validated:
+  - record types and relationships;
+  - JSON-LD, with any other context refused and never fetched;
+  - the RDF projection;
+  - SHACL Core shapes;
+  - rule programs, which must stay within the safe Datalog subset, and whose stated requirements must be concepts;
+  - rule governance: a protected rule is never waivable, targeted by an exception, or superseded by an unprotected rule. An exception carries `rule_digest`, the SHA-256 of its target rule's semantics, which its approval signs.
+
+  Against the published catalog, a rule whose semantics change must take a higher revision, a revision never decreases, a protected rule is never unprotected, and a published rule is never removed or retyped (retire it with a rule that supersedes it). Nothing is exempt, rollback included: a rollback (`POST /v1/knowledge/rollbacks`) is a new publication that restores semantics under a higher revision, so no earlier approval becomes valid again. A refused publication is `400` with a field per problem.
+
+  Fetched candidates are validated the same way, each incoming publication against its parent, which must be held here (published, or imported and not yet activated); and activation checks the same transition from the active snapshot. A snapshot with records is format 2 and carries `corpus.json`. Instances built before ADR-0050, and any instance without the needed format or capabilities, refuse it.
+- **Exception trust material:** `<knowledge-dir>-authorities.json` holds `{"keys":[...],"revoked":[...]}`. Each key is `{"id","public_key"}` with exactly one role:
+  - `"authority":{"level","domain","repository"}` signs exception approvals; `level` is `corpus`, `domain` or `project`;
+  - `"attests":{"repository","names"}` signs context assertions for that repository, with the context names it may assert besides `repository` itself.
+  - `public_key` is a base64 Ed25519 key, and `revoked` lists key ids or approval and assertion references.
+  - The file is read at start. A missing file means no exception applies and no assertion is accepted.
+  - It is operator-held and is never read from the knowledge it authorises.
 
 | Method and path | Success | Purpose |
 | --- | --- | --- |
-| `GET /v1/knowledge/status` | `200` status | The active snapshot (`""` if none), whether it is empty, this instance's identity, its procedure count, and the configured sources (never their credentials). |
-| `POST /v1/knowledge/publications` | `201` publish result | Publish `{"base","changes","author","summary","rationale","finding","validation"}` (`finding`, `validation` optional). Each change is `{"key","remove","scope","repository","goal","philosophy","method","contract","instructions","references"}`; `remove: true` deletes the key. With `finding` naming a feedback report id, reconciliation is attempted immediately and reported in `reconciliation`; a failed reconciliation never undoes the publication, which has already succeeded. |
+| `GET /v1/knowledge/status` | `200` status | The active snapshot (`""` if none), whether it is empty, this instance's identity, its procedure count (`keys`), and the configured sources (never their credentials). For format-2 knowledge it also reports `format` and the `records` count. |
+| `POST /v1/knowledge/publications` | `201` publish result | Publish `{"base","changes","records","author","summary","rationale","finding","validation"}` (`records`, `finding`, `validation` optional; `changes` and `records` together hold at least one change). Each change is `{"key","remove","scope","repository","goal","philosophy","method","contract","instructions","references"}`; `remove: true` deletes the key. Each record change is `{"key","document"}` or `{"key","remove":true}`; the stored document is the record's canonical encoding. With `finding` naming a feedback report id, reconciliation is attempted immediately and reported in `reconciliation`; a failed reconciliation never undoes the publication, which has already succeeded. |
+| `POST /v1/knowledge/rollbacks` | `201 {"snapshot"}` | Restore `{"base","to","author","summary","rationale","validation"}` (`validation` optional): publish, on top of the active `base`, the knowledge of the earlier published snapshot `to`, as a new publication with a `Polaroid-Rollback-To` trailer. History is unchanged. A restored rule whose semantics differ from the active rule takes a revision above both, so approvals given for an earlier revision do not apply again; rule governance applies as to any publication, so a rollback that would remove or retype a published rule, or unprotect a protected one, is `400`, and so is one that would restore a rule that is not in the active knowledge, a missing `to`, or a rollback that changes nothing ([ADR-0050](decisions/0050-corpus-logic.md)). |
 | `POST /v1/knowledge/sources/{name}/fetch` | `200` candidate status | Transfer `{name}`'s knowledge into quarantine, with an optional `{"credentials"}` body. Nothing local changes. |
 | `POST /v1/knowledge/sources/{name}/validation` | `200` candidate status | Validate the source's fetched candidate: Git integrity, the trust policy's authorised publishers, and every new publication as a complete catalog. A rejected candidate's `problems` are in the result, not a request failure. |
 | `POST /v1/knowledge/sources/{name}/activation` | `201` activation result | Activate `{name}`'s validated, fast-forward candidate, from decision `{"author","summary","rationale","finding","validation"}`. |
@@ -748,6 +766,7 @@ Error codes on this surface (same envelope as [Errors](#errors) above): `401 una
 | `polaroid statistics` | `GET /v1/statistics` |
 | `polaroid knowledge-status` | `GET /v1/knowledge/status` |
 | `polaroid knowledge-publish [FILE]` | `POST /v1/knowledge/publications` |
+| `polaroid knowledge-rollback [FILE]` | `POST /v1/knowledge/rollbacks` |
 | `polaroid knowledge-fetch SOURCE [FILE]` | `POST /v1/knowledge/sources/{source}/fetch` |
 | `polaroid knowledge-validate SOURCE` | `POST /v1/knowledge/sources/{source}/validation` |
 | `polaroid knowledge-activate SOURCE [FILE]` | `POST /v1/knowledge/sources/{source}/activation` |

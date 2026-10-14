@@ -131,3 +131,37 @@ func TestOperatorStatusAndPublish(t *testing.T) {
 		t.Fatalf("reconcile an unknown feedback id = %d", status)
 	}
 }
+
+func TestOperatorRollback(t *testing.T) {
+	url := newServer(t)
+	publish := func(base, goal string) string {
+		t.Helper()
+		status, body := do(t, http.MethodPost, url+"/v1/knowledge/publications", token, map[string]any{
+			"base": base, "changes": []map[string]any{{"key": "go.module.tidy", "goal": goal, "philosophy": "p", "method": "m",
+				"contract": map[string]any{}, "instructions": map[string]any{}}},
+			"author": "operator", "summary": goal, "rationale": "requested"})
+		if status != http.StatusCreated {
+			t.Fatalf("publish = %d %v", status, body)
+		}
+		return body["snapshot"].(string)
+	}
+	s1 := publish("", "Tidy a module")
+	s2 := publish(s1, "Tidy a module, twice")
+	rollback := func(base, to string) (int, map[string]any) {
+		return do(t, http.MethodPost, url+"/v1/knowledge/rollbacks", token, map[string]any{
+			"base": base, "to": to, "author": "operator", "summary": "undo", "rationale": "the second tidy was wrong"})
+	}
+	if status, body := rollback(s1, s2); status != http.StatusConflict {
+		t.Fatalf("rollback on a stale base = %d %v", status, body)
+	}
+	if status, body := rollback(s2, "0000000000000000000000000000000000000000"); status != http.StatusNotFound {
+		t.Fatalf("rollback to an unknown snapshot = %d %v", status, body)
+	}
+	status, body := rollback(s2, s1)
+	if status != http.StatusCreated || body["snapshot"] == s2 || body["snapshot"] == "" || len(body) != 1 {
+		t.Fatalf("rollback = %d %v", status, body)
+	}
+	if status, _ := do(t, http.MethodPost, url+"/v1/knowledge/rollbacks", "", map[string]any{"base": s2, "to": s1}); status != http.StatusUnauthorized {
+		t.Fatalf("rollback without a token = %d", status)
+	}
+}

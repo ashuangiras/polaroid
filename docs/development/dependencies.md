@@ -1,6 +1,6 @@
 # Dependencies and licenses
 
-Polaroid keeps third-party code to a minimum. The `polaroid` CLI links only the Go standard library. `polaroidd` links two direct dependencies, the SQLite driver and the MCP Go SDK, and the modules that they need. The Git-core package (`internal/gitcore`, [ADR-0044](../architecture/decisions/0044-git-core.md)) adds go-git and the modules it needs: its object, storage and plumbing packages, and, for knowledge synchronisation ([ADR-0046](../architecture/decisions/0046-git-knowledge-synchronisation.md)), its `file`, `http` and `ssh` Git transports and their SSH modules. The daemon does not link Git-core yet.
+Polaroid keeps third-party code to a minimum. The `polaroid` CLI links only the Go standard library. `polaroidd` links two direct dependencies, the SQLite driver and the MCP Go SDK, and the modules that they need. The Git-core package (`internal/gitcore`, [ADR-0044](../architecture/decisions/0044-git-core.md)) adds go-git and the modules it needs: its object, storage and plumbing packages, and, for knowledge synchronisation ([ADR-0046](../architecture/decisions/0046-git-knowledge-synchronisation.md)), its `file`, `http` and `ssh` Git transports and their SSH modules. Corpus Logic ([ADR-0050](../architecture/decisions/0050-corpus-logic.md)) adds Mangle for Datalog, goRDFlib for RDF and SHACL, and json-gold for JSON-LD, each behind one adapter package. Their versions and licenses were verified on 2026-10-14, when an isolated experiment also built them on linux and darwin (amd64, arm64), ran them offline under a network-denying sandbox, and found no vulnerabilities with govulncheck.
 
 `make deps-check` ([scripts/check-deps.sh](../../scripts/check-deps.sh)) enforces this file. The check fails if any of these is true:
 
@@ -53,6 +53,15 @@ Licenses were verified on 2026-10-09. Each module's own LICENSE file in the Go m
 | `github.com/kevinburke/ssh_config` | `v1.2.0` | MIT | linux, darwin | Reads `~/.ssh/config` host settings in go-git's SSH transport. |
 | `github.com/skeema/knownhosts` | `v1.3.1` | Apache-2.0 | linux, darwin | Host-key verification against the `known_hosts` file a remote's credentials name, with the key algorithms it lists. |
 | `github.com/xanzy/ssh-agent` | `v0.3.3` | Apache-2.0 | linux, darwin | SSH-agent support compiled into go-git's SSH transport; Git-core authenticates with an explicit key and never asks an agent. |
+| `codeberg.org/TauCeti/mangle-go` | `v0.5.0` | Apache-2.0 | linux, darwin | Direct, Corpus Logic ([ADR-0050](../architecture/decisions/0050-corpus-logic.md)): Datalog parsing, analysis and semi-naive evaluation, imported only by `internal/reasoning/datalog`. Formerly `github.com/google/mangle`; only the Codeberg module is used. Its `glog` and protobuf requirements are not compiled. |
+| `bitbucket.org/creachadair/stringset` | `v0.0.11` | BSD-3-Clause | linux, darwin | String sets inside Mangle's analysis. |
+| `github.com/antlr4-go/antlr/v4` | `v4.13.1` | BSD-3-Clause | linux, darwin | The ANTLR runtime of Mangle's generated parser. |
+| `go.uber.org/multierr` | `v1.11.0` | MIT | linux, darwin | Error aggregation inside Mangle. |
+| `golang.org/x/exp` | `v0.0.0-20260410095643-746e56fc9e2f` | BSD-3-Clause | linux, darwin | Generic helpers inside Mangle and goRDFlib. |
+| `github.com/tggo/goRDFlib` | `v0.6.0` | BSD-3-Clause | linux, darwin | Direct, Corpus Logic: RDF terms, in-memory graphs, the SKOS and RDF vocabularies, Turtle for the bundled shapes, and SHACL Core validation, imported only by `internal/knowledge/semantic`. Pre-v1, pinned, behind that one adapter. Its SQLite, Badger and remote-SPARQL stores, SPARQL endpoint and remote loader are not compiled (`internal/archtest`). |
+| `github.com/piprate/json-gold` | `v0.8.0` | Apache-2.0 | linux, darwin | Direct, Corpus Logic: JSON-LD 1.1 to RDF, imported only by `internal/knowledge/semantic`, always with the offline loader of the bundled context. Its HTTP document loader is compiled but never constructed on that path. |
+| `github.com/cayleygraph/quad` | `v1.3.0` | Apache-2.0 | linux, darwin | RDF quad types inside json-gold. |
+| `github.com/pquerna/cachecontrol` | `v0.2.0` | Apache-2.0 | linux, darwin | HTTP cache headers for json-gold's default document loader, which Polaroid never uses. |
 
 The module graph also references modules that are never compiled into Polaroid. modernc.org/sqlite's notice lists them, for example `github.com/hashicorp/golang-lru/v2` (MPL-2.0). `go.sum` holds checksums for some of their `go.mod` files. They carry no license obligation for Polaroid's binaries, and the check above ignores them by design.
 

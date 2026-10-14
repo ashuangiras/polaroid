@@ -13,7 +13,9 @@ allowlist=" MIT BSD-2-Clause BSD-3-Clause Apache-2.0 ISC "
 
 # classify prints the SPDX expression recognised in a license file, or
 # "unknown". A file holding both the Apache-2.0 and MIT texts (a project
-# relicensing, such as the MCP Go SDK) is "Apache-2.0 AND MIT".
+# relicensing, such as the MCP Go SDK) is "Apache-2.0 AND MIT". BSD-3-Clause
+# is BSD-2-Clause plus the non-endorsement clause, recognised by its own words
+# because its opening words vary, for example in the ANTLR license.
 classify() {
 	local text
 	text="$(tr -s '[:space:]' ' ' <"$1")"
@@ -21,7 +23,7 @@ classify() {
 	*"Apache License"*"Version 2.0"*"Permission is hereby granted, free of charge"*) echo "Apache-2.0 AND MIT" ;;
 	*"Permission is hereby granted, free of charge"*) echo MIT ;;
 	*"Apache License"*"Version 2.0"*) echo Apache-2.0 ;;
-	*"Redistribution and use in source and binary forms"*"Neither the name"*) echo BSD-3-Clause ;;
+	*"Redistribution and use in source and binary forms"*"endorse or promote products"*) echo BSD-3-Clause ;;
 	*"Redistribution and use in source and binary forms"*) echo BSD-2-Clause ;;
 	*"Permission to use, copy, modify, and/or distribute this software for any purpose"*) echo ISC ;;
 	*) echo unknown ;;
@@ -33,14 +35,20 @@ classify() {
 canary="$(mktemp -d)"
 trap 'rm -rf "$canary"' EXIT
 printf 'Permission is hereby granted,\n  free of charge, to any person\n' >"$canary/mit"
-printf 'Redistribution and use in source and binary\nforms ... 3. Neither the name of\n' >"$canary/bsd3"
+printf 'Redistribution and use in source and binary\nforms ... 3. Neither the name of ... may be used to endorse or\npromote products\n' >"$canary/bsd3"
+printf 'Redistribution and use in source and binary\nforms ... 3. Neither name of copyright holders ... may be used to endorse\nor promote products\n' >"$canary/bsd3b"
+printf 'Redistribution and use in source and binary\nforms ... 2. Redistributions in binary form\n' >"$canary/bsd2"
 printf 'All rights reserved.\n' >"$canary/none"
 printf 'Apache License\n Version 2.0, January 2004 ... MIT License ... Permission is hereby granted,\nfree of charge\n' >"$canary/both"
-if [[ "$(classify "$canary/mit")" != MIT || "$(classify "$canary/bsd3")" != BSD-3-Clause || "$(classify "$canary/none")" != unknown ||
-	"$(classify "$canary/both")" != "Apache-2.0 AND MIT" ]]; then
-	echo "deps-check: license classifier canary failed" >&2
-	exit 1
-fi
+for pair in mit:MIT bsd3:BSD-3-Clause bsd3b:BSD-3-Clause bsd2:BSD-2-Clause none:unknown "both:Apache-2.0 AND MIT"; do
+	name="${pair%%:*}"
+	want="${pair#*:}"
+	got="$(classify "$canary/$name")"
+	if [[ "$got" != "$want" ]]; then
+		echo "deps-check: license classifier canary failed for $name" >&2
+		exit 1
+	fi
+done
 
 used=""
 for platform in $platforms; do

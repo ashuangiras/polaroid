@@ -97,6 +97,39 @@ A second endpoint on the same listener, with the same transport rules, serves on
 - **Publishing, synchronising and reconciling knowledge is an explicit operator operation**, through `/v1/knowledge/*` ([http-api.md](http-api.md#git-native-knowledge-operator-api)) or `polaroid knowledge-*`, never through agent mode: there is no scheduler, and an agent only discovers, reads and reports feedback.
 - **Migrating an agent:** point it at `http://127.0.0.1:7417/mcp/agent` instead of `/mcp`. Keep `/mcp` for administration, execution and verification records, and audit workflows; its 40 tools are unchanged. No legacy SQLite procedure is migrated into Git-native knowledge ([ADR-0049](decisions/0049-agent-mode-finalized-no-migration.md)): the two catalogs are populated independently.
 
+## Agent mode v2 (`/mcp/agent/v2`)
+
+**Proposed with Corpus Logic v1** ([ADR-0050](decisions/0050-corpus-logic.md)). This is a separate, versioned endpoint; `/mcp/agent` above is unchanged.
+
+It serves the same `discover`, `read` and `feedback` tools, with input schemas identical to v1's (a test compares them), plus one read-only tool:
+
+| Tool | Read-only | Arguments | Result |
+| --- | --- | --- | --- |
+| `resolve` | yes | `goal` (a record key: a procedure, concept or claim); `snapshot` (default: the active knowledge), `context` (an object of string name and value pairs), `assertions` (signed context assertions, below), `then` (a procedure key to compose after the goal) and `at` (RFC 3339; default now) optional | `{version, snapshot, goal, at, trusted, complete, incomplete, applicable, specializations, obligations, derived, exceptions, conflicts, unknowns, evidence, superseded, composition}` |
+
+The result members mean:
+
+- **`complete`**: whether every conclusion the missing context could add was examined. When it is false, **`incomplete`** says what could not be enumerated: a rule that reads a context name or value it does not fix, or more than 64 combinations of missing values. Unknowns are then not exhaustive.
+- **`obligations`**: each requirement with every independent derivation `{id, source, source_type, via, path, status, exception}`. The status is `required` while any derivation is active, otherwise `waived`.
+- **`exceptions`**: each exception that concerns the goal, with its status: `applied`, `rejected`, `not_applicable` or `conflicting`, and a reason.
+- **`conflicts`**: requirements that contradict each other, conflicting exceptions, and `undefined_requirement` for a derived requirement that is not a concept.
+- **`unknowns`**: each conclusion that holds only for context the caller did not give, `{kind, requirement or predicate and object, source, when, reason}`. `kind` is `obligation` or `derived`; `when` lists the `{name, value}` pairs it needs.
+- **`evidence`**: each claim's evidence status (`supported`, `contradicted`, `contested`, `unsupported`). It summarises the evidence and is never a verdict.
+- **`superseded`**: rule keys that would have contributed an obligation or derived fact to this goal, but are superseded in this snapshot ([ADR-0050](decisions/0050-corpus-logic.md)). A superseded rule's program still evaluates, but its rows never reach `obligations`, `derived` or `applicable`; it is reported here instead.
+- **`composition`**, with `then`: `{verdict, producer, consumer, findings}`. The verdict is `compatible`, `incompatible` or `undetermined`; `producer` and `consumer` are the two formal contracts (inputs, outputs, whether the outputs are complete, pre-, post-conditions, invariants, informal conditions); each finding covers one consumer input, precondition or informal condition, and those not `satisfied` or `established` are the missing prerequisites. Composition reads only the snapshot, never `context`.
+
+`context` is what the caller asserts. It selects which rules apply, but never authorises an exception. Project-scoped exceptions and exception conditions need trusted context, which comes only from `assertions`: signed context assertions the caller was given, for example by its CI, each `{reference, key, repository, facts, valid_from, valid_until, signature}` with a base64 Ed25519 signature ([ADR-0050](decisions/0050-corpus-logic.md)). An assertion that is not signed by a trusted attestation key for its repository, that asserts a name the key may not assert, that is not valid both at `at` and at the server's current time, whose validity times are not whole seconds, or that disagrees with another assertion, fails the request with `invalid_request`, and so do more than 16 assertions and a `context` value that contradicts a trusted fact. The result's `trusted` is the trusted context used. An exception approval's own validity is judged at `at`, so a resolution at an earlier time reports what applied then; revocations always apply. Without assertions, project-scoped and conditional exceptions are reported `not_applicable`, with a reason that says when the caller asserted a matching value. A domain exception applies only while the domain path its approval signed still holds in the snapshot. Protected invariants are never waived, at any authority.
+
+Resolution is deterministic. The same snapshot, `context`, `assertions`, `at` and trust material give byte-identical results. A derivation `id` is the first 16 bytes, in hex, of SHA-256 over the reasoning version, the snapshot, the goal and the derivation's parts, joined by NUL bytes ([ADR-0050](decisions/0050-corpus-logic.md)); anyone holding the snapshot can recompute it. It identifies the derivation, not its status.
+
+Requests can fail with these codes:
+
+- `not_found`: the goal is not a record of the snapshot or, with `then`, the goal or `then` is not a procedure of it.
+- `invalid_request`.
+- `budget_exceeded` (HTTP 422): the evaluation exceeded its time or fact limits. A budget failure never returns a partial result.
+
+Exceptions and assertions are verified against the operator-held trust material at `<knowledge-dir>-authorities.json` ([http-api.md](http-api.md#git-native-knowledge-operator-api)).
+
 ## Resources
 
 All resources are read-only and returned as `application/json`, with the same body as the matching tool.

@@ -244,6 +244,10 @@ var commands = []command{
 		func(c *client, args []string) error {
 			return c.send(http.MethodPost, "/v1/knowledge/publications", args)
 		}},
+	{"knowledge-rollback", "[FILE]", "restore an earlier published snapshot as a new publication, from request JSON (base, to, author, summary, rationale, validation) in FILE or stdin", 0, 1,
+		func(c *client, args []string) error {
+			return c.send(http.MethodPost, "/v1/knowledge/rollbacks", args)
+		}},
 	{"knowledge-fetch", "SOURCE [FILE]", "fetch a source's knowledge into quarantine, with optional credentials JSON in FILE or stdin", 1, 2,
 		func(c *client, args []string) error {
 			return c.sendOptional(http.MethodPost, knowledgeSourcePath(args[0])+"/fetch", args[1:])

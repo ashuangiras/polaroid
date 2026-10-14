@@ -100,9 +100,10 @@ type Syncer struct {
 	limits  gitcore.TransferLimits
 }
 
-// New checks the policy. The kernel reads the same repository.
-func New(repo *gitcore.Repository, p Policy) (*Syncer, error) {
-	s := &Syncer{repo: repo, kernel: knowledge.New(gitstore.New(repo)), sources: map[string]Source{}, limits: p.Limits}
+// New checks the policy. The kernel reads the same repository, configured
+// with opts.
+func New(repo *gitcore.Repository, p Policy, opts ...knowledge.Option) (*Syncer, error) {
+	s := &Syncer{repo: repo, kernel: knowledge.New(gitstore.New(repo), opts...), sources: map[string]Source{}, limits: p.Limits}
 	var probs []string
 	for _, src := range p.Sources {
 		switch {
@@ -166,6 +167,7 @@ func (s *Syncer) Validate(ctx context.Context, c *Candidate) error {
 	}
 	src := s.sources[c.Source]
 	var probs []string
+	cats := map[knowledge.Snapshot]*knowledge.Catalog{}
 	c.Incoming = nil
 	for _, cm := range commits {
 		in := Incoming{Snapshot: knowledge.Snapshot(cm.Snapshot), Publisher: cm.Author, When: cm.When, Summary: cm.Subject, Rationale: cm.Body}
@@ -182,11 +184,19 @@ func (s *Syncer) Validate(ctx context.Context, c *Candidate) error {
 		if err != nil {
 			return err
 		}
-		cat, err := knowledge.Load(in.Snapshot, gitstore.Files(tree))
+		cat, err := s.kernel.Check(ctx, in.Snapshot, gitstore.Files(tree))
 		if err != nil {
 			probs = append(probs, fmt.Sprintf("snapshot %s: %v", cm.Snapshot, err))
 		} else {
 			in.Procedures = cat.Len()
+			cats[in.Snapshot] = cat
+			problem, err := s.checkTransition(ctx, cm, cat, cats)
+			if err != nil {
+				return err
+			}
+			if problem != nil {
+				probs = append(probs, fmt.Sprintf("snapshot %s: %v", cm.Snapshot, problem))
+			}
 		}
 		c.Incoming = append(c.Incoming, in)
 	}
@@ -207,6 +217,40 @@ func (s *Syncer) Validate(ctx context.Context, c *Candidate) error {
 	c.Local = knowledge.Snapshot(local)
 	c.Status = map[gitcore.Relation]Status{gitcore.Same: Identical, gitcore.Behind: FastForward, gitcore.Ahead: LocalAhead, gitcore.Diverged: Diverged}[rel]
 	return nil
+}
+
+// checkTransition checks an incoming publication against its parent: an
+// earlier incoming publication, published history, or a snapshot imported
+// earlier and not yet activated. Every edge of every history this
+// instance can activate is therefore checked, so a rule is never removed
+// and its revision never falls anywhere along it, and an approval
+// cancelled by a revision never matches again. A parent held nowhere here
+// is refused rather than skipped. Trailers grant nothing: rule governance
+// has no exemptions.
+func (s *Syncer) checkTransition(ctx context.Context, cm gitcore.Commit, cat *knowledge.Catalog, cats map[knowledge.Snapshot]*knowledge.Catalog) (problem, err error) {
+	if len(cm.Parents) == 0 {
+		return nil, nil
+	}
+	parent := knowledge.Snapshot(cm.Parents[0])
+	prev := cats[parent]
+	if prev == nil {
+		tree, err := s.repo.StoredTree(ctx, gitcore.Snapshot(parent))
+		if errors.Is(err, gitcore.ErrNotFound) {
+			return fmt.Errorf("its parent %s is not knowledge held here, so the change from it cannot be checked", parent), nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		c, err := s.kernel.Check(ctx, parent, gitstore.Files(tree))
+		if errors.Is(err, knowledge.ErrInvalid) {
+			return fmt.Errorf("its parent %s: %w", parent, err), nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		prev = c
+	}
+	return knowledge.CheckTransition(prev, cat), nil
 }
 
 func (s *Syncer) reject(c *Candidate, probs ...string) error {

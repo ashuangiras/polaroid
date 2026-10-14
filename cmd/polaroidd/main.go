@@ -210,10 +210,11 @@ func run(ctx context.Context, cfg config, logger *slog.Logger, ready func(net.Ad
 	mux.Handle("/mcp", mcptransport.NewHandler(svc, logger))
 	mux.Handle("/", httptransport.NewHandler(svc, logger))
 	if cfg.knowledgeDir != "" {
-		if kc, err := setupKnowledge(cfg.knowledgeDir, cfg.knowledgeDir+"-sources.json", cfg.knowledgeDir+"-operator-token", svc); err != nil {
+		if kc, err := setupKnowledge(cfg.knowledgeDir, cfg.knowledgeDir+"-sources.json", cfg.knowledgeDir+"-authorities.json", cfg.knowledgeDir+"-operator-token", svc); err != nil {
 			logKnowledgeUnavailable(logger, err)
 		} else {
 			mux.Handle("/mcp/agent", mcptransport.NewAgentHandler(kc.agent, logger))
+			mux.Handle("/mcp/agent/v2", mcptransport.NewAgentHandlerV2(kc.agent, kc.resolver, logger))
 			mux.Handle("/v1/knowledge/", httpops.NewHandler(kc.operator, kc.token, logger))
 		}
 	}

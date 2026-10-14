@@ -47,6 +47,45 @@ func TestInstanceIdentity(t *testing.T) {
 	}
 }
 
+// StoredTree reads what the repository holds as knowledge: published
+// snapshots, and imported ones and their ancestors before activation;
+// never a fetched candidate that was not imported, nor an unknown id.
+func TestStoredTree(t *testing.T) {
+	ctx := context.Background()
+	remote := bareRemote(t)
+	rm := Remote{Name: "team", URL: remote}
+	a := open(t, t.TempDir())
+	s1 := publish(t, a, "", put("p/a.json", "1"))
+	s2 := publish(t, a, s1, put("p/a.json", "2"))
+	push(t, a, rm)
+	b := open(t, t.TempDir())
+	accept(t, b, rm)
+	check(t, advance(b, "", s1))
+	if _, err := b.Tree(ctx, s2); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Tree reads an imported, unpublished snapshot: %v", err)
+	}
+	for s, want := range map[Snapshot]string{s1: "1", s2: "2"} {
+		tr, err := b.StoredTree(ctx, s)
+		if err != nil {
+			t.Fatalf("%s: %v", s, err)
+		}
+		if got, err := tr.Read("p/a.json"); err != nil || string(got) != want {
+			t.Fatalf("%s reads %q, %v", s, got, err)
+		}
+	}
+	s3 := publish(t, a, s2, put("p/a.json", "3"))
+	push(t, a, rm)
+	c := fetch(t, b, rm)
+	if _, err := c.Verify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []Snapshot{s3, "0123456789012345678901234567890123456789", "not-a-snapshot"} {
+		if _, err := b.StoredTree(ctx, s); !errors.Is(err, ErrNotFound) {
+			t.Errorf("%s: %v", s, err)
+		}
+	}
+}
+
 // The journal is written before the active ref moves: an activation that
 // stops in between leaves the old snapshot active, its target recorded but
 // unpublished, and Verify warning; nothing local is ever classified as

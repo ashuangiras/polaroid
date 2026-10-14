@@ -53,5 +53,6 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0047](0047-knowledge-identities-and-origin.md) | Knowledge identities and origin, the foundations of the Git-backed agent interface | Accepted (milestone D foundations) |
 | [0048](0048-git-native-agent-interface.md) | Git-native agent interface, finalized: `/mcp/agent` on living knowledge, and an explicit operator surface at `/v1/knowledge` | Accepted (milestone D; finalized by ADR-0049) |
 | [0049](0049-agent-mode-finalized-no-migration.md) | `/mcp/agent` finalized under ADR-0038's v1 guarantee; milestone E does not migrate the legacy SQLite catalog | Accepted (milestone E) |
+| [0050](0050-corpus-logic.md) | Corpus Logic v1: typed knowledge records and bounded reasoning on Git-native knowledge | Proposed (Corpus Logic v1) |
 
 Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.

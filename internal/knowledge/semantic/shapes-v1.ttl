@@ -1,0 +1,140 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix pc: <urn:polaroid:corpus:> .
+
+# Corpus Logic v1 shapes (ADR-0050): SHACL Core only. Every record is an IRI
+# under urn:polaroid:k:, has exactly one type and one label, and each type
+# admits exactly the properties listed (closed shapes).
+
+pc:RecordShape a sh:NodeShape ;
+  sh:targetClass pc:Domain, skos:Concept, pc:Claim, pc:Rule, pc:Procedure, pc:Evidence, pc:Exception ;
+  sh:nodeKind sh:IRI ;
+  sh:pattern "^urn:polaroid:k:[a-z0-9]+([._-][a-z0-9]+)*$" ;
+  sh:property [ sh:path rdf:type ; sh:minCount 1 ; sh:maxCount 1 ] ;
+  sh:property [ sh:path skos:prefLabel ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ; sh:minLength 1 ] ;
+  sh:property [ sh:path dcterms:subject ; sh:class pc:Domain ] .
+
+pc:DomainShape a sh:NodeShape ;
+  sh:targetClass pc:Domain ;
+  sh:closed true ;
+  sh:ignoredProperties ( rdf:type skos:prefLabel dcterms:subject dcterms:replaces ) ;
+  sh:property [ sh:path skos:definition ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path skos:broader ; sh:class pc:Domain ] ;
+  sh:property [ sh:path dcterms:replaces ; sh:class pc:Domain ] .
+
+pc:ConceptShape a sh:NodeShape ;
+  sh:targetClass skos:Concept ;
+  sh:closed true ;
+  sh:ignoredProperties ( rdf:type skos:prefLabel dcterms:subject dcterms:replaces ) ;
+  sh:property [ sh:path skos:definition ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path skos:broader ; sh:class skos:Concept ] ;
+  sh:property [ sh:path pc:specializes ; sh:class skos:Concept ] ;
+  sh:property [ sh:path pc:contradicts ; sh:class skos:Concept ] ;
+  sh:property [ sh:path pc:uses ; sh:or ( [ sh:class skos:Concept ] [ sh:class pc:Claim ] [ sh:class pc:Rule ] [ sh:class pc:Procedure ] ) ] ;
+  sh:property [ sh:path dcterms:replaces ; sh:class skos:Concept ] .
+
+pc:ClaimShape a sh:NodeShape ;
+  sh:targetClass pc:Claim ;
+  sh:closed true ;
+  sh:ignoredProperties ( rdf:type skos:prefLabel dcterms:subject dcterms:replaces ) ;
+  sh:property [ sh:path pc:statement ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path pc:asserts ; sh:node pc:AssertionShape ] ;
+  sh:property [ sh:path pc:supports ; sh:class pc:Claim ] ;
+  sh:property [ sh:path pc:contradicts ; sh:class pc:Claim ] ;
+  sh:property [ sh:path pc:uses ; sh:or ( [ sh:class skos:Concept ] [ sh:class pc:Claim ] [ sh:class pc:Rule ] [ sh:class pc:Procedure ] ) ] ;
+  sh:property [ sh:path dcterms:replaces ; sh:class pc:Claim ] .
+
+pc:AssertionShape a sh:NodeShape ;
+  sh:nodeKind sh:BlankNode ;
+  sh:closed true ;
+  sh:property [ sh:path pc:subject ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path pc:predicate ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path pc:object ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] .
+
+pc:EvidenceShape a sh:NodeShape ;
+  sh:targetClass pc:Evidence ;
+  sh:closed true ;
+  sh:ignoredProperties ( rdf:type skos:prefLabel dcterms:subject dcterms:replaces ) ;
+  sh:property [ sh:path pc:statement ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path dcterms:bibliographicCitation ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path pc:supports ; sh:class pc:Claim ] ;
+  sh:property [ sh:path pc:contradicts ; sh:class pc:Claim ] ;
+  sh:property [ sh:path dcterms:replaces ; sh:class pc:Evidence ] .
+
+pc:RuleShape a sh:NodeShape ;
+  sh:targetClass pc:Rule ;
+  sh:closed true ;
+  sh:ignoredProperties ( rdf:type skos:prefLabel dcterms:subject dcterms:replaces ) ;
+  sh:property [ sh:path pc:statement ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path pc:program ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path pc:revision ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:integer ; sh:minInclusive 1 ] ;
+  sh:property [ sh:path pc:protected ; sh:maxCount 1 ; sh:datatype xsd:boolean ] ;
+  sh:property [ sh:path pc:waivable ; sh:maxCount 1 ; sh:datatype xsd:boolean ] ;
+  sh:property [ sh:path pc:uses ; sh:or ( [ sh:class skos:Concept ] [ sh:class pc:Claim ] [ sh:class pc:Rule ] [ sh:class pc:Procedure ] ) ] ;
+  sh:property [ sh:path dcterms:replaces ; sh:class pc:Rule ] .
+
+pc:ProcedureShape a sh:NodeShape ;
+  sh:targetClass pc:Procedure ;
+  sh:closed true ;
+  sh:ignoredProperties ( rdf:type skos:prefLabel dcterms:subject dcterms:replaces ) ;
+  sh:property [ sh:path skos:definition ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path pc:specializes ; sh:class pc:Procedure ] ;
+  sh:property [ sh:path pc:composes ; sh:class pc:Procedure ] ;
+  sh:property [ sh:path pc:requires ; sh:class skos:Concept ] ;
+  sh:property [ sh:path pc:uses ; sh:or ( [ sh:class skos:Concept ] [ sh:class pc:Claim ] [ sh:class pc:Rule ] [ sh:class pc:Procedure ] ) ] ;
+  sh:property [ sh:path pc:input ; sh:node pc:PortShape ] ;
+  sh:property [ sh:path pc:output ; sh:node pc:PortShape ] ;
+  sh:property [ sh:path pc:outputsComplete ; sh:maxCount 1 ; sh:datatype xsd:boolean ] ;
+  sh:property [ sh:path pc:precondition ; sh:class skos:Concept ] ;
+  sh:property [ sh:path pc:postcondition ; sh:class skos:Concept ] ;
+  sh:property [ sh:path pc:invariant ; sh:class skos:Concept ] ;
+  sh:property [ sh:path pc:informalCondition ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path dcterms:replaces ; sh:class pc:Procedure ] .
+
+pc:PortShape a sh:NodeShape ;
+  sh:nodeKind sh:BlankNode ;
+  sh:closed true ;
+  sh:property [ sh:path pc:name ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path pc:concept ; sh:maxCount 1 ; sh:class skos:Concept ] .
+
+pc:ExceptionShape a sh:NodeShape ;
+  sh:targetClass pc:Exception ;
+  sh:closed true ;
+  sh:ignoredProperties ( rdf:type skos:prefLabel dcterms:subject dcterms:replaces ) ;
+  sh:property [ sh:path pc:excepts ; sh:minCount 1 ; sh:maxCount 1 ; sh:class pc:Rule ] ;
+  sh:property [ sh:path pc:revision ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:integer ; sh:minInclusive 1 ] ;
+  sh:property [ sh:path pc:ruleDigest ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ; sh:pattern "^[0-9a-f]{64}$" ] ;
+  sh:property [ sh:path pc:appliesTo ; sh:minCount 1 ; sh:or ( [ sh:class pc:Procedure ] [ sh:class skos:Concept ] ) ] ;
+  sh:property [ sh:path pc:condition ; sh:node pc:ConditionShape ] ;
+  sh:property [ sh:path pc:waives ; sh:minCount 1 ; sh:maxCount 1 ; sh:class skos:Concept ] ;
+  sh:property [ sh:path pc:replacement ; sh:maxCount 1 ; sh:class skos:Concept ] ;
+  sh:property [ sh:path pc:justification ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path pc:authority ; sh:minCount 1 ; sh:maxCount 1 ; sh:node pc:AuthorityShape ] ;
+  sh:property [ sh:path pc:approval ; sh:minCount 1 ; sh:maxCount 1 ; sh:node pc:ApprovalShape ] ;
+  sh:property [ sh:path dcterms:replaces ; sh:class pc:Exception ] .
+
+pc:ConditionShape a sh:NodeShape ;
+  sh:nodeKind sh:BlankNode ;
+  sh:closed true ;
+  sh:property [ sh:path pc:name ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path pc:value ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] .
+
+pc:AuthorityShape a sh:NodeShape ;
+  sh:nodeKind sh:BlankNode ;
+  sh:closed true ;
+  sh:property [ sh:path pc:level ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ( "corpus" "domain" "project" ) ] ;
+  sh:property [ sh:path pc:domain ; sh:maxCount 1 ; sh:class pc:Domain ] ;
+  sh:property [ sh:path pc:repository ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path pc:path ; sh:maxCount 1 ] .
+
+pc:ApprovalShape a sh:NodeShape ;
+  sh:nodeKind sh:BlankNode ;
+  sh:closed true ;
+  sh:property [ sh:path pc:reference ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path pc:key ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path pc:validFrom ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:dateTime ] ;
+  sh:property [ sh:path pc:validUntil ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:dateTime ] ;
+  sh:property [ sh:path pc:signature ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] .

@@ -13,10 +13,14 @@ import (
 	_ "github.com/ashuangiras/polaroid/internal/gitcore"
 	_ "github.com/ashuangiras/polaroid/internal/knowledge"
 	_ "github.com/ashuangiras/polaroid/internal/knowledge/gitstore"
+	_ "github.com/ashuangiras/polaroid/internal/knowledge/semantic"
 	_ "github.com/ashuangiras/polaroid/internal/knowledgeops"
 	_ "github.com/ashuangiras/polaroid/internal/knowledgesync"
 	_ "github.com/ashuangiras/polaroid/internal/lifecycle"
 	_ "github.com/ashuangiras/polaroid/internal/memory"
+	_ "github.com/ashuangiras/polaroid/internal/reasoning"
+	_ "github.com/ashuangiras/polaroid/internal/reasoning/datalog"
+	_ "github.com/ashuangiras/polaroid/internal/reasoning/policy"
 	_ "github.com/ashuangiras/polaroid/internal/recovery"
 	_ "github.com/ashuangiras/polaroid/internal/storage/sqlite"
 	_ "github.com/ashuangiras/polaroid/internal/transport/http"
@@ -38,6 +42,12 @@ func TestPackageBoundaries(t *testing.T) {
 	// path (ADR-0048): a package that must not reach Git-core or the kernel
 	// directly must not reach it through knowledgeops either.
 	knowledgeAll := append(slices.Clone(knowledge), module+"/internal/knowledgeops")
+	notKnowledgeInfra := []string{module + "/internal/gitcore", "github.com/go-git", module + "/internal/knowledge/gitstore", module + "/internal/knowledgesync",
+		module + "/internal/knowledgeops", module + "/internal/memory", module + "/internal/transport", module + "/internal/recovery", module + "/internal/lifecycle"}
+	mangle := []string{"codeberg.org/TauCeti/mangle-go", "github.com/google/mangle"}
+	rdf := []string{"github.com/tggo/goRDFlib", "github.com/piprate/json-gold"}
+	rdfInfra := []string{"github.com/tggo/goRDFlib/store/sqlitestore", "github.com/tggo/goRDFlib/store/badgerstore", "github.com/tggo/goRDFlib/store/sparqlstore",
+		"github.com/tggo/goRDFlib/endpoint", "github.com/tggo/goRDFlib/rdfloader", "github.com/dgraph-io"}
 	rules := []struct {
 		pkg       string
 		forbidden []string
@@ -48,7 +58,8 @@ func TestPackageBoundaries(t *testing.T) {
 		// The knowledge domain sees storage only through its Store port: no
 		// Git, no SQL, no transport, no legacy records.
 		{"internal/knowledge", slices.Concat(storage, []string{"net/http", module + "/internal/gitcore", "github.com/go-git",
-			module + "/internal/knowledge/gitstore", module + "/internal/knowledgesync", module + "/internal/knowledgeops", module + "/internal/memory", module + "/internal/transport",
+			module + "/internal/knowledge/gitstore", module + "/internal/knowledge/semantic", module + "/internal/reasoning",
+			module + "/internal/knowledgesync", module + "/internal/knowledgeops", module + "/internal/memory", module + "/internal/transport",
 			module + "/internal/recovery", module + "/internal/lifecycle"})},
 		// The adapter joins the domain to Git-core and nothing else.
 		{"internal/knowledge/gitstore", slices.Concat(storage, []string{module + "/internal/memory", module + "/internal/knowledgesync", module + "/internal/knowledgeops",
@@ -85,6 +96,30 @@ func TestPackageBoundaries(t *testing.T) {
 		// Git-native knowledge paths (ADR-0048): it is the only place that may
 		// wire knowledge, knowledgesync, gitcore and knowledgeops in, so it is
 		// unrestricted here.
+
+		// Corpus Logic (ADR-0050). The semantic adapter joins the record model
+		// to goRDFlib and json-gold, in memory only: no persistent graph store,
+		// SPARQL endpoint or remote RDF loader. (github.com/google/uuid, through
+		// goRDFlib's terms, compiles the interface-only database/sql/driver.)
+		{"internal/knowledge/semantic", slices.Concat([]string{"modernc.org/sqlite", module + "/internal/storage", module + "/cmd"},
+			notKnowledgeInfra, mangle, rdfInfra, []string{module + "/internal/reasoning"})},
+		// Reasoning is pure: no Git, storage, transport, network, or library
+		// implementation; it reaches Mangle only through its Evaluator contract.
+		{"internal/reasoning", slices.Concat(storage, notKnowledgeInfra, mangle, rdf, []string{"net/http",
+			module + "/internal/knowledge/semantic", module + "/internal/reasoning/datalog"})},
+		{"internal/reasoning/policy", slices.Concat(storage, notKnowledgeInfra, mangle, rdf, []string{"net/http",
+			module + "/internal/knowledge/semantic", module + "/internal/reasoning/datalog"})},
+		// The Mangle adapter is the only package that imports Mangle.
+		{"internal/reasoning/datalog", slices.Concat(storage, notKnowledgeInfra, rdf, []string{"net/http", module + "/internal/knowledge/semantic"})},
+	}
+	// Only the two adapters import the libraries they adapt.
+	for i, r := range rules {
+		if r.pkg != "internal/knowledge/semantic" {
+			rules[i].forbidden = append(rules[i].forbidden, rdf...)
+		}
+		if r.pkg != "internal/reasoning/datalog" {
+			rules[i].forbidden = append(rules[i].forbidden, mangle...)
+		}
 	}
 	for _, rule := range rules {
 		deps := goList(t, root, "-deps", "-f", "{{.ImportPath}}", module+"/"+rule.pkg)

@@ -58,6 +58,12 @@ func NewAgentHandler(agent AgentKnowledge, logger *slog.Logger) http.Handler {
 	return handler(newAgentServer(agent, logger), logger)
 }
 
+// NewAgentHandlerV2 returns agent mode v2 (ADR-0050): the v1 tools, with
+// the same contracts, plus resolve.
+func NewAgentHandlerV2(agent AgentKnowledge, resolver AgentResolver, logger *slog.Logger) http.Handler {
+	return handler(newAgentServerV2(agent, resolver, logger), logger)
+}
+
 func handler(server *sdk.Server, logger *slog.Logger) http.Handler {
 	h := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, &sdk.StreamableHTTPOptions{
 		Stateless:           true,
@@ -91,8 +97,10 @@ func baseServer(instructions string, logger *slog.Logger) *sdk.Server {
 type tools struct {
 	svc *memory.Service
 	// agent is set only for the agent-mode server; full mode never reads it.
-	agent  AgentKnowledge
-	logger *slog.Logger
+	agent AgentKnowledge
+	// resolver is set only for agent mode v2.
+	resolver AgentResolver
+	logger   *slog.Logger
 }
 
 // Free-form JSON objects are advertised as objects; everything else is
@@ -130,7 +138,7 @@ func add[In any](s *sdk.Server, t *tools, name, description string, readOnly boo
 				}
 				return t.failure(detail), nil
 			}
-			body, err := json.Marshal(out)
+			body, err := json.Marshal(out, json.Deterministic(true))
 			if err != nil {
 				t.logger.ErrorContext(ctx, "mcp encode result", "tool", name, "error", err)
 				return t.failure(wire.Internal), nil

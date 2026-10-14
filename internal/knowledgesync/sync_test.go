@@ -355,6 +355,291 @@ func TestUntrustedKnowledgeIsRejected(t *testing.T) {
 	}
 }
 
+type acceptRecords struct{}
+
+func (acceptRecords) ValidateRecords(context.Context, []knowledge.RecordDocument) error { return nil }
+
+// A fetched publication that changes a rule's semantics under the same
+// revision, written behind the publisher's kernel, is rejected at
+// validation (ADR-0050): rule governance holds across instances.
+func TestFetchedRuleGovernance(t *testing.T) {
+	ctx := context.Background()
+	remote := bareRemote(t)
+	open := func() *instance {
+		repo, err := gitcore.Open(t.TempDir(), gitcore.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = repo.Close() })
+		s, err := knowledgesync.New(repo, team(remote, "alice"), knowledge.WithRecordValidator(acceptRecords{}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &instance{repo: repo, sync: s, k: s.Kernel()}
+	}
+	a, b := open(), open()
+	s0, err := a.k.Publish(ctx, knowledge.Proposal{Changes: knowledgetest.CorpusProcedures(),
+		Provenance: knowledge.Provenance{Author: "alice", Summary: "procedures", Rationale: "Because."}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s1, err := a.k.Publish(ctx, knowledge.Proposal{Base: s0, Records: knowledgetest.CorpusRecordChanges(),
+		Provenance: knowledge.Provenance{Author: "alice", Summary: "corpus", Rationale: "Because."}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.push(t)
+	if err := b.sync.Activate(ctx, b.fetchValidated(t, "team"), decision("operator.b")); err != nil {
+		t.Fatal(err)
+	}
+	cat, err := a.k.At(ctx, s1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule, err := cat.Record("rule.software.tests")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule.Statement = "Only some software needs tests."
+	doc, err := knowledge.EncodeRecord(rule)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.repo.Publish(ctx, gitcore.Publication{Expected: gitcore.Snapshot(s1), Author: "alice", Subject: "weaken", Body: "no kernel",
+		Changes: []gitcore.Change{{Path: knowledge.RecordPath(rule.Type, rule.Key), Content: doc}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.repo.Push(ctx, gitcore.Remote{Name: "team", URL: remote}, none); err != nil {
+		t.Fatal(err)
+	}
+	c, err := b.sync.Fetch(ctx, "team", none)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.sync.Validate(ctx, c); !errors.Is(err, knowledgesync.ErrRejected) || !strings.Contains(err.Error(), "its revision must rise above 1") {
+		t.Fatalf("validate: %v", err)
+	}
+	if b.active(t) != s1 {
+		t.Fatal("a rejected candidate changed the active knowledge")
+	}
+
+	// Rollback trailers in fetched history are the remote's claims and grant
+	// no exemption: "restoring" the original rule under the same revision
+	// is refused, and so is removing the protected rule.
+	weakened, _ := a.repo.Active(ctx)
+	orig, err := cat.Record("rule.software.tests")
+	if err != nil {
+		t.Fatal(err)
+	}
+	origDoc, err := knowledge.EncodeRecord(orig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := a.repo.Publish(ctx, gitcore.Publication{Expected: weakened, Author: "alice", Subject: "restore", Body: "no kernel",
+		Trailers: []gitcore.Trailer{{Key: knowledge.TrailerRollback, Value: string(s1)}},
+		Changes:  []gitcore.Change{{Path: knowledge.RecordPath(orig.Type, orig.Key), Content: origDoc}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed, err := a.repo.Publish(ctx, gitcore.Publication{Expected: restored, Author: "alice", Subject: "remove", Body: "no kernel",
+		Trailers: []gitcore.Trailer{{Key: knowledge.TrailerRollback, Value: string(s0)}},
+		Changes:  []gitcore.Change{{Path: knowledge.RecordPath(orig.Type, orig.Key), Delete: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.repo.Push(ctx, gitcore.Remote{Name: "team", URL: remote}, none); err != nil {
+		t.Fatal(err)
+	}
+	c, err = b.sync.Fetch(ctx, "team", none)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = b.sync.Validate(ctx, c)
+	for _, want := range []string{
+		"snapshot " + string(restored) + ": invalid knowledge: records[rule.software.tests].revision: the rule's semantics changed",
+		"snapshot " + string(removed) + ": invalid knowledge: records[rule.software.tests]: is a protected invariant and cannot be removed",
+	} {
+		if !errors.Is(err, knowledgesync.ErrRejected) || !strings.Contains(err.Error(), want) {
+			t.Fatalf("validate with forged rollback trailers: %v\nwant %s", err, want)
+		}
+	}
+}
+
+// A → B → rollback C restoring A's semantics, over a real Git remote: the
+// rollback is an ordinary publication whose restored rules take new
+// revisions, so an independent instance that already has B, and a fresh
+// one that has nothing, both fetch, validate and activate C (ADR-0050).
+func TestRollbackSynchronises(t *testing.T) {
+	ctx := context.Background()
+	remote := bareRemote(t)
+	open := func() *instance {
+		repo, err := gitcore.Open(t.TempDir(), gitcore.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = repo.Close() })
+		s, err := knowledgesync.New(repo, team(remote, "alice"), knowledge.WithRecordValidator(acceptRecords{}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &instance{repo: repo, sync: s, k: s.Kernel()}
+	}
+	pv := func(summary string) knowledge.Provenance {
+		return knowledge.Provenance{Author: "alice", Summary: summary, Rationale: "Because " + summary + "."}
+	}
+	a, b := open(), open()
+	sA, err := a.k.Publish(ctx, knowledge.Proposal{Changes: knowledgetest.CorpusProcedures(), Records: knowledgetest.CorpusRecordChanges(), Provenance: pv("corpus")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.push(t)
+	if err := b.sync.Activate(ctx, b.fetchValidated(t, "team"), decision("operator.b")); err != nil {
+		t.Fatal(err)
+	}
+	catA, err := a.k.At(ctx, sA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vet, err := catA.Record("rule.go.vet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vetB := vet.Clone()
+	vetB.Program, vetB.Revision = `obligation(P, "check.vet") :- record(P, "Procedure").`, 2
+	sB, err := a.k.Publish(ctx, knowledge.Proposal{Base: sA, Records: []knowledge.RecordChange{{Key: vetB.Key, Record: vetB}}, Provenance: pv("widen vet")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.push(t)
+	if err := b.sync.Activate(ctx, b.fetchValidated(t, "team"), decision("operator.b")); err != nil {
+		t.Fatal(err)
+	}
+	sC, err := a.k.Rollback(ctx, sB, sA, pv("roll back the vet change"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.push(t)
+
+	check := func(t *testing.T, in *instance) {
+		t.Helper()
+		if in.active(t) != sC {
+			t.Fatalf("active %s, want %s", in.active(t), sC)
+		}
+		c, err := in.k.At(ctx, sC)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, err := c.Record("rule.go.vet")
+		if err != nil || r.Revision != 3 || knowledge.RuleDigest(r) != knowledge.RuleDigest(vet) {
+			t.Fatalf("restored rule %+v, %v", r, err)
+		}
+		h, err := in.k.History(ctx, sC, 3)
+		if err != nil || len(h) != 3 || h[0].RollbackTo != sA || h[1].Snapshot != sB || h[2].Snapshot != sA {
+			t.Fatalf("history %+v, %v", h, err)
+		}
+		old, err := in.k.At(ctx, sB)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r, _ := old.Record("rule.go.vet"); r.Revision != 2 || r.Program != vetB.Program {
+			t.Fatalf("snapshot B changed: %+v", r)
+		}
+	}
+	cand := b.fetchValidated(t, "team")
+	if cand.Status != knowledgesync.FastForward {
+		t.Fatalf("candidate status %s", cand.Status)
+	}
+	if err := b.sync.Activate(ctx, cand, decision("operator.b")); err != nil {
+		t.Fatalf("activating the rollback: %v", err)
+	}
+	t.Run("instance with B", func(t *testing.T) { check(t, b) })
+	fresh := open()
+	if err := fresh.sync.Activate(ctx, fresh.fetchValidated(t, "team"), decision("operator.fresh")); err != nil {
+		t.Fatalf("fresh instance: %v", err)
+	}
+	t.Run("fresh instance", func(t *testing.T) { check(t, fresh) })
+}
+
+// Every fetched edge is checked, including the one from a snapshot that was
+// imported earlier and never activated: a remote that removes a rule and
+// adds it back at a revision an approval was cancelled for is rejected, so
+// the cancelled approval can never match again (ADR-0050).
+func TestFetchedEdgesFromImportedHistory(t *testing.T) {
+	ctx := context.Background()
+	remote := bareRemote(t)
+	open := func() *instance {
+		repo, err := gitcore.Open(t.TempDir(), gitcore.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = repo.Close() })
+		s, err := knowledgesync.New(repo, team(remote, "alice"), knowledge.WithRecordValidator(acceptRecords{}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &instance{repo: repo, sync: s, k: s.Kernel()}
+	}
+	pv := func(summary string) knowledge.Provenance {
+		return knowledge.Provenance{Author: "alice", Summary: summary, Rationale: "Because " + summary + "."}
+	}
+	a, b := open(), open()
+	s1, err := a.k.Publish(ctx, knowledge.Proposal{Changes: knowledgetest.CorpusProcedures(), Records: knowledgetest.CorpusRecordChanges(), Provenance: pv("corpus")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.push(t)
+	if err := b.sync.Activate(ctx, b.fetchValidated(t, "team"), decision("operator.b")); err != nil {
+		t.Fatal(err)
+	}
+	cat, _ := a.k.At(ctx, s1)
+	vet, _ := cat.Record("rule.go.vet")
+	v2, v3 := vet.Clone(), vet.Clone()
+	v2.Program, v2.Revision = `obligation(P, "check.vet") :- record(P, "Procedure").`, 2
+	v3.Program, v3.Revision = v2.Program, 3
+	v3.Statement = "Every procedure requires go vet, again."
+	p1, err := a.k.Publish(ctx, knowledge.Proposal{Base: s1, Records: []knowledge.RecordChange{{Key: v2.Key, Record: v2}}, Provenance: pv("widen vet")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.k.Publish(ctx, knowledge.Proposal{Base: p1, Records: []knowledge.RecordChange{{Key: v3.Key, Record: v3}}, Provenance: pv("cancel approvals")}); err != nil {
+		t.Fatal(err)
+	}
+	a.push(t)
+	if c := b.fetchValidated(t, "team"); c.Status != knowledgesync.FastForward {
+		t.Fatalf("first candidate %s", c.Status)
+	}
+	// Behind the kernel: remove the rule, then add it back at revision 2.
+	p2, _ := a.repo.Active(ctx)
+	path := knowledge.RecordPath(vet.Type, vet.Key)
+	removed, err := a.repo.Publish(ctx, gitcore.Publication{Expected: p2, Author: "alice", Subject: "remove", Body: "no kernel",
+		Changes: []gitcore.Change{{Path: path, Delete: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := knowledge.EncodeRecord(v2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.repo.Publish(ctx, gitcore.Publication{Expected: removed, Author: "alice", Subject: "re-add", Body: "no kernel",
+		Changes: []gitcore.Change{{Path: path, Content: doc}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.repo.Push(ctx, gitcore.Remote{Name: "team", URL: remote}, none); err != nil {
+		t.Fatal(err)
+	}
+	c, err := b.sync.Fetch(ctx, "team", none)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "snapshot " + string(removed) + ": invalid knowledge: records[rule.go.vet]: is a published rule and cannot be removed"
+	if err := b.sync.Validate(ctx, c); !errors.Is(err, knowledgesync.ErrRejected) || !strings.Contains(err.Error(), want) {
+		t.Fatalf("validate: %v\nwant %s", err, want)
+	}
+	if b.active(t) != s1 {
+		t.Fatal("a rejected candidate changed the active knowledge")
+	}
+}
+
 // A candidate validated against a snapshot that is no longer active cannot
 // be activated; whichever of the activation and a local publication comes
 // first wins, and the other is refused.
