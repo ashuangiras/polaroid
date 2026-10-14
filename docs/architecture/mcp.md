@@ -105,20 +105,25 @@ It serves the same `discover`, `read` and `feedback` tools, with input schemas i
 
 | Tool | Read-only | Arguments | Result |
 | --- | --- | --- | --- |
-| `resolve` | yes | `goal` (a record key: a procedure, concept or claim); `snapshot` (default: the active knowledge), `context` (an object of string name and value pairs) and `at` (RFC 3339; default now) optional | `{version, snapshot, goal, at, applicable, specializations, obligations, derived, exceptions, conflicts, unknowns, evidence, superseded}` |
+| `resolve` | yes | `goal` (a record key: a procedure, concept or claim); `snapshot` (default: the active knowledge), `context` (an object of string name and value pairs), `then` (a procedure key to compose after the goal) and `at` (RFC 3339; default now) optional | `{version, snapshot, goal, at, complete, incomplete, applicable, specializations, obligations, derived, exceptions, conflicts, unknowns, evidence, superseded, composition}` |
 
 The result members mean:
 
+- **`complete`**: whether every conclusion the missing context could add was examined. When it is false, **`incomplete`** says what could not be enumerated: a rule that reads a context name or value it does not fix, or more than 64 combinations of missing values. Unknowns are then not exhaustive.
 - **`obligations`**: each requirement with every independent derivation `{id, source, source_type, via, path, status, exception}`. The status is `required` while any derivation is active, otherwise `waived`.
 - **`exceptions`**: each exception that concerns the goal, with its status: `applied`, `rejected`, `not_applicable` or `conflicting`, and a reason.
-- **`unknowns`**: what a missing `context` value could change.
+- **`conflicts`**: requirements that contradict each other, conflicting exceptions, and `undefined_requirement` for a derived requirement that is not a concept.
+- **`unknowns`**: each conclusion that holds only for context the caller did not give, `{kind, requirement or predicate and object, source, when, reason}`. `kind` is `obligation` or `derived`; `when` lists the `{name, value}` pairs it needs.
 - **`evidence`**: each claim's evidence status (`supported`, `contradicted`, `contested`, `unsupported`). It summarises the evidence and is never a verdict.
+- **`composition`**, with `then`: `{verdict, producer, consumer, findings}`. The verdict is `compatible`, `incompatible` or `undetermined`; `producer` and `consumer` are the two formal contracts (inputs, outputs, whether the outputs are complete, pre-, post-conditions, invariants, informal conditions); each finding covers one consumer input, precondition or informal condition, and those not `satisfied` or `established` are the missing prerequisites. Composition reads only the snapshot, never `context`.
 
-Resolution is deterministic. The same snapshot, `context`, `at` and trust material give byte-identical results, and every derivation `id` is a SHA-256-based identifier you can reconstruct by resolving the same request again.
+`context` is what the caller asserts. It selects which rules apply, but never authorises an exception: project-scoped exceptions and exception conditions need context the server established itself, and this endpoint establishes none. They are reported `not_applicable`, with a reason that says when the caller asserted a matching value. Protected invariants are never waived, at any authority.
+
+Resolution is deterministic. The same snapshot, `context`, `at` and trust material give byte-identical results. A derivation `id` is the first 16 bytes, in hex, of SHA-256 over the reasoning version, the snapshot, the goal and the derivation's parts, joined by NUL bytes ([ADR-0050](decisions/0050-corpus-logic.md)); anyone holding the snapshot can recompute it. It identifies the derivation, not its status.
 
 Requests can fail with these codes:
 
-- `not_found`: the goal is not a record of the snapshot.
+- `not_found`: the goal, or `then`, is not a record of the snapshot.
 - `invalid_request`.
 - `budget_exceeded` (HTTP 422): the evaluation exceeded its time or fact limits. A budget failure never returns a partial result.
 
