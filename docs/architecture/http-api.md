@@ -677,6 +677,8 @@ Example `invalid_request` response:
 
 ## Git-native knowledge (operator API)
 
+See [knowledge-guide.md](knowledge-guide.md) for a practical, worked-example guide to initializing a repository's Git-native knowledge, retrieving it as an agent, and storing it as an operator; this section is its normative API reference.
+
 [ADR-0048](decisions/0048-git-native-agent-interface.md) adds a second, separate knowledge authority: living procedural knowledge in a Git-core repository, read by canonical key at an opaque snapshot token, with no procedure version, binding or evidence-based selection. It has its own agent interface (MCP agent mode at `/mcp/agent`, three tools: `discover`, `read`, `feedback`; see [mcp.md](mcp.md)) and this separate, explicit, operator-only HTTP surface at `/v1/knowledge/*`. Nothing here is reachable from agent mode, there is no scheduler, and nothing on this surface writes to or reads from the `/v1/procedures` catalog above: the two authorities never mix, and this milestone migrates no record between them.
 
 - **Authentication:** every request, reads included, must carry the daemon's generated operator token in `Polaroid-Operator-Token`, checked in constant time. Binding to loopback is not treated as sufficient authorisation by itself, since other local processes can reach a loopback-bound port too. The token is generated on first start at `<knowledge-dir>-operator-token` (mode 0600, alongside the default `~/.polaroid/data/knowledge` directory) and read on every later start; `polaroid`'s `knowledge-*` commands send it from `$POLAROID_KNOWLEDGE_TOKEN`.

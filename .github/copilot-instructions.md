@@ -4,7 +4,7 @@ Follow [AGENTS.md](../AGENTS.md). It is the canonical rule set for this reposito
 
 - Path-specific rules in `.github/instructions/*.instructions.md` apply automatically to matching files: storage, and the HTTP API and CLI.
 - Copilot Chat in VS Code: the workspace's `.vscode/mcp.json` names the MCP servers.
-  - `polaroid-agent` (`http://127.0.0.1:7417/mcp/agent`) is the knowledge interface: `discover`, then `read`, then `feedback`.
+  - `polaroid-agent` (`http://127.0.0.1:7417/mcp/agent/v2`) is the knowledge interface: `discover`, then `read`, then `feedback`; `resolve` reasons over typed records (Corpus Logic, ADR-0050) once this repository's Corpus holds domains, concepts and rules. [docs/architecture/knowledge-guide.md](../docs/architecture/knowledge-guide.md) is the full usage guide.
   - `dispatch` runs commands and keeps their output.
   - `polaroid` (`/mcp`) is the operator and evidence interface. Do not use it for procedural knowledge.
 

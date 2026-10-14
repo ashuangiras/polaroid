@@ -80,6 +80,8 @@ Field names in `fields` are the flat argument names. For example, a missing `phi
 
 ## Agent mode (`/mcp/agent`)
 
+See [knowledge-guide.md](knowledge-guide.md) for a practical, worked-example guide to using agent mode in a repository (setup, discover/read/resolve/feedback, storing knowledge); this section and the next are its normative tool contract.
+
 **Finalized, under the v1 compatibility guarantee** ([ADR-0038](decisions/0038-stable-releases-and-compatibility.md), amended by [ADR-0043](decisions/0043-knowledge-first-agent-mode.md), built on Git-native living knowledge by [ADR-0048](decisions/0048-git-native-agent-interface.md), finalized by [ADR-0049](decisions/0049-agent-mode-finalized-no-migration.md)): the same stability promise as `/mcp` applies to its three tools, their arguments and their result shapes.
 
 A second endpoint on the same listener, with the same transport rules, serves only the three tools everyday procedural-knowledge use needs ([ADR-0043](decisions/0043-knowledge-first-agent-mode.md)). A client connected to it never loads the full API's schemas, and nothing it does records an execution. It is backed solely by living knowledge in a separate, Git-native store ([ADR-0045](decisions/0045-living-knowledge-kernel.md)), named only by canonical key and an opaque snapshot token: there is no procedure version, binding, or evidence-based selection anywhere in this mode, and it shares no record with `/mcp`'s procedures, versions, bindings, executions or verifications.
@@ -99,7 +101,7 @@ A second endpoint on the same listener, with the same transport rules, serves on
 
 ## Agent mode v2 (`/mcp/agent/v2`)
 
-**Proposed with Corpus Logic v1** ([ADR-0050](decisions/0050-corpus-logic.md)). This is a separate, versioned endpoint; `/mcp/agent` above is unchanged.
+**Implemented with Corpus Logic v1** ([ADR-0050](decisions/0050-corpus-logic.md), merged as PR #143). This is a separate, versioned endpoint; `/mcp/agent` above is unchanged.
 
 It serves the same `discover`, `read` and `feedback` tools, with input schemas identical to v1's (a test compares them), plus one read-only tool:
 
