@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"math"
 	"regexp"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -139,10 +137,10 @@ func (pv Provenance) check(p *problems) {
 // the base is no longer active, and a ValidationError if the resulting
 // catalog is not valid; nothing is published in either case.
 func (k *Kernel) Publish(ctx context.Context, prop Proposal) (Snapshot, error) {
-	return k.publish(ctx, prop, nil, nil)
+	return k.publish(ctx, prop, nil)
 }
 
-func (k *Kernel) publish(ctx context.Context, prop Proposal, extra []Trailer, restoring *Catalog) (Snapshot, error) {
+func (k *Kernel) publish(ctx context.Context, prop Proposal, extra []Trailer) (Snapshot, error) {
 	var p problems
 	prop.Provenance.check(&p)
 	if len(prop.Changes)+len(prop.Records) == 0 {
@@ -269,7 +267,7 @@ func (k *Kernel) publish(ctx context.Context, prop Proposal, extra []Trailer, re
 	if err := checkCatalog(procs, records); err != nil {
 		return "", err
 	}
-	if err := CheckTransition(base, newCatalog("", procs, records), restoring); err != nil {
+	if err := CheckTransition(base, newCatalog("", procs, records)); err != nil {
 		return "", err
 	}
 	if err := validateRecords(ctx, k.validators, records); err != nil {
@@ -356,9 +354,18 @@ func (k *Kernel) Rollback(ctx context.Context, base, to Snapshot, pv Provenance)
 	}
 	var records []RecordChange
 	for _, key := range old.recordKeys {
-		if r, ok := cur.records[key]; !ok || !equalRecords(r, old.records[key]) {
-			records = append(records, RecordChange{Key: key, Record: old.records[key]})
+		r, ok := cur.records[key]
+		if ok && equalRecords(r, old.records[key]) {
+			continue
 		}
+		restored := old.records[key].Clone()
+		if restored.Type == TypeRule {
+			restored.Revision = restoredRevision(r, restored)
+		}
+		if ok && equalRecords(r, restored) {
+			continue
+		}
+		records = append(records, RecordChange{Key: key, Record: restored})
 	}
 	for _, key := range cur.recordKeys {
 		if _, ok := old.records[key]; !ok {
@@ -368,25 +375,21 @@ func (k *Kernel) Rollback(ctx context.Context, base, to Snapshot, pv Provenance)
 	if len(changes)+len(records) == 0 {
 		return "", &ValidationError{Problems: []Problem{{Field: "to", Message: "the active knowledge already equals that snapshot"}}}
 	}
-	// Only governed knowledge is restored under the exemption: a snapshot
-	// published here, or the target of an activation, whose move from the
-	// active knowledge was checked. An intermediate snapshot an activation
-	// brought in was never checked itself, so restoring it gets none.
-	restoring := old
-	imported, err := k.store.Imported(ctx, to)
-	if err != nil {
-		return "", err
+	return k.publish(ctx, Proposal{Base: base, Changes: changes, Records: records, Provenance: pv}, []Trailer{{TrailerRollback, string(to)}})
+}
+
+// restoredRevision is the revision a rollback gives a restored rule: the
+// active one when the semantics do not change, otherwise one above both
+// the active and the restored revision, so approvals given for an earlier
+// revision never apply again (ADR-0050).
+func restoredRevision(active, restored *Record) int {
+	if active == nil || active.Type != TypeRule {
+		return restored.Revision + 1
 	}
-	if imported {
-		acts, err := k.store.Activations(ctx, math.MaxInt)
-		if err != nil {
-			return "", err
-		}
-		if !slices.ContainsFunc(acts, func(a ActivationEntry) bool { return a.Target == to }) {
-			restoring = nil
-		}
+	if RuleDigest(active) == RuleDigest(restored) {
+		return active.Revision
 	}
-	return k.publish(ctx, Proposal{Base: base, Changes: changes, Records: records, Provenance: pv}, []Trailer{{TrailerRollback, string(to)}}, restoring)
+	return max(active.Revision, restored.Revision) + 1
 }
 
 // Publication is one entry of the knowledge history.

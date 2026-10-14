@@ -152,11 +152,16 @@ const (
 )
 
 // Authority is who governs an exception: the whole corpus, one domain (and
-// its narrower domains), or one project repository.
+// its narrower domains), or one project repository. A domain authority's
+// Path is the chain of domains its approval covers, in order: a domain the
+// rule is classified in, each next one broader than the one before, ending
+// at Domain. The approval signs it, so a changed hierarchy never silently
+// widens or keeps an approval (ADR-0050).
 type Authority struct {
 	Level      AuthorityLevel
 	Domain     string
 	Repository string
+	Path       []string
 }
 
 // Approval is the signed approval of an exception (ADR-0050): an Ed25519
@@ -215,9 +220,10 @@ type portDoc struct {
 }
 
 type authorityDoc struct {
-	Level      string `json:"level"`
-	Domain     string `json:"domain,omitzero"`
-	Repository string `json:"repository,omitzero"`
+	Level      string   `json:"level"`
+	Domain     string   `json:"domain,omitzero"`
+	Repository string   `json:"repository,omitzero"`
+	Path       []string `json:"path,omitzero"`
 }
 
 type approvalDoc struct {
@@ -272,7 +278,7 @@ func EncodeRecord(r *Record) ([]byte, error) {
 		Waives: id(n.Waives), Replacement: id(n.Replacement), Justification: n.Justification,
 	}
 	if a := n.Authority; a != nil {
-		d.Authority = &authorityDoc{Level: string(a.Level), Domain: id(a.Domain), Repository: a.Repository}
+		d.Authority = &authorityDoc{Level: string(a.Level), Domain: id(a.Domain), Repository: a.Repository, Path: ids(a.Path)}
 	}
 	if a := n.Approval; a != nil {
 		d.Approval = &approvalDoc{Reference: a.Reference, Key: a.Key,
@@ -318,6 +324,7 @@ func (r *Record) Clone() *Record {
 	c.Asserts, c.Inputs, c.Outputs, c.Conditions = slices.Clone(r.Asserts), slices.Clone(r.Inputs), slices.Clone(r.Outputs), slices.Clone(r.Conditions)
 	if r.Authority != nil {
 		a := *r.Authority
+		a.Path = slices.Clone(r.Authority.Path)
 		c.Authority = &a
 	}
 	if r.Approval != nil {
@@ -406,7 +413,8 @@ func ParseRecord(b []byte) (*Record, error) {
 		r.Outputs = append(r.Outputs, Port{Name: port.Name, Concept: unid(fmt.Sprintf("outputs[%d].concept", i), port.Concept, &p)})
 	}
 	if a := d.Authority; a != nil {
-		r.Authority = &Authority{Level: AuthorityLevel(a.Level), Domain: unid("authority.domain", a.Domain, &p), Repository: a.Repository}
+		r.Authority = &Authority{Level: AuthorityLevel(a.Level), Domain: unid("authority.domain", a.Domain, &p), Repository: a.Repository,
+			Path: unids("authority.path", a.Path, &p)}
 	}
 	if a := d.Approval; a != nil {
 		ap := &Approval{Reference: a.Reference, Key: a.Key}

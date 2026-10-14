@@ -76,11 +76,9 @@ func checkGovernance(p *problems, records map[string]*Record) {
 // CheckTransition checks what may change from one published catalog to
 // the next (ADR-0050): a protected rule is never removed or unprotected, a
 // rule whose semantics change takes a higher revision, and a revision
-// never decreases. Rules equal to those of restoring, the catalog a
-// rollback restores, are exempt from the revision checks only, so a
-// rollback can return to earlier governed knowledge exactly but never
-// lifts a protection.
-func CheckTransition(prev, next, restoring *Catalog) error {
+// never decreases. Nothing is exempt, rollbacks included: a rollback
+// restores earlier semantics under a new revision (Kernel.Rollback).
+func CheckTransition(prev, next *Catalog) error {
 	var p problems
 	for _, k := range prev.recordKeys {
 		old := prev.records[k]
@@ -94,17 +92,8 @@ func CheckTransition(prev, next, restoring *Catalog) error {
 			if old.Protected {
 				p.add(field, "is a protected invariant and cannot be removed")
 			}
-			continue
 		case old.Protected && !cur.Protected:
 			p.add(field+".protected", "a protected invariant cannot be unprotected")
-			continue
-		}
-		if restoring != nil {
-			if r, had := restoring.records[k]; had && equalRecords(r, cur) {
-				continue
-			}
-		}
-		switch {
 		case cur.Revision < old.Revision:
 			p.add(field+".revision", "is %d, below the published revision %d", cur.Revision, old.Revision)
 		case RuleDigest(cur) != RuleDigest(old) && cur.Revision == old.Revision:

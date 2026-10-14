@@ -119,6 +119,19 @@ func (o *Operator) Publish(ctx context.Context, in wire.KnowledgePublishRequest)
 	return result, nil
 }
 
+// Rollback restores an earlier published snapshot's knowledge as a new
+// publication: restored rules take new revisions, and rule governance
+// applies as to any publication (ADR-0050).
+func (o *Operator) Rollback(ctx context.Context, in wire.KnowledgeRollbackRequest) (wire.KnowledgeRollbackResult, error) {
+	snap, err := o.kernel.Rollback(ctx, knowledge.Snapshot(in.Base), knowledge.Snapshot(in.To), knowledge.Provenance{
+		Author: in.Author, Summary: in.Summary, Rationale: in.Rationale, Validation: in.Validation,
+	})
+	if err != nil {
+		return wire.KnowledgeRollbackResult{}, classify(err)
+	}
+	return wire.KnowledgeRollbackResult{Snapshot: string(snap)}, nil
+}
+
 // Fetch transfers a source's knowledge into quarantine, replacing any
 // earlier fetched candidate for that source.
 func (o *Operator) Fetch(ctx context.Context, source string, cred wire.KnowledgeCredentials) (wire.KnowledgeCandidateStatus, error) {

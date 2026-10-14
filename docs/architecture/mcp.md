@@ -105,7 +105,7 @@ It serves the same `discover`, `read` and `feedback` tools, with input schemas i
 
 | Tool | Read-only | Arguments | Result |
 | --- | --- | --- | --- |
-| `resolve` | yes | `goal` (a record key: a procedure, concept or claim); `snapshot` (default: the active knowledge), `context` (an object of string name and value pairs), `then` (a procedure key to compose after the goal) and `at` (RFC 3339; default now) optional | `{version, snapshot, goal, at, complete, incomplete, applicable, specializations, obligations, derived, exceptions, conflicts, unknowns, evidence, superseded, composition}` |
+| `resolve` | yes | `goal` (a record key: a procedure, concept or claim); `snapshot` (default: the active knowledge), `context` (an object of string name and value pairs), `assertions` (signed context assertions, below), `then` (a procedure key to compose after the goal) and `at` (RFC 3339; default now) optional | `{version, snapshot, goal, at, trusted, complete, incomplete, applicable, specializations, obligations, derived, exceptions, conflicts, unknowns, evidence, superseded, composition}` |
 
 The result members mean:
 
@@ -117,9 +117,9 @@ The result members mean:
 - **`evidence`**: each claim's evidence status (`supported`, `contradicted`, `contested`, `unsupported`). It summarises the evidence and is never a verdict.
 - **`composition`**, with `then`: `{verdict, producer, consumer, findings}`. The verdict is `compatible`, `incompatible` or `undetermined`; `producer` and `consumer` are the two formal contracts (inputs, outputs, whether the outputs are complete, pre-, post-conditions, invariants, informal conditions); each finding covers one consumer input, precondition or informal condition, and those not `satisfied` or `established` are the missing prerequisites. Composition reads only the snapshot, never `context`.
 
-`context` is what the caller asserts. It selects which rules apply, but never authorises an exception: project-scoped exceptions and exception conditions need context the server established itself, and this endpoint establishes none. They are reported `not_applicable`, with a reason that says when the caller asserted a matching value. Protected invariants are never waived, at any authority.
+`context` is what the caller asserts. It selects which rules apply, but never authorises an exception. Project-scoped exceptions and exception conditions need trusted context, which comes only from `assertions`: signed context assertions the caller was given, for example by its CI, each `{reference, key, repository, facts, valid_from, valid_until, signature}` with a base64 Ed25519 signature ([ADR-0050](decisions/0050-corpus-logic.md)). An assertion that is not signed by a trusted attestation key for its repository, that asserts a name the key may not assert, that is outside its validity at `at`, or that disagrees with another assertion, fails the request with `invalid_request`, and so does a `context` value that contradicts a trusted fact. The result's `trusted` is the trusted context used. Without assertions, project-scoped and conditional exceptions are reported `not_applicable`, with a reason that says when the caller asserted a matching value. A domain exception applies only while the domain path its approval signed still holds in the snapshot. Protected invariants are never waived, at any authority.
 
-Resolution is deterministic. The same snapshot, `context`, `at` and trust material give byte-identical results. A derivation `id` is the first 16 bytes, in hex, of SHA-256 over the reasoning version, the snapshot, the goal and the derivation's parts, joined by NUL bytes ([ADR-0050](decisions/0050-corpus-logic.md)); anyone holding the snapshot can recompute it. It identifies the derivation, not its status.
+Resolution is deterministic. The same snapshot, `context`, `assertions`, `at` and trust material give byte-identical results. A derivation `id` is the first 16 bytes, in hex, of SHA-256 over the reasoning version, the snapshot, the goal and the derivation's parts, joined by NUL bytes ([ADR-0050](decisions/0050-corpus-logic.md)); anyone holding the snapshot can recompute it. It identifies the derivation, not its status.
 
 Requests can fail with these codes:
 
@@ -127,7 +127,7 @@ Requests can fail with these codes:
 - `invalid_request`.
 - `budget_exceeded` (HTTP 422): the evaluation exceeded its time or fact limits. A budget failure never returns a partial result.
 
-Exceptions are verified against the operator-held trust material at `<knowledge-dir>-authorities.json` ([http-api.md](http-api.md#git-native-knowledge-operator-api)).
+Exceptions and assertions are verified against the operator-held trust material at `<knowledge-dir>-authorities.json` ([http-api.md](http-api.md#git-native-knowledge-operator-api)).
 
 ## Resources
 

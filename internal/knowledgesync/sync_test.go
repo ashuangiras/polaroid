@@ -465,6 +465,101 @@ func TestFetchedRuleGovernance(t *testing.T) {
 	}
 }
 
+// A → B → rollback C restoring A's semantics, over a real Git remote: the
+// rollback is an ordinary publication whose restored rules take new
+// revisions, so an independent instance that already has B, and a fresh
+// one that has nothing, both fetch, validate and activate C (ADR-0050).
+func TestRollbackSynchronises(t *testing.T) {
+	ctx := context.Background()
+	remote := bareRemote(t)
+	open := func() *instance {
+		repo, err := gitcore.Open(t.TempDir(), gitcore.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = repo.Close() })
+		s, err := knowledgesync.New(repo, team(remote, "alice"), knowledge.WithRecordValidator(acceptRecords{}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &instance{repo: repo, sync: s, k: s.Kernel()}
+	}
+	pv := func(summary string) knowledge.Provenance {
+		return knowledge.Provenance{Author: "alice", Summary: summary, Rationale: "Because " + summary + "."}
+	}
+	a, b := open(), open()
+	sA, err := a.k.Publish(ctx, knowledge.Proposal{Changes: knowledgetest.CorpusProcedures(), Records: knowledgetest.CorpusRecordChanges(), Provenance: pv("corpus")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.push(t)
+	if err := b.sync.Activate(ctx, b.fetchValidated(t, "team"), decision("operator.b")); err != nil {
+		t.Fatal(err)
+	}
+	catA, err := a.k.At(ctx, sA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vet, err := catA.Record("rule.go.vet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vetB := vet.Clone()
+	vetB.Program, vetB.Revision = `obligation(P, "check.vet") :- record(P, "Procedure").`, 2
+	sB, err := a.k.Publish(ctx, knowledge.Proposal{Base: sA, Records: []knowledge.RecordChange{{Key: vetB.Key, Record: vetB}}, Provenance: pv("widen vet")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.push(t)
+	if err := b.sync.Activate(ctx, b.fetchValidated(t, "team"), decision("operator.b")); err != nil {
+		t.Fatal(err)
+	}
+	sC, err := a.k.Rollback(ctx, sB, sA, pv("roll back the vet change"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.push(t)
+
+	check := func(t *testing.T, in *instance) {
+		t.Helper()
+		if in.active(t) != sC {
+			t.Fatalf("active %s, want %s", in.active(t), sC)
+		}
+		c, err := in.k.At(ctx, sC)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, err := c.Record("rule.go.vet")
+		if err != nil || r.Revision != 3 || knowledge.RuleDigest(r) != knowledge.RuleDigest(vet) {
+			t.Fatalf("restored rule %+v, %v", r, err)
+		}
+		h, err := in.k.History(ctx, sC, 3)
+		if err != nil || len(h) != 3 || h[0].RollbackTo != sA || h[1].Snapshot != sB || h[2].Snapshot != sA {
+			t.Fatalf("history %+v, %v", h, err)
+		}
+		old, err := in.k.At(ctx, sB)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r, _ := old.Record("rule.go.vet"); r.Revision != 2 || r.Program != vetB.Program {
+			t.Fatalf("snapshot B changed: %+v", r)
+		}
+	}
+	cand := b.fetchValidated(t, "team")
+	if cand.Status != knowledgesync.FastForward {
+		t.Fatalf("candidate status %s", cand.Status)
+	}
+	if err := b.sync.Activate(ctx, cand, decision("operator.b")); err != nil {
+		t.Fatalf("activating the rollback: %v", err)
+	}
+	t.Run("instance with B", func(t *testing.T) { check(t, b) })
+	fresh := open()
+	if err := fresh.sync.Activate(ctx, fresh.fetchValidated(t, "team"), decision("operator.fresh")); err != nil {
+		t.Fatalf("fresh instance: %v", err)
+	}
+	t.Run("fresh instance", func(t *testing.T) { check(t, fresh) })
+}
+
 // A candidate validated against a snapshot that is no longer active cannot
 // be activated; whichever of the activation and a local publication comes
 // first wins, and the other is refused.

@@ -64,6 +64,12 @@ var relations = []relation{
 		}
 		return one(r.Authority.Domain)
 	}, []RecordType{TypeException}, []RecordType{TypeDomain}, false},
+	{"authority.path", func(r *Record) []string {
+		if r.Authority == nil {
+			return nil
+		}
+		return r.Authority.Path
+	}, []RecordType{TypeException}, []RecordType{TypeDomain}, false},
 }
 
 // scalar is one non-relationship member: who may carry it, and whether it
@@ -193,6 +199,9 @@ func checkRecord(p *problems, field string, r *Record) {
 		p.add(field+".excepts", "names exactly one rule")
 	}
 	if a := r.Authority; a != nil {
+		if a.Level != AuthorityDomain && len(a.Path) > 0 {
+			p.add(field+".authority.path", "is admitted only for domain authority")
+		}
 		switch a.Level {
 		case AuthorityCorpus:
 			if a.Domain != "" || a.Repository != "" {
@@ -201,6 +210,12 @@ func checkRecord(p *problems, field string, r *Record) {
 		case AuthorityDomain:
 			if a.Domain == "" || a.Repository != "" {
 				p.add(field+".authority", "domain authority names a domain and no repository")
+			}
+			switch {
+			case len(a.Path) == 0 || a.Path[len(a.Path)-1] != a.Domain:
+				p.add(field+".authority.path", "must list the domains the approval covers, from one the rule is classified in to %s", a.Domain)
+			case len(slices.Compact(slices.Sorted(slices.Values(a.Path)))) != len(a.Path):
+				p.add(field+".authority.path", "must not repeat a domain")
 			}
 		case AuthorityProject:
 			if a.Domain != "" {

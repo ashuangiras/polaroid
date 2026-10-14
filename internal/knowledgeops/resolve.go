@@ -2,6 +2,7 @@ package knowledgeops
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -59,12 +60,22 @@ func (r *Resolver) Resolve(ctx context.Context, in wire.KnowledgeResolveRequest)
 	}
 	ctx, cancel := context.WithTimeout(ctx, ResolveTimeout)
 	defer cancel()
-	// Agent mode authenticates no project identity, so no trusted context is
-	// established: project-scoped and conditional exceptions fail closed here.
-	res, err := reasoning.Resolve(ctx, cat, r.ev, r.trust, reasoning.Request{Goal: in.Goal, Context: in.Context, Then: in.Then, At: at})
+	// Only verified assertions establish trusted context; without them,
+	// project-scoped and conditional exceptions fail closed.
+	assertions, err := decodeAssertions(in.Assertions)
+	if err != nil {
+		return wire.KnowledgeResolution{}, err
+	}
+	trusted, err := policy.Establish(r.trust, assertions, at)
+	if err != nil {
+		return wire.KnowledgeResolution{}, invalidField("assertions", err.Error())
+	}
+	res, err := reasoning.Resolve(ctx, cat, r.ev, r.trust, reasoning.Request{Goal: in.Goal, Context: in.Context, Trusted: trusted, Then: in.Then, At: at})
 	switch {
 	case errors.Is(err, reasoning.ErrUnknownGoal):
 		return wire.KnowledgeResolution{}, wire.NewKnowledgeError(http.StatusNotFound, wire.ErrorDetail{Code: "not_found", Message: err.Error()})
+	case errors.Is(err, reasoning.ErrContextConflict):
+		return wire.KnowledgeResolution{}, invalidField("context", err.Error())
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, reasoning.ErrBudget):
 		return wire.KnowledgeResolution{}, wire.NewKnowledgeError(http.StatusUnprocessableEntity, wire.ErrorDetail{Code: "budget_exceeded",
 			Message: fmt.Sprintf("resolution exceeded its budget (%s, or a fact limit): %v", ResolveTimeout, err)})
@@ -78,6 +89,25 @@ func (r *Resolver) Resolve(ctx context.Context, in wire.KnowledgeResolveRequest)
 	var out wire.KnowledgeResolution
 	if err := json.Unmarshal(b, &out, json.RejectUnknownMembers(true)); err != nil {
 		return wire.KnowledgeResolution{}, fmt.Errorf("resolution shape: %w", err)
+	}
+	return out, nil
+}
+
+func decodeAssertions(in []wire.KnowledgeAssertion) ([]policy.Assertion, error) {
+	var out []policy.Assertion
+	for i, a := range in {
+		field := fmt.Sprintf("assertions[%d]", i)
+		from, err1 := time.Parse(time.RFC3339, a.ValidFrom)
+		until, err2 := time.Parse(time.RFC3339, a.ValidUntil)
+		if err1 != nil || err2 != nil {
+			return nil, invalidField(field, "valid_from and valid_until must be RFC 3339 times")
+		}
+		sig, err := base64.StdEncoding.DecodeString(a.Signature)
+		if err != nil {
+			return nil, invalidField(field+".signature", "must be base64")
+		}
+		out = append(out, policy.Assertion{Reference: a.Reference, Key: a.Key, Repository: a.Repository, Facts: a.Facts,
+			ValidFrom: from, ValidUntil: until, Signature: sig})
 	}
 	return out, nil
 }

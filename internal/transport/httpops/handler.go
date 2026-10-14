@@ -47,6 +47,7 @@ func NewHandler(op *knowledgeops.Operator, token string, logger *slog.Logger) ht
 	a := &api{op: op, token: token, logger: logger, mux: http.NewServeMux()}
 	a.mux.HandleFunc("GET /v1/knowledge/status", a.status)
 	a.mux.HandleFunc("POST /v1/knowledge/publications", a.publish)
+	a.mux.HandleFunc("POST /v1/knowledge/rollbacks", a.rollback)
 	a.mux.HandleFunc("POST /v1/knowledge/sources/{name}/fetch", a.fetch)
 	a.mux.HandleFunc("POST /v1/knowledge/sources/{name}/validation", a.validate)
 	a.mux.HandleFunc("POST /v1/knowledge/sources/{name}/activation", a.activate)
@@ -84,6 +85,19 @@ func (a *api) publish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := a.op.Publish(r.Context(), body)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	a.respond(w, r, http.StatusCreated, res)
+}
+
+func (a *api) rollback(w http.ResponseWriter, r *http.Request) {
+	var body wire.KnowledgeRollbackRequest
+	if !decode(w, r, &body) {
+		return
+	}
+	res, err := a.op.Rollback(r.Context(), body)
 	if err != nil {
 		a.fail(w, r, err)
 		return
@@ -226,7 +240,7 @@ func writeError(w http.ResponseWriter, status int, detail wire.ErrorDetail) {
 // writeJSON writes v as the response body. If v cannot be encoded it sends
 // a generic internal error instead and returns the encoding error.
 func writeJSON(w http.ResponseWriter, status int, v any) error {
-	body, err := json.Marshal(v)
+	body, err := json.Marshal(v, json.Deterministic(true))
 	if err != nil {
 		status = http.StatusInternalServerError
 		body = []byte(`{"error":{"code":"internal","message":"internal error"}}`)

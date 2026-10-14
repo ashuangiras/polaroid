@@ -265,3 +265,19 @@ type KnowledgePublishResult struct {
 	Snapshot       string                    `json:"snapshot"`
 	Reconciliation *KnowledgeReconcileResult `json:"reconciliation,omitzero"`
 }
+
+// KnowledgeRollbackRequest restores, on top of Base, the knowledge of the
+// earlier published snapshot To, as a new publication (ADR-0050).
+type KnowledgeRollbackRequest struct {
+	Base       string `json:"base"`
+	To         string `json:"to"`
+	Author     string `json:"author"`
+	Summary    string `json:"summary"`
+	Rationale  string `json:"rationale"`
+	Validation string `json:"validation,omitzero"`
+}
+
+// KnowledgeRollbackResult is a rollback call's result.
+type KnowledgeRollbackResult struct {
+	Snapshot string `json:"snapshot"`
+}

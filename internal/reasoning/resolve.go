@@ -68,10 +68,14 @@ var Heads = map[string]string{"obligation/2": "own_obligation", "derived/3": "de
 // ErrUnknownGoal: the goal is not a record of the snapshot.
 var ErrUnknownGoal = errors.New("goal is not a record in this snapshot")
 
+// ErrContextConflict: the caller's context contradicts trusted context.
+var ErrContextConflict = errors.New("the context contradicts trusted context")
+
 // Request is one resolution's input besides the snapshot and trust.
 // Context is what the caller asserts: it can add obligations and decide
-// unknowns, but never authorise a waiver. Trusted is context the server
-// established itself (for example an authenticated project identity); an
+// unknowns, but never authorise a waiver. Trusted is context established
+// independently of the caller (policy.Establish); it is also a fact of the
+// situation, so Context may omit it but never contradict it, and an
 // exception's scope and conditions are judged on it alone. Then, when set,
 // names a consumer procedure to compose after the goal.
 type Request struct {
@@ -165,6 +169,7 @@ type Resolution struct {
 	Snapshot        string             `json:"snapshot"`
 	Goal            string             `json:"goal"`
 	At              string             `json:"at"`
+	Trusted         map[string]string  `json:"trusted,omitzero"`
 	Complete        bool               `json:"complete"`
 	Incomplete      []string           `json:"incomplete,omitzero"`
 	Applicable      []string           `json:"applicable"`
@@ -254,16 +259,31 @@ func Resolve(ctx context.Context, cat *knowledge.Catalog, ev Evaluator, trust po
 		limits = DefaultLimits
 	}
 	records := map[string]*knowledge.Record{}
+	broader := map[string][]string{}
 	for _, r := range cat.Records() {
 		records[r.Key] = r
+		if r.Type == knowledge.TypeDomain {
+			broader[r.Key] = r.Broader
+		}
 	}
-	facts, rules := Facts(cat, req.Context, goal.Key)
-	query := []string{"obligation_of", "derived_by", "relevant", "specializes_star", "in_domain"}
+	effective := maps.Clone(req.Context)
+	for _, n := range slices.Sorted(maps.Keys(req.Trusted)) {
+		v := req.Trusted[n]
+		if given, ok := req.Context[n]; ok && given != v {
+			return nil, fmt.Errorf("%w: %s is %q in the context but %q in trusted context", ErrContextConflict, n, given, v)
+		}
+		if effective == nil {
+			effective = map[string]string{}
+		}
+		effective[n] = v
+	}
+	facts, rules := Facts(cat, effective, goal.Key)
+	query := []string{"obligation_of", "derived_by", "relevant", "specializes_star"}
 	base, err := ev.Evaluate(ctx, Program{System: System, Rules: rules, Heads: Heads, EDB: EDB, Facts: facts, Query: query, Limits: limits})
 	if err != nil {
 		return nil, err
 	}
-	res := &Resolution{Version: Version, Snapshot: string(cat.Snapshot()), Goal: goal.Key, At: req.At.UTC().Format(time.RFC3339)}
+	res := &Resolution{Version: Version, Snapshot: string(cat.Snapshot()), Goal: goal.Key, At: req.At.UTC().Format(time.RFC3339), Trusted: req.Trusted}
 	id := func(parts ...string) string { return ExplanationID(res.Snapshot, goal.Key, parts...) }
 
 	superseded := map[string]bool{}
@@ -281,16 +301,12 @@ func Resolve(ctx context.Context, cat *knowledge.Catalog, ev Evaluator, trust po
 			derivs = append(derivs, policy.Derivation{Subject: row[0], Requirement: row[1], Source: row[2], Via: row[3]})
 		}
 	}
-	domains := map[string][]string{}
-	for _, row := range base["in_domain"] {
-		domains[row[0]] = append(domains[row[0]], row[1])
-	}
 	policyRules := map[string]policy.Rule{}
 	var exceptions []*knowledge.Record
 	for _, r := range records {
 		switch r.Type {
 		case knowledge.TypeRule:
-			policyRules[r.Key] = policy.Rule{Key: r.Key, Revision: r.Revision, Digest: knowledge.RuleDigest(r), Protected: r.Protected, Waivable: r.Waivable, Domains: domains[r.Key]}
+			policyRules[r.Key] = policy.Rule{Key: r.Key, Revision: r.Revision, Digest: knowledge.RuleDigest(r), Protected: r.Protected, Waivable: r.Waivable, Classified: r.ClassifiedAs}
 		case knowledge.TypeException:
 			if !superseded[r.Key] {
 				exceptions = append(exceptions, r)
@@ -298,7 +314,7 @@ func Resolve(ctx context.Context, cat *knowledge.Catalog, ev Evaluator, trust po
 		}
 	}
 	slices.SortFunc(exceptions, func(a, b *knowledge.Record) int { return strings.Compare(a.Key, b.Key) })
-	outcome := policy.Decide(trust, exceptions, policyRules, derivs, policy.Request{Context: req.Context, Trusted: req.Trusted, At: req.At})
+	outcome := policy.Decide(trust, exceptions, policyRules, derivs, policy.Request{Context: effective, Trusted: req.Trusted, Broader: broader, At: req.At})
 
 	byReq := map[string]*Obligation{}
 	derivIDs := make([]string, len(derivs))
@@ -425,7 +441,7 @@ func Resolve(ctx context.Context, cat *knowledge.Catalog, ev Evaluator, trust po
 		}
 	}
 
-	unknowns, incomplete, err := hypothesize(ctx, ev, rules, facts, goal.Key, req.Context, base, limits, superseded)
+	unknowns, incomplete, err := hypothesize(ctx, ev, rules, facts, goal.Key, effective, base, limits, superseded)
 	if err != nil {
 		return nil, err
 	}

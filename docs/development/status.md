@@ -4,9 +4,16 @@ This page is a snapshot of the repository's current state, replaced at every han
 
 **Corpus Logic v1, on branch `corpus-logic-v1`, as of 2026-10-14.** Independent review and corrections done; ready for owner review; not merged, released or installed. Milestone [#134](https://github.com/ashuangiras/polaroid/issues/134); workstreams A–H are #135, #136, #137, #142, #138, #139, #140 and #141. [ADR-0050](../architecture/decisions/0050-corpus-logic.md) is proposed and describes what is implemented.
 
+- **Final semantic integrity gate** (after `bd634a4`), three corrections:
+  - **Rollback** is a governed publication with no exemptions. Restored semantics take a revision above the active one, so no earlier approval becomes valid again. Protected invariants stay protected. The `Polaroid-Rollback-To` trailer is provenance only, and history is never rewritten. Operator API `POST /v1/knowledge/rollbacks` and CLI `polaroid knowledge-rollback`.
+  - **Trusted context** comes from signed context assertions (`resolve`'s `assertions`), verified against operator-held attestation keys bound to one repository and a set of names, at the evaluation time. Invalid assertions, or caller context that contradicts them, fail the request. No identity service.
+  - **Domain authority** signs the domain path from the rule's classification to the authority's domain. The exception applies only while that path holds, so hierarchy changes along it force a new approval, and a restored hierarchy revalidates.
+  - **Deterministic output:** MCP and operator responses now encode map keys in sorted order (`encoding/json/v2` does not by default), which `trusted` exposed.
+  - **Performance limitation:** resolving near the 64-combination limit takes about 0.3–1 s (`BenchmarkResolveMissingContext`), tracked in [#144](https://github.com/ashuangiras/polaroid/issues/144).
+  - **Mutation probes:** 75 of 75 removed protections, rollback revisions, assertion checks and domain-path checks included, were caught by their tests.
 - **Review of PR #143 (`8067f8a`) found seven defects**, fixed in `6c5effd`, `ffbf946`, `9da95eb`, `d0cae8f` and `a45f3e2`:
   - Exception approvals bound only to a rule's key and editable revision. They now sign a `rule_digest` of the rule's semantics, and every publication, rollback, activation and validated fetch enforces rule governance: a semantics change needs a higher revision, and a protected rule is never removed, unprotected, waivable, excepted or superseded by an unprotected rule.
-  - The caller's own `repository` and condition context activated project waivers. Only server-established trusted context does now; agent mode has none, so those waivers fail closed.
+  - The caller's own `repository` and condition context activated project waivers. Only trusted context does now: signed assertions, added by the final gate.
   - A protected invariant could be waived with corpus authority. Now no authority can.
   - `Resolve` panicked on a derived requirement that is not a concept. It now reports an `undefined_requirement` conflict, and publication refuses such a constant.
   - Unknowns were silently incomplete. Equality-bound values and multi-name combinations are now enumerated without conflating values; `when` is always sufficient; `complete` and `incomplete` say what was not examined.
@@ -29,11 +36,9 @@ This page is a snapshot of the repository's current state, replaced at every han
   - It reported `incompatible` for build then deploy (input `image` missing) and `compatible` for build then smoke.
   - Two derivation ids it cited were recomputed independently.
 - **Not done:**
-  - No transport establishes trusted context, so project-scoped and conditional exceptions never apply through `/mcp/agent/v2`.
-  - Rollback has no operator API or CLI.
   - Nothing was published to the live Corpus, and the installed service is not upgraded.
 
-Next action: owner review of ADR-0050 and PR #143; on approval, merge, then decide on trusted context for project exceptions and whether to publish real Corpus records.
+Next action: owner review of ADR-0050 and PR #143; on approval, merge, then decide whether to publish real Corpus records and who issues context assertions.
 
 **Knowledge remote, as of 2026-10-14.**
 

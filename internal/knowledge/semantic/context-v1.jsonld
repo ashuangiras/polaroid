@@ -58,6 +58,7 @@
     "level": "pc:level",
     "domain": {"@id": "pc:domain", "@type": "@id"},
     "repository": "pc:repository",
+    "path": {"@id": "pc:path", "@type": "@id", "@container": "@list"},
     "approval": {"@id": "pc:approval"},
     "reference": "pc:reference",
     "key": "pc:key",

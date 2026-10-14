@@ -87,8 +87,7 @@ func TestActivationEnforcesRuleGovernance(t *testing.T) {
 	if err := k.Activate(ctx, knowledge.Activation{Base: s1, Target: governed, Provenance: decision()}); err != nil {
 		t.Fatalf("governed revision: %v", err)
 	}
-	// A rollback restores the earlier governed rule exactly, so its lower
-	// revision is not a regression.
+	// A rollback restores the earlier semantics under a new revision.
 	rolled, err := k.Rollback(ctx, governed, s1, prov())
 	if err != nil {
 		t.Fatalf("rollback to the earlier revision: %v", err)

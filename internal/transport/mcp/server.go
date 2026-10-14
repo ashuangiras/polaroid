@@ -138,7 +138,7 @@ func add[In any](s *sdk.Server, t *tools, name, description string, readOnly boo
 				}
 				return t.failure(detail), nil
 			}
-			body, err := json.Marshal(out)
+			body, err := json.Marshal(out, json.Deterministic(true))
 			if err != nil {
 				t.logger.ErrorContext(ctx, "mcp encode result", "tool", name, "error", err)
 				return t.failure(wire.Internal), nil

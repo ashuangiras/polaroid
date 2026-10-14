@@ -5,11 +5,25 @@ package wire
 
 // KnowledgeResolveRequest asks what applies to one record of a snapshot.
 type KnowledgeResolveRequest struct {
-	Goal     string            `json:"goal" jsonschema:"the key of the record to resolve: a procedure, concept or claim"`
-	Snapshot string            `json:"snapshot,omitzero" jsonschema:"a snapshot token; omit for the active knowledge"`
-	Context  map[string]string `json:"context,omitzero" jsonschema:"facts about your situation as name and value strings, for example concurrency; they can add obligations and decide unknowns, but never authorise an exception: a rule that needs one you omit reports an unknown, never a no"`
-	Then     string            `json:"then,omitzero" jsonschema:"a procedure key to compose after goal (itself a procedure): the result's composition says compatible, incompatible or undetermined from both formal contracts; nothing is executed"`
-	At       string            `json:"at,omitzero" jsonschema:"evaluation time, RFC 3339 (default now; echoed in the result)"`
+	Goal       string               `json:"goal" jsonschema:"the key of the record to resolve: a procedure, concept or claim"`
+	Snapshot   string               `json:"snapshot,omitzero" jsonschema:"a snapshot token; omit for the active knowledge"`
+	Context    map[string]string    `json:"context,omitzero" jsonschema:"facts about your situation as name and value strings, for example concurrency; they can add obligations and decide unknowns, but never authorise an exception: a rule that needs one you omit reports an unknown, never a no"`
+	Then       string               `json:"then,omitzero" jsonschema:"a procedure key to compose after goal (itself a procedure): the result's composition says compatible, incompatible or undetermined from both formal contracts; nothing is executed"`
+	At         string               `json:"at,omitzero" jsonschema:"evaluation time, RFC 3339 (default now; echoed in the result)"`
+	Assertions []KnowledgeAssertion `json:"assertions,omitzero" jsonschema:"signed context assertions you were given, for example by your CI or operator; only these establish trusted context, which can authorise project-scoped and conditional exceptions"`
+}
+
+// KnowledgeAssertion is a signed context assertion (ADR-0050): facts about
+// one repository during a validity period, signed by an attestation key
+// the operator trusts.
+type KnowledgeAssertion struct {
+	Reference  string            `json:"reference" jsonschema:"the assertion's identifier, as issued"`
+	Key        string            `json:"key" jsonschema:"the id of the attestation key that signed it"`
+	Repository string            `json:"repository" jsonschema:"the repository the facts are about"`
+	Facts      map[string]string `json:"facts,omitzero" jsonschema:"context names and values asserted, besides the repository"`
+	ValidFrom  string            `json:"valid_from" jsonschema:"RFC 3339"`
+	ValidUntil string            `json:"valid_until" jsonschema:"RFC 3339"`
+	Signature  string            `json:"signature" jsonschema:"base64 Ed25519 signature, as issued"`
 }
 
 // KnowledgeDerivation is one independent way an obligation holds.
@@ -127,6 +141,7 @@ type KnowledgeResolution struct {
 	Snapshot        string                     `json:"snapshot"`
 	Goal            string                     `json:"goal"`
 	At              string                     `json:"at"`
+	Trusted         map[string]string          `json:"trusted,omitzero"`
 	Complete        bool                       `json:"complete"`
 	Incomplete      []string                   `json:"incomplete,omitzero"`
 	Applicable      []string                   `json:"applicable"`

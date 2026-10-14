@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -85,7 +86,7 @@ func TestCorpusLogicSyncBetweenDaemons(t *testing.T) {
 		}
 		return resp.StatusCode, m
 	}
-	resolve := func(in instance) string {
+	resolve := func(in instance, snapshot string) string {
 		t.Helper()
 		c := sdk.NewClient(&sdk.Implementation{Name: "corpus-sync", Version: "v0"}, nil)
 		s, err := c.Connect(context.Background(), &sdk.StreamableClientTransport{Endpoint: in.base + "/mcp/agent/v2", DisableStandaloneSSE: true, MaxRetries: -1}, nil)
@@ -93,8 +94,11 @@ func TestCorpusLogicSyncBetweenDaemons(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = s.Close() }()
-		res, err := s.CallTool(context.Background(), &sdk.CallToolParams{Name: "resolve", Arguments: map[string]any{
-			"goal": "ci.verify", "context": map[string]any{"concurrency": "true"}, "at": "2026-10-14T12:00:00Z"}})
+		args := map[string]any{"goal": "ci.verify", "context": map[string]any{"concurrency": "true"}, "at": "2026-10-14T12:00:00Z"}
+		if snapshot != "" {
+			args["snapshot"] = snapshot
+		}
+		res, err := s.CallTool(context.Background(), &sdk.CallToolParams{Name: "resolve", Arguments: args})
 		if err != nil || res.IsError {
 			t.Fatalf("resolve: %v %v", err, res)
 		}
@@ -115,21 +119,69 @@ func TestCorpusLogicSyncBetweenDaemons(t *testing.T) {
 		"author": "alice", "summary": "Corpus Logic fixtures", "rationale": "shared cross-domain knowledge"}); status != http.StatusCreated {
 		t.Fatalf("A publish = %d %v", status, pub)
 	}
-	if status, res := op(a, http.MethodPost, "/v1/knowledge/sources/corpus/push", nil); status != http.StatusOK {
-		t.Fatalf("A push = %d %v", status, res)
+	sync := func() {
+		t.Helper()
+		if status, res := op(a, http.MethodPost, "/v1/knowledge/sources/corpus/push", nil); status != http.StatusOK {
+			t.Fatalf("A push = %d %v", status, res)
+		}
+		if status, res := op(b, http.MethodPost, "/v1/knowledge/sources/corpus/fetch", nil); status != http.StatusOK {
+			t.Fatalf("B fetch = %d %v", status, res)
+		}
+		if status, res := op(b, http.MethodPost, "/v1/knowledge/sources/corpus/validation", nil); status != http.StatusOK || res["status"] != "fast-forward" {
+			t.Fatalf("B validate = %d %v", status, res)
+		}
+		if status, res := op(b, http.MethodPost, "/v1/knowledge/sources/corpus/activation", map[string]any{
+			"author": "bob", "summary": "accept corpus", "rationale": "validated"}); status != http.StatusCreated {
+			t.Fatalf("B activate = %d %v", status, res)
+		}
+		if ra, rb := resolve(a, ""), resolve(b, ""); ra != rb {
+			t.Fatalf("instances resolve differently:\nA %s\nB %s", ra, rb)
+		}
 	}
-	if status, res := op(b, http.MethodPost, "/v1/knowledge/sources/corpus/fetch", nil); status != http.StatusOK {
-		t.Fatalf("B fetch = %d %v", status, res)
+	sync()
+	status, st := op(a, http.MethodGet, "/v1/knowledge/status", nil)
+	snapA, _ := st["snapshot"].(string)
+	if status != http.StatusOK || snapA == "" {
+		t.Fatalf("status = %d %v", status, st)
 	}
-	if status, res := op(b, http.MethodPost, "/v1/knowledge/sources/corpus/validation", nil); status != http.StatusOK || res["status"] != "fast-forward" {
-		t.Fatalf("B validate = %d %v", status, res)
+	atA := resolve(b, "")
+
+	// A → B → rollback C restoring A's semantics, through the operator API.
+	var vet *knowledge.Record
+	for _, r := range knowledgetest.CorpusRecords() {
+		if r.Key == "rule.go.vet" {
+			vet = r
+		}
 	}
-	if status, res := op(b, http.MethodPost, "/v1/knowledge/sources/corpus/activation", map[string]any{
-		"author": "bob", "summary": "accept corpus", "rationale": "validated"}); status != http.StatusCreated {
-		t.Fatalf("B activate = %d %v", status, res)
+	vet.Program, vet.Revision = `obligation(P, "check.vet") :- record(P, "Procedure").`, 2
+	doc, _ := knowledge.EncodeRecord(vet)
+	status, pub := op(a, http.MethodPost, "/v1/knowledge/publications", map[string]any{"base": snapA, "changes": []any{},
+		"records": []map[string]any{{"key": vet.Key, "document": json.RawMessage(doc)}},
+		"author":  "alice", "summary": "require vet everywhere", "rationale": "trial"})
+	if status != http.StatusCreated {
+		t.Fatalf("A publish B = %d %v", status, pub)
 	}
-	if ra, rb := resolve(a), resolve(b); ra != rb {
-		t.Fatalf("instances resolve differently:\nA %s\nB %s", ra, rb)
+	snapB, _ := pub["snapshot"].(string)
+	sync()
+	if atB := resolve(b, ""); !strings.Contains(atB, `"requirement":"check.vet"`) {
+		t.Fatalf("B did not take effect: %s", atB)
+	}
+	status, rolled := op(a, http.MethodPost, "/v1/knowledge/rollbacks", map[string]any{"base": snapB, "to": snapA,
+		"author": "alice", "summary": "undo the vet trial", "rationale": "the trial is over"})
+	if status != http.StatusCreated {
+		t.Fatalf("A rollback = %d %v", status, rolled)
+	}
+	sync()
+	atC := resolve(b, "")
+	if strings.Contains(atC, `"requirement":"check.vet"`) || obligations(t, atC) != obligations(t, atA) {
+		t.Fatalf("C does not restore A's semantics:\nA %s\nC %s", atA, atC)
+	}
+	if again := resolve(b, snapA); again != atA {
+		t.Fatalf("historical snapshot A resolves differently:\n%s\n%s", atA, again)
+	}
+	if status, res := op(a, http.MethodPost, "/v1/knowledge/rollbacks", map[string]any{"base": rolled["snapshot"], "to": snapA,
+		"author": "alice", "summary": "again", "rationale": "no-op"}); status != http.StatusBadRequest {
+		t.Fatalf("a rollback that changes nothing = %d %v", status, res)
 	}
 
 	// A publication of a format this build does not implement arrives.
@@ -147,7 +199,7 @@ func TestCorpusLogicSyncBetweenDaemons(t *testing.T) {
 	if status != http.StatusOK || res["status"] != "rejected" || !strings.Contains(jsonText(res["problems"]), "format 3 is not supported") {
 		t.Fatalf("B validate future format = %d %v", status, res)
 	}
-	if rb := resolve(b); rb != resolve(a) {
+	if rb := resolve(b, ""); rb != resolve(a, "") {
 		t.Fatal("B's active knowledge changed after a rejected candidate")
 	}
 }
@@ -155,4 +207,27 @@ func TestCorpusLogicSyncBetweenDaemons(t *testing.T) {
 func jsonText(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+// obligations summarises a resolution's obligations, without the snapshot
+// and the snapshot-bound derivation ids.
+func obligations(t *testing.T, resolution string) string {
+	t.Helper()
+	var r struct {
+		Obligations []struct {
+			Requirement, Status string
+			Derivations         []struct{ Source, Via, Status string }
+		}
+	}
+	if err := json.Unmarshal([]byte(resolution), &r); err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, o := range r.Obligations {
+		for _, d := range o.Derivations {
+			out = append(out, o.Requirement+"="+o.Status+" "+d.Source+"@"+d.Via+"="+d.Status)
+		}
+	}
+	slices.Sort(out)
+	return strings.Join(out, "\n")
 }

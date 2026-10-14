@@ -29,7 +29,7 @@ var (
 )
 
 type world struct {
-	t      *testing.T
+	t      testing.TB
 	kernel *knowledge.Kernel
 	store  *knowledgetest.MemoryStore
 	snap   knowledge.Snapshot
@@ -37,7 +37,7 @@ type world struct {
 	trust  policy.Trust
 }
 
-func newWorld(t *testing.T) *world {
+func newWorld(t testing.TB) *world {
 	t.Helper()
 	v, err := semantic.New(semantic.DefaultLimits)
 	if err != nil {
@@ -104,11 +104,44 @@ func (w *world) exception(key, signer string, auth knowledge.Authority, rule, wa
 	if err != nil {
 		w.t.Fatal(err)
 	}
+	if auth.Level == knowledge.AuthorityDomain && auth.Path == nil {
+		auth.Path = domainPath(cat, target.ClassifiedAs, auth.Domain)
+	}
 	e := &knowledge.Record{Type: knowledge.TypeException, Key: key, Label: key, Excepts: []string{rule}, Revision: target.Revision,
 		RuleDigest: knowledge.RuleDigest(target), AppliesTo: appliesTo, Waives: waives, Justification: "Justified for " + key, Authority: &auth,
 		Approval: &knowledge.Approval{Reference: "approval-" + key, Key: signer, ValidFrom: at.Add(-24 * time.Hour), ValidUntil: at.Add(24 * time.Hour)}}
 	w.sign(e, signer)
 	return e
+}
+
+// domainPath is the path an approver would sign today: the shortest chain
+// along broader from one of from to to, or a direct claim when none exists.
+func domainPath(cat *knowledge.Catalog, from []string, to string) []string {
+	prev := map[string]string{}
+	queue := slices.Clone(from)
+	for _, f := range from {
+		prev[f] = ""
+	}
+	for len(queue) > 0 {
+		d := queue[0]
+		queue = queue[1:]
+		if d == to {
+			var path []string
+			for ; d != ""; d = prev[d] {
+				path = append([]string{d}, path...)
+			}
+			return path
+		}
+		if r, err := cat.Record(d); err == nil {
+			for _, b := range r.Broader {
+				if _, seen := prev[b]; !seen {
+					prev[b] = d
+					queue = append(queue, b)
+				}
+			}
+		}
+	}
+	return []string{from[0], to}
 }
 
 // resolveTrusted resolves with context the server established itself.
@@ -501,7 +534,7 @@ func TestProtectedInvariant(t *testing.T) {
 	rule := w.rule("rule.software.tests")
 	corpusExc := w.exception("exc.tests.corpus", "corpus", knowledge.Authority{Level: knowledge.AuthorityCorpus}, "rule.software.tests", "check.tests", "go.verify")
 	out := policy.Decide(w.trust, []*knowledge.Record{corpusExc}, map[string]policy.Rule{rule.Key: {Key: rule.Key, Revision: rule.Revision,
-		Digest: knowledge.RuleDigest(rule), Protected: true, Waivable: true, Domains: []string{"domain.software"}}},
+		Digest: knowledge.RuleDigest(rule), Protected: true, Waivable: true, Classified: []string{"domain.software"}}},
 		[]policy.Derivation{{Subject: "go.verify", Requirement: "check.tests", Source: rule.Key, Via: "go.verify"}}, policy.Request{At: at})
 	if v := out.Verdicts[0]; v.Status != policy.Rejected || !strings.Contains(v.Reason, "no exception may waive it, at any authority") || len(out.Effects) != 0 {
 		t.Fatalf("policy accepted a corpus exception to a protected invariant: %+v", out)
@@ -644,7 +677,7 @@ func TestInvalidExceptionsNeverApply(t *testing.T) {
 		}, "holds domain domain.mathematics authority, not the project"},
 		"domain outside its domain": {func(w *world) *knowledge.Record {
 			return w.exception("exc", "mathematics", knowledge.Authority{Level: knowledge.AuthorityDomain, Domain: "domain.mathematics"}, "rule.go.vet", "check.vet", "go.verify")
-		}, "is not in domain domain.mathematics"},
+		}, "approved by domain domain.mathematics through the path [domain.software.go domain.mathematics], which this snapshot does not hold (domain.mathematics is not directly broader than domain.software.go)"},
 		"old revision": {func(w *world) *knowledge.Record {
 			e := w.exception("exc", "project", proj, "rule.go.vet", "check.vet", "go.verify")
 			rule := w.rule("rule.go.vet")

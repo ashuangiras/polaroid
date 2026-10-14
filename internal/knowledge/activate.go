@@ -72,7 +72,7 @@ func (k *Kernel) Activate(ctx context.Context, a Activation) error {
 				return err
 			}
 			cat = c
-			return CheckTransition(base, c, nil)
+			return CheckTransition(base, c)
 		}})
 	if err != nil {
 		return err

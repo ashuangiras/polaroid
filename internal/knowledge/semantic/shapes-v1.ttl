@@ -127,7 +127,8 @@ pc:AuthorityShape a sh:NodeShape ;
   sh:closed true ;
   sh:property [ sh:path pc:level ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ( "corpus" "domain" "project" ) ] ;
   sh:property [ sh:path pc:domain ; sh:maxCount 1 ; sh:class pc:Domain ] ;
-  sh:property [ sh:path pc:repository ; sh:maxCount 1 ; sh:datatype xsd:string ] .
+  sh:property [ sh:path pc:repository ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path pc:path ; sh:maxCount 1 ] .
 
 pc:ApprovalShape a sh:NodeShape ;
   sh:nodeKind sh:BlankNode ;

@@ -74,6 +74,16 @@ func TestRecordCatalogChecks(t *testing.T) {
 		"cycle": {&knowledge.Record{Type: knowledge.TypeProcedure, Key: "change.verify", Label: "x", Specializes: []string{"go.verify.concurrent"}},
 			"specializes: cycle: change.verify -> go.verify.concurrent -> go.verify -> change.verify"},
 		"two rules excepted": {&knowledge.Record{Type: knowledge.TypeException, Key: "x", Label: "x", Excepts: []string{"rule.go.vet", "rule.go.race"}}, "names exactly one rule"},
+		"domain approval without a path": {&knowledge.Record{Type: knowledge.TypeException, Key: "x", Label: "x", Excepts: []string{"rule.go.vet"},
+			Authority: &knowledge.Authority{Level: knowledge.AuthorityDomain, Domain: "domain.software"}}, "authority.path: must list the domains the approval covers"},
+		"domain path ends elsewhere": {&knowledge.Record{Type: knowledge.TypeException, Key: "x", Label: "x", Excepts: []string{"rule.go.vet"},
+			Authority: &knowledge.Authority{Level: knowledge.AuthorityDomain, Domain: "domain.software", Path: []string{"domain.software.go"}}},
+			"authority.path: must list the domains the approval covers"},
+		"domain path repeats": {&knowledge.Record{Type: knowledge.TypeException, Key: "x", Label: "x", Excepts: []string{"rule.go.vet"},
+			Authority: &knowledge.Authority{Level: knowledge.AuthorityDomain, Domain: "domain.software", Path: []string{"domain.software", "domain.software.go", "domain.software"}}},
+			"authority.path: must not repeat a domain"},
+		"path for corpus authority": {&knowledge.Record{Type: knowledge.TypeException, Key: "x", Label: "x", Excepts: []string{"rule.go.vet"},
+			Authority: &knowledge.Authority{Level: knowledge.AuthorityCorpus, Path: []string{"domain.software"}}}, "authority.path: is admitted only for domain authority"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := k.Publish(context.Background(), knowledge.Proposal{Base: s, Records: []knowledge.RecordChange{{Key: tc.r.Key, Record: tc.r}}, Provenance: prov()})
