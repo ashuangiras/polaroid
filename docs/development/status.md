@@ -2,6 +2,15 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
+**First typed records published to this repository's own live Corpus, as of 2026-10-14.** A live-service action, not a code or doc change to `main`; no commit. Supersedes the "not done: nothing published to the live Corpus" note in the handoff below.
+
+- **Published** (snapshot `51da4385bf14ec6a5e9df69f812ad23c95356973`, format 2, 14 records, author `operator.ashuangiras`): two domains (`domain.software`, `domain.software.go`), four concepts (`check.vet`, `check.lint`, `check.tests`, `check.race`) and four rules obligating them for `domain.software.go` procedures, directly formalizing AGENTS.md's `make check` gates (go vet, golangci-lint 2.14.0, `go test`, `go test -race`). All four rules are `waivable: true`, not `protected` — no exception authority is configured yet ([ADR-0050](../architecture/decisions/0050-corpus-logic.md)'s `<knowledge-dir>-authorities.json` does not exist on the installed instance), so this is a safe default pending an explicit owner decision, not a claim that these are permanently unwaivable.
+- **Classified the five existing published procedures** by their actual content, not assumption: `go.validate.slug-string` as `domain.software.go` (it is genuinely Go-specific); `dev.change.implement`, `dev.change.verify` and `dev.change.review` as `domain.software` only, because `dev.change.verify`'s own instructions are explicitly language-agnostic (it names Go tooling only as one example branch when a repository documents no gates of its own) — giving them Go-specific obligations would have been inaccurate. `deployment.smoke-test` was left unclassified: it is a meta smoke test of the knowledge path itself and fits neither domain's obligations.
+- **Verified by `resolve`:** `go.validate.slug-string` reports all four obligations (`check.vet`, `check.lint`, `check.tests`, `check.race`) as `required`, each with correct derivation provenance; `dev.change.implement`/`verify`/`review` report no obligations at all (`applicable` is only themselves and `domain.software`), confirming no Go-specific obligation leaks onto a procedure that does not actually carry one. `complete: true` on every resolution.
+- **Not done:** nothing pushed to the configured `corpus` remote; this is local to the installed instance only.
+
+Next action: decide whether to push this to the `corpus` remote, and what Go procedure knowledge to add next.
+
 **Corpus Logic v1 merged, installed, and its one open follow-up fixed, on `main` at `cf87e02`, as of 2026-10-14.** Supersedes both handoffs below, which are kept as history.
 
 - **Merged:** PR #143 (`6e05f63`), tree identical to the gated `8df8641`. Milestone #134 and workstreams #135-#142 closed.
