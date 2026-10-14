@@ -159,8 +159,8 @@ func restrict(r reasoning.Rule, heads map[string]string) ([]ast.Clause, error) {
 
 // Literals implements reasoning.Evaluator. A variable argument carries the
 // string constants that `=` premises of its clause bind it to.
-func (Evaluator) Literals(rules []reasoning.Rule, predicate string, arity int, head bool) ([]reasoning.Literal, error) {
-	var out []reasoning.Literal
+func (Evaluator) Literals(rules []reasoning.Rule, predicate string, arity int, head bool) (out []reasoning.Literal, err error) {
+	defer contain(&err)
 	for _, r := range rules {
 		unit, err := parseUnit(r.Key, r.Text)
 		if err != nil {
@@ -245,12 +245,16 @@ func (s *store) Contains(a ast.Atom) bool {
 // Evaluate implements reasoning.Evaluator. A panic inside Mangle (rule
 // text is untrusted input) is returned as an error, never propagated.
 func (Evaluator) Evaluate(ctx context.Context, p reasoning.Program) (res reasoning.Result, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			res, err = nil, &RuleError{Rule: "program", Reason: fmt.Sprintf("the Datalog engine failed: %v", r)}
-		}
-	}()
+	defer contain(&err)
 	return evaluate(ctx, p)
+}
+
+// contain turns a panic in the Datalog engine into an error. Its value is
+// internal and is not reported: rule errors reach clients.
+func contain(err *error) {
+	if recover() != nil {
+		*err = &RuleError{Rule: "program", Reason: "the Datalog engine failed on this program"}
+	}
 }
 
 func evaluate(ctx context.Context, p reasoning.Program) (reasoning.Result, error) {

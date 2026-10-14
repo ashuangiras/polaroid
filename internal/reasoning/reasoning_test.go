@@ -245,6 +245,9 @@ func TestUnknownsAreEnumerated(t *testing.T) {
 		goRule("rule.eq", `obligation(P, "check.review") :- `+goProc+`, context("mode", V), V = "ci".`),
 		goRule("rule.both", `obligation(P, "check.leak") :- `+goProc+`, context("mode", "a"), context("mode", "b").`),
 		goRule("rule.multi", `obligation(P, "check.review") :- `+goProc+`, context("os", "linux"), context("arch", "arm64").`),
+		// Two ways to the same conclusion: when must still suffice alone.
+		goRule("rule.either", `obligation(P, "check.build") :- `+goProc+`, context("stage", "ci"), context("x", "1").`+"\n"+
+			`obligation(P, "check.build") :- `+goProc+`, context("env", "prod"), context("x", "1").`),
 	)
 	r := w.resolve("go.verify", nil)
 	got := map[string][]reasoning.ContextValue{}
@@ -255,6 +258,7 @@ func TestUnknownsAreEnumerated(t *testing.T) {
 		"check.race/rule.go.race": {{Name: "concurrency", Value: "true"}},
 		"check.review/rule.eq":    {{Name: "mode", Value: "ci"}},
 		"check.review/rule.multi": {{Name: "arch", Value: "arm64"}, {Name: "os", Value: "linux"}},
+		"check.build/rule.either": {{Name: "stage", Value: "ci"}, {Name: "x", Value: "1"}},
 	}
 	if len(got) != len(want) || !r.Complete {
 		t.Fatalf("unknowns %+v complete %v %v", r.Unknowns, r.Complete, r.Incomplete)
@@ -721,6 +725,11 @@ func TestComposition(t *testing.T) {
 	if cp := res.Composition; cp == nil || cp.Verdict != reasoning.Incompatible || cp.Producer.Key != "artifact.build" || !cp.Producer.OutputsComplete ||
 		cp.Consumer.Inputs[0].Concept != "artifact.image" || cp.Findings[0].Status != "missing" {
 		t.Fatalf("resolve then: %+v", res.Composition)
+	}
+	for _, then := range []string{"nope", "check.vet"} {
+		if _, err := reasoning.Resolve(context.Background(), c, ev, w.trust, reasoning.Request{Goal: "artifact.build", Then: then, At: at}); !errors.Is(err, reasoning.ErrUnknownGoal) {
+			t.Fatalf("then %s: %v", then, err)
+		}
 	}
 	if r := compose("artifact.build", "artifact.deploy"); r.Verdict != reasoning.Incompatible || r.Findings[0].Status != "missing" {
 		t.Fatalf("build -> deploy: %+v", r)

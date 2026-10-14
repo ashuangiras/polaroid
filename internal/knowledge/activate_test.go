@@ -37,7 +37,11 @@ func TestActivationEnforcesRuleGovernance(t *testing.T) {
 	ctx := context.Background()
 	m := knowledgetest.NewMemoryStore()
 	k := knowledge.New(m, knowledge.WithRecordValidator(&acceptAll{}))
-	s1, err := k.Publish(ctx, knowledge.Proposal{Changes: knowledgetest.CorpusProcedures(), Records: knowledgetest.CorpusRecordChanges(), Provenance: prov()})
+	s0, err := k.Publish(ctx, knowledge.Proposal{Changes: knowledgetest.CorpusProcedures(), Provenance: prov()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s1, err := k.Publish(ctx, knowledge.Proposal{Base: s0, Records: knowledgetest.CorpusRecordChanges(), Provenance: prov()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,8 +89,14 @@ func TestActivationEnforcesRuleGovernance(t *testing.T) {
 	}
 	// A rollback restores the earlier governed rule exactly, so its lower
 	// revision is not a regression.
-	if _, err := k.Rollback(ctx, governed, s1, prov()); err != nil {
+	rolled, err := k.Rollback(ctx, governed, s1, prov())
+	if err != nil {
 		t.Fatalf("rollback to the earlier revision: %v", err)
+	}
+	// But a rollback never lifts a protection: returning to a snapshot
+	// from before the protected rule existed would remove it.
+	if _, err := k.Rollback(ctx, rolled, s0, prov()); !errors.Is(err, knowledge.ErrInvalid) || !strings.Contains(err.Error(), "is a protected invariant and cannot be removed") {
+		t.Fatalf("rollback removing a protected invariant: %v", err)
 	}
 }
 

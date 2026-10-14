@@ -190,8 +190,12 @@ func (s *Syncer) Validate(ctx context.Context, c *Candidate) error {
 		} else {
 			in.Procedures = cat.Len()
 			cats[in.Snapshot] = cat
-			if err := s.checkTransition(ctx, cm, cat, cats); err != nil {
-				probs = append(probs, fmt.Sprintf("snapshot %s: %v", cm.Snapshot, err))
+			problem, err := s.checkTransition(ctx, cm, cat, cats)
+			if err != nil {
+				return err
+			}
+			if problem != nil {
+				probs = append(probs, fmt.Sprintf("snapshot %s: %v", cm.Snapshot, problem))
 			}
 		}
 		c.Incoming = append(c.Incoming, in)
@@ -216,33 +220,29 @@ func (s *Syncer) Validate(ctx context.Context, c *Candidate) error {
 }
 
 // checkTransition checks an incoming publication against its parent, when
-// the parent is readable here (an earlier incoming publication or local
-// history). Activation always checks the transition from the active
-// knowledge to its target, so nothing unchecked becomes active.
-func (s *Syncer) checkTransition(ctx context.Context, cm gitcore.Commit, cat *knowledge.Catalog, cats map[knowledge.Snapshot]*knowledge.Catalog) error {
+// the parent is readable here: an earlier incoming publication or local
+// published history. Fetched history gets no rollback exemption: its
+// trailers are the remote's claims. A parent fetched earlier but never
+// activated is not readable; activation checks the transition from the
+// active knowledge to its target in every case, so nothing unchecked
+// becomes active.
+func (s *Syncer) checkTransition(ctx context.Context, cm gitcore.Commit, cat *knowledge.Catalog, cats map[knowledge.Snapshot]*knowledge.Catalog) (problem, err error) {
 	if len(cm.Parents) == 0 {
-		return nil
+		return nil, nil
 	}
-	read := func(snap knowledge.Snapshot) *knowledge.Catalog {
-		if c := cats[snap]; c != nil {
-			return c
-		}
-		if c, err := s.kernel.At(ctx, snap); err == nil {
-			return c
-		}
-		return nil
-	}
-	prev := read(knowledge.Snapshot(cm.Parents[0]))
+	parent := knowledge.Snapshot(cm.Parents[0])
+	prev := cats[parent]
 	if prev == nil {
-		return nil
-	}
-	var restoring *knowledge.Catalog
-	for _, t := range cm.Trailers {
-		if t.Key == knowledge.TrailerRollback {
-			restoring = read(knowledge.Snapshot(t.Value))
+		c, err := s.kernel.At(ctx, parent)
+		if errors.Is(err, knowledge.ErrNotFound) {
+			return nil, nil
 		}
+		if err != nil {
+			return nil, err
+		}
+		prev = c
 	}
-	return knowledge.CheckTransition(prev, cat, restoring)
+	return knowledge.CheckTransition(prev, cat, nil), nil
 }
 
 func (s *Syncer) reject(c *Candidate, probs ...string) error {

@@ -123,7 +123,7 @@ Resolution is deterministic. The same snapshot, `context`, `at` and trust materi
 
 Requests can fail with these codes:
 
-- `not_found`: the goal, or `then`, is not a record of the snapshot.
+- `not_found`: the goal is not a record of the snapshot or, with `then`, the goal or `then` is not a procedure of it.
 - `invalid_request`.
 - `budget_exceeded` (HTTP 422): the evaluation exceeded its time or fact limits. A budget failure never returns a partial result.
 

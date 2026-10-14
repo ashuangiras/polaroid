@@ -378,7 +378,12 @@ func TestFetchedRuleGovernance(t *testing.T) {
 		return &instance{repo: repo, sync: s, k: s.Kernel()}
 	}
 	a, b := open(), open()
-	s1, err := a.k.Publish(ctx, knowledge.Proposal{Changes: knowledgetest.CorpusProcedures(), Records: knowledgetest.CorpusRecordChanges(),
+	s0, err := a.k.Publish(ctx, knowledge.Proposal{Changes: knowledgetest.CorpusProcedures(),
+		Provenance: knowledge.Provenance{Author: "alice", Summary: "procedures", Rationale: "Because."}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s1, err := a.k.Publish(ctx, knowledge.Proposal{Base: s0, Records: knowledgetest.CorpusRecordChanges(),
 		Provenance: knowledge.Provenance{Author: "alice", Summary: "corpus", Rationale: "Because."}})
 	if err != nil {
 		t.Fatal(err)
@@ -416,6 +421,47 @@ func TestFetchedRuleGovernance(t *testing.T) {
 	}
 	if b.active(t) != s1 {
 		t.Fatal("a rejected candidate changed the active knowledge")
+	}
+
+	// Rollback trailers in fetched history are the remote's claims and grant
+	// no exemption: "restoring" the original rule under the same revision
+	// is refused, and so is removing the protected rule.
+	weakened, _ := a.repo.Active(ctx)
+	orig, err := cat.Record("rule.software.tests")
+	if err != nil {
+		t.Fatal(err)
+	}
+	origDoc, err := knowledge.EncodeRecord(orig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := a.repo.Publish(ctx, gitcore.Publication{Expected: weakened, Author: "alice", Subject: "restore", Body: "no kernel",
+		Trailers: []gitcore.Trailer{{Key: knowledge.TrailerRollback, Value: string(s1)}},
+		Changes:  []gitcore.Change{{Path: knowledge.RecordPath(orig.Type, orig.Key), Content: origDoc}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed, err := a.repo.Publish(ctx, gitcore.Publication{Expected: restored, Author: "alice", Subject: "remove", Body: "no kernel",
+		Trailers: []gitcore.Trailer{{Key: knowledge.TrailerRollback, Value: string(s0)}},
+		Changes:  []gitcore.Change{{Path: knowledge.RecordPath(orig.Type, orig.Key), Delete: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.repo.Push(ctx, gitcore.Remote{Name: "team", URL: remote}, none); err != nil {
+		t.Fatal(err)
+	}
+	c, err = b.sync.Fetch(ctx, "team", none)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = b.sync.Validate(ctx, c)
+	for _, want := range []string{
+		"snapshot " + string(restored) + ": invalid knowledge: records[rule.software.tests].revision: the rule's semantics changed",
+		"snapshot " + string(removed) + ": invalid knowledge: records[rule.software.tests]: is a protected invariant and cannot be removed",
+	} {
+		if !errors.Is(err, knowledgesync.ErrRejected) || !strings.Contains(err.Error(), want) {
+			t.Fatalf("validate with forged rollback trailers: %v\nwant %s", err, want)
+		}
 	}
 }
 

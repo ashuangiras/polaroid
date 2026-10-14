@@ -581,12 +581,12 @@ func hypothesize(ctx context.Context, ev Evaluator, rules []Rule, facts []Fact, 
 		}
 		return out
 	}
-	// conclusions evaluates the program with assignment i, without name
-	// skip (-1 keeps every name), and returns the new conclusions.
-	conclusions := func(i, skip int) (map[conclusion]bool, error) {
+	// conclusions evaluates the program with assignment i, without the
+	// names marked in skip, and returns the new conclusions.
+	conclusions := func(i int, skip []bool) (map[conclusion]bool, error) {
 		extra := slices.Clone(facts)
 		for j, v := range assignment(i) {
-			if j != skip {
+			if !skip[j] {
 				extra = append(extra, Fact{Predicate: "context", Args: []string{names[j], v}})
 			}
 		}
@@ -609,7 +609,7 @@ func hypothesize(ctx context.Context, ev Evaluator, rules []Rule, facts []Fact, 
 		return out, nil
 	}
 	for i := range total {
-		got, err := conclusions(i, -1)
+		got, err := conclusions(i, make([]bool, len(names)))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -620,48 +620,39 @@ func hypothesize(ctx context.Context, ev Evaluator, rules []Rule, facts []Fact, 
 	keys := slices.SortedFunc(maps.Keys(produced), func(x, y conclusion) int {
 		return cmp.Or(strings.Compare(x.kind, y.kind), strings.Compare(x.a, y.a), strings.Compare(x.b, y.b), strings.Compare(x.source, y.source))
 	})
-	// A name matters to a conclusion when removing it, or changing only its
-	// value, loses the conclusion. Removal probes are bounded; past the
-	// bound a name is kept, so When stays a sufficient condition.
-	probes, budget := map[[2]int]map[conclusion]bool{}, maxAssignments
+	// When starts as the first assignment that yields the conclusion, and
+	// drops each name in turn while the conclusion still holds without it
+	// and every name dropped before. Every kept set was evaluated, so When
+	// alone is always sufficient. Probes are bounded; past the bound the
+	// remaining names are kept.
+	probes, budget := map[string]map[conclusion]bool{}, maxAssignments
 	var out []Unknown
 	for _, c := range keys {
-		at := produced[c]
-		first := assignment(at[0])
+		at := produced[c][0]
+		first := assignment(at)
+		skip := make([]bool, len(names))
+		for j := range names {
+			skip[j] = true
+			key := fmt.Sprint(at, skip)
+			got, ok := probes[key]
+			if !ok && budget > 0 {
+				budget--
+				if got, err = conclusions(at, skip); err != nil {
+					return nil, nil, err
+				}
+				probes[key], ok = got, true
+			}
+			if !ok || !got[c] {
+				skip[j] = false
+			}
+		}
 		var when []ContextValue
 		for j, n := range names {
-			matters := false
-			for _, v := range values[n] {
-				b := slices.Clone(first)
-				b[j] = v
-				if !slices.ContainsFunc(at, func(k int) bool { return slices.Equal(assignment(k), b) }) {
-					matters = true
-				}
-			}
-			if !matters {
-				key := [2]int{at[0], j}
-				got, ok := probes[key]
-				if !ok && budget > 0 {
-					budget--
-					if got, err = conclusions(at[0], j); err != nil {
-						return nil, nil, err
-					}
-					probes[key], ok = got, true
-				}
-				matters = !ok || !got[c]
-			}
-			if matters {
+			if !skip[j] {
 				when = append(when, ContextValue{Name: n, Value: first[j]})
 			}
 		}
-		reason := "holds if the context also has these values, which were not given"
-		if len(when) == 0 {
-			for j, n := range names {
-				when = append(when, ContextValue{Name: n, Value: first[j]})
-			}
-			reason = "holds if the context also has these values, which were not given; some of them alone may suffice"
-		}
-		u := Unknown{Kind: c.kind, Source: c.source, When: when, Reason: reason}
+		u := Unknown{Kind: c.kind, Source: c.source, When: when, Reason: "holds if the context also has these values, which were not given"}
 		if c.kind == "obligation" {
 			u.Requirement = c.a
 		} else {
