@@ -2,6 +2,37 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
+**Corpus Logic v1, on branch `corpus-logic-v1`, as of 2026-10-14.** Ready for owner review; not merged, released or installed. Milestone [#134](https://github.com/ashuangiras/polaroid/issues/134); workstreams A–H are #135, #136, #137, #142, #138, #139, #140 and #141. [ADR-0050](../architecture/decisions/0050-corpus-logic.md) is proposed.
+
+- **Starting baseline:** annotated tag `milestone/corpus-logic-v1-start` (`65ca0da`) points at `45b88cf` and records Corpus `b143067`. It was pushed and checked against the remote.
+- **Dependencies:** an isolated experiment ran the pinned modules on linux and darwin (amd64, arm64), offline under a network-denying sandbox, with govulncheck clean.
+  - Direct modules: Mangle `codeberg.org/TauCeti/mangle-go` v0.5.0, goRDFlib v0.6.0 and json-gold v0.8.0.
+  - Compiled transitively: stringset, antlr4-go, multierr, x/exp, cayleygraph/quad and pquerna/cachecontrol, listed with verified licenses.
+  - `check-deps.sh` now recognises ANTLR's BSD-3-Clause wording.
+- **Built:**
+  - Typed records in format-2 snapshots (`corpus.json`): JSON-LD with a bundled offline context, SHACL Core shapes and an RDF projection check, all in `internal/knowledge/semantic`.
+  - Datalog reasoning on Mangle, restricted to a safe subset, in `internal/reasoning/datalog`. Mangle's ignored lookup errors are compensated.
+  - Obligation inheritance with derivations and SHA-256 explanation ids, conflicts, unknowns, evidence status, and composition (`internal/reasoning`).
+  - Ed25519 exceptions with authority, revision, scope, validity, revocation and conflict checks (`internal/reasoning/policy`).
+  - Record publication on `/v1/knowledge`, and `/mcp/agent/v2` with `resolve`. `/mcp/agent` v1 is unchanged.
+- **Gate on `ec273b1` (code head; Dispatch run `r-20261014t004640-d2afbdc8`), nothing cached:**
+  - `make check`: lint 0 issues, deps-check 44 modules, docs-check 796 links, records-check, loader-check.
+  - `make vuln`: 0 affecting the code. `make demo`: PASS.
+  - `make e2e` 313/0, `make e2e-mcp E2E_INTEROP=0` 137/0, `make lifecycle` 69/0.
+  - Linux amd64/arm64 build, vet and lint; MCP contract tests; `-race` on the knowledge, reasoning, sync and operator packages; daemon tests, including two-instance format-2 sync and future-format rejection.
+- **Mutation probes:** 25 of 25 removed protections were caught by their tests, and sources were restored byte-identical.
+- **Real agent:** Copilot CLI (`gpt-5.3-codex`), connected only to `/mcp/agent/v2` on an isolated branch build (port 7593, its own HOME), resolved the corpus and wrote a correct plan:
+  - It kept `check.vet` required, because the inherited derivation was waived but the child's own was not.
+  - It reported `concurrency` as the undecided context.
+- **Not done:**
+  - Composition is not served by any endpoint.
+  - Nothing was published to the live Corpus.
+  - The installed service is not upgraded.
+  - No execution was recorded against the `verify-change` binding.
+  - The full list of limitations is in ADR-0050.
+
+Next action: owner review of ADR-0050 and the pull request; on approval, merge, then decide whether to publish real Corpus records.
+
 **Knowledge remote, as of 2026-10-14.**
 
 - **The installed instance now has a remote:** a private knowledge repository, configured as source `corpus` (HTTPS, branch `main`, publisher `operator.deploy-check`, push permitted) in `~/.polaroid/data/knowledge-sources.json`.
