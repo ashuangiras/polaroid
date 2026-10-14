@@ -333,6 +333,9 @@ func equalRecords(a, b *Record) bool {
 // published snapshot to. History is kept: the rollback is a new
 // publication, recorded with the snapshot it restores.
 func (k *Kernel) Rollback(ctx context.Context, base, to Snapshot, pv Provenance) (Snapshot, error) {
+	if to == "" {
+		return "", &ValidationError{Problems: []Problem{{Field: "to", Message: "is required: the published snapshot to restore"}}}
+	}
 	cur, err := k.At(ctx, base)
 	if err != nil {
 		return "", err
@@ -381,7 +384,9 @@ func (k *Kernel) Rollback(ctx context.Context, base, to Snapshot, pv Provenance)
 // restoredRevision is the revision a rollback gives a restored rule: the
 // active one when the semantics do not change, otherwise one above both
 // the active and the restored revision, so approvals given for an earlier
-// revision never apply again (ADR-0050).
+// revision never apply again (ADR-0050). A published rule is never
+// removed, so a rule that is not active comes from outside the active
+// history; it too takes a new revision, and needs a new approval.
 func restoredRevision(active, restored *Record) int {
 	if active == nil || active.Type != TypeRule {
 		return restored.Revision + 1

@@ -74,9 +74,12 @@ func checkGovernance(p *problems, records map[string]*Record) {
 }
 
 // CheckTransition checks what may change from one published catalog to
-// the next (ADR-0050): a protected rule is never removed or unprotected, a
-// rule whose semantics change takes a higher revision, and a revision
-// never decreases. Nothing is exempt, rollbacks included: a rollback
+// the next (ADR-0050): a published rule is never removed or retyped, a
+// protected rule is never unprotected, a rule whose semantics change takes
+// a higher revision, and a revision never decreases. A rule's revision
+// therefore only rises along every accepted history, so an approval for a
+// revision it left never matches again. A rule is retired by a rule that
+// supersedes it. Nothing is exempt, rollbacks included: a rollback
 // restores earlier semantics under a new revision (Kernel.Rollback).
 func CheckTransition(prev, next *Catalog) error {
 	var p problems
@@ -91,6 +94,8 @@ func CheckTransition(prev, next *Catalog) error {
 		case !ok || cur.Type != TypeRule:
 			if old.Protected {
 				p.add(field, "is a protected invariant and cannot be removed")
+			} else {
+				p.add(field, "is a published rule and cannot be removed or retyped, or an earlier approval could match it again; retire it with a rule that supersedes it")
 			}
 		case old.Protected && !cur.Protected:
 			p.add(field+".protected", "a protected invariant cannot be unprotected")

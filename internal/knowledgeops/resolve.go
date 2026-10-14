@@ -18,6 +18,9 @@ import (
 // ResolveTimeout bounds one resolution.
 const ResolveTimeout = 10 * time.Second
 
+// MaxAssertions bounds the context assertions of one request.
+const MaxAssertions = 16
+
 // Resolver answers agent resolution requests (ADR-0050) on the same kernel
 // the agent reads, with an evaluator and the operator's trust material.
 type Resolver struct {
@@ -41,6 +44,7 @@ func (r *Resolver) Resolve(ctx context.Context, in wire.KnowledgeResolveRequest)
 		return wire.KnowledgeResolution{}, requiredField("goal")
 	}
 	at := r.now().UTC().Truncate(time.Second)
+	now := at
 	if in.At != "" {
 		t, err := time.Parse(time.RFC3339, in.At)
 		if err != nil {
@@ -61,10 +65,16 @@ func (r *Resolver) Resolve(ctx context.Context, in wire.KnowledgeResolveRequest)
 	ctx, cancel := context.WithTimeout(ctx, ResolveTimeout)
 	defer cancel()
 	// Only verified assertions establish trusted context; without them,
-	// project-scoped and conditional exceptions fail closed.
+	// project-scoped and conditional exceptions fail closed. An assertion
+	// must be valid now as well as at the evaluation time, so choosing an
+	// earlier time never revives an expired one.
 	assertions, err := decodeAssertions(in.Assertions)
 	if err != nil {
 		return wire.KnowledgeResolution{}, err
+	}
+	if _, err := policy.Establish(r.trust, assertions, now); err != nil {
+		return wire.KnowledgeResolution{}, invalidField("assertions",
+			fmt.Sprintf("%v (checked at the current time %s: an assertion must be valid when it is presented, whatever the evaluation time)", err, now.Format(time.RFC3339)))
 	}
 	trusted, err := policy.Establish(r.trust, assertions, at)
 	if err != nil {
@@ -94,13 +104,16 @@ func (r *Resolver) Resolve(ctx context.Context, in wire.KnowledgeResolveRequest)
 }
 
 func decodeAssertions(in []wire.KnowledgeAssertion) ([]policy.Assertion, error) {
+	if len(in) > MaxAssertions {
+		return nil, invalidField("assertions", fmt.Sprintf("at most %d assertions are accepted", MaxAssertions))
+	}
 	var out []policy.Assertion
 	for i, a := range in {
 		field := fmt.Sprintf("assertions[%d]", i)
 		from, err1 := time.Parse(time.RFC3339, a.ValidFrom)
 		until, err2 := time.Parse(time.RFC3339, a.ValidUntil)
-		if err1 != nil || err2 != nil {
-			return nil, invalidField(field, "valid_from and valid_until must be RFC 3339 times")
+		if err1 != nil || err2 != nil || from.Nanosecond() != 0 || until.Nanosecond() != 0 {
+			return nil, invalidField(field, "valid_from and valid_until must be RFC 3339 times, to the second")
 		}
 		sig, err := base64.StdEncoding.DecodeString(a.Signature)
 		if err != nil {

@@ -5,23 +5,27 @@ This page is a snapshot of the repository's current state, replaced at every han
 **Corpus Logic v1, on branch `corpus-logic-v1`, as of 2026-10-14.** Independent review and corrections done; ready for owner review; not merged, released or installed. Milestone [#134](https://github.com/ashuangiras/polaroid/issues/134); workstreams A–H are #135, #136, #137, #142, #138, #139, #140 and #141. [ADR-0050](../architecture/decisions/0050-corpus-logic.md) is proposed and describes what is implemented.
 
 - **Final semantic integrity gate** (after `bd634a4`), three corrections:
-  - **Rollback** is a governed publication with no exemptions. Restored semantics take a revision above the active one, so no earlier approval becomes valid again. Protected invariants stay protected. The `Polaroid-Rollback-To` trailer is provenance only, and history is never rewritten. Operator API `POST /v1/knowledge/rollbacks` and CLI `polaroid knowledge-rollback`.
-  - **Trusted context** comes from signed context assertions (`resolve`'s `assertions`), verified against operator-held attestation keys bound to one repository and a set of names, at the evaluation time. Invalid assertions, or caller context that contradicts them, fail the request. No identity service.
+  - **Rollback** is a governed publication with no exemptions.
+    - Restored semantics take a revision above the active one, so no earlier approval becomes valid again.
+    - A published rule is never removed or retyped, by any publication, rollback, activation or validated fetch; it is retired by a rule that supersedes it. Its revision therefore only rises along every accepted history.
+    - Protected invariants stay protected.
+    - The `Polaroid-Rollback-To` trailer is provenance only, and history is never rewritten.
+    - Operator API `POST /v1/knowledge/rollbacks` and CLI `polaroid knowledge-rollback`.
+  - **Trusted context** comes from signed context assertions (`resolve`'s `assertions`), verified against operator-held attestation keys bound to one repository and a set of names.
+    - An assertion must be valid both at the evaluation time and at the server's current time, with validity in whole seconds; at most 16 per request.
+    - Invalid assertions, or caller context that contradicts them, fail the request. No identity service.
   - **Domain authority** signs the domain path from the rule's classification to the authority's domain. The exception applies only while that path holds, so hierarchy changes along it force a new approval, and a restored hierarchy revalidates.
   - **Deterministic output:** MCP and operator responses now encode map keys in sorted order (`encoding/json/v2` does not by default), which `trusted` exposed.
   - **Performance limitation:** resolving near the 64-combination limit takes about 0.3–1 s (`BenchmarkResolveMissingContext`), tracked in [#144](https://github.com/ashuangiras/polaroid/issues/144).
-  - **Mutation probes:** 75 of 75 removed protections, rollback revisions, assertion checks and domain-path checks included, were caught by their tests.
-  - **Verification (`verify-change`, full) at `1eeb508`**, in clean detached worktrees, with the test cache cleaned first (nothing cached):
-    - `make check`: lint 0 issues, deps-check 44 modules, docs-check 800 links, records-check, loader-check 33/0.
-    - `make vuln`: 0 affecting the code. `make demo`: PASS.
-    - `make e2e`: 313/0. `make e2e-mcp E2E_INTEROP=0`: 137/0. `make lifecycle`: 69/0.
-    - Linux amd64/arm64 build, vet and lint; MCP contract tests; `-race`; daemon tests, including `TestCorpusAuthorizationAcceptance` and `TestCorpusLogicSyncBetweenDaemons`.
-    - Executions: parent `01a139ee-ce8c-797c-bc21-79703dc6dbe3`, verified. Children: build `01a139ee-1328-753f-aac8-5ec08f06ee39`, checks `01a139ee-134c-7c97-9cfa-707fd2745328` and artifact `01a139ee-95ef-7435-9f44-5b6d8f17bf9f` (`dist/artifacts/1eeb508…/`, linux/amd64, not reviewed independently). Hosted CI was skipped under the local-only policy.
-  - **Real agent at `1eeb508`:** Copilot CLI (`gpt-5.3-codex`), connected only to `/mcp/agent/v2` on an isolated build (port 7593, its own HOME, snapshot `c9fd393`), made six `resolve` calls:
-    - With caller-asserted repository and `ci`, both waivers were `not_applicable`.
-    - With the signed CI assertion, both applied and `trusted` was reported; `check.vet` stayed required through its `go.verify.concurrent` derivation.
-    - A contradicting `ci=false` gave `invalid_request`.
-    - Compositions were correct, and two derivation ids it cited were recomputed independently.
+  - **Independent review of `1eeb508`** (read-only CodeReviewer) found two blocking defects and two minor ones, all fixed in the next commit:
+    - A removed and re-added rule could repeat an earlier revision and digest, through rollback chains or ordinary publication, so a cancelled approval could match again.
+    - The caller chooses `at`, so a back-dated `at` revived an expired assertion.
+    - Sub-second validity times were accepted but not signed.
+    - A rollback with an empty `to` would have emptied the catalog.
+
+    It also recommended capping the number of assertions (done) and documenting the shared revocation list (done).
+  - **Mutation probes:** 80 of 80 removed protections were caught by their tests, including rollback revisions, rule removal, every assertion check, current-time validity, domain-path checks and deterministic encoding.
+  - `1eeb508` was verified (`verify-change` parent `01a139ee-ce8c-797c-bc21-79703dc6dbe3`) before that review; the review fixes supersede it.
 - **Review of PR #143 (`8067f8a`) found seven defects**, fixed in `6c5effd`, `ffbf946`, `9da95eb`, `d0cae8f` and `a45f3e2`:
   - Exception approvals bound only to a rule's key and editable revision. They now sign a `rule_digest` of the rule's semantics, and every publication, rollback, activation and validated fetch enforces rule governance: a semantics change needs a higher revision, and a protected rule is never removed, unprotected, waivable, excepted or superseded by an unprotected rule.
   - The caller's own `repository` and condition context activated project waivers. Only trusted context does now: signed assertions, added by the final gate.

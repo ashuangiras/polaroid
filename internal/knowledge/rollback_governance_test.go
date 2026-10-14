@@ -44,12 +44,11 @@ func TestRollbackRestoresUnderNewRevisions(t *testing.T) {
 	tests2.Statement, tests2.Revision = "Every software procedure requires passing tests, always.", 2
 	unchanged := rule(s1, "rule.go.race")
 	// A label is not part of a rule's semantics, so it changes without a
-	// new revision; an unprotected rule can be removed.
+	// new revision.
 	relabelled := unchanged.Clone()
 	relabelled.Label = "Race detector, relabelled"
-	removed := rule(s1, "rule.audio.phase.method")
 	s2, err := k.Publish(ctx, knowledge.Proposal{Base: s1, Records: []knowledge.RecordChange{{Key: vet2.Key, Record: vet2}, {Key: tests2.Key, Record: tests2},
-		{Key: relabelled.Key, Record: relabelled}, {Key: removed.Key}}, Provenance: prov()})
+		{Key: relabelled.Key, Record: relabelled}}, Provenance: prov()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,10 +67,6 @@ func TestRollbackRestoresUnderNewRevisions(t *testing.T) {
 	if got := rule(s3, unchanged.Key); got.Revision != unchanged.Revision || got.Label != unchanged.Label {
 		t.Errorf("a rule with unchanged semantics moved to revision %d (label %q)", got.Revision, got.Label)
 	}
-	// A rule the rollback adds back takes a revision above its restored one.
-	if got := rule(s3, removed.Key); got.Revision != removed.Revision+1 || knowledge.RuleDigest(got) != knowledge.RuleDigest(removed) {
-		t.Errorf("re-added rule at revision %d", got.Revision)
-	}
 	h, err := k.History(ctx, s3, 1)
 	if err != nil || len(h) != 1 || h[0].RollbackTo != s1 {
 		t.Fatalf("rollback provenance %+v, %v", h, err)
@@ -83,6 +78,61 @@ func TestRollbackRestoresUnderNewRevisions(t *testing.T) {
 	// before the protected rule existed would remove it.
 	if _, err := k.Rollback(ctx, s3, s0, prov()); !errors.Is(err, knowledge.ErrInvalid) || !strings.Contains(err.Error(), "is a protected invariant and cannot be removed") {
 		t.Fatalf("rollback removing a protected invariant: %v", err)
+	}
+	if _, err := k.Rollback(ctx, s3, "", prov()); !errors.Is(err, knowledge.ErrInvalid) || !strings.Contains(err.Error(), "to: is required") {
+		t.Fatalf("rollback to nothing: %v", err)
+	}
+}
+
+// A published rule is never removed or retyped, by a publication or a
+// rollback, so its revision only rises: no history can bring back a
+// (revision, digest) pair an approval was cancelled for (ADR-0050). A
+// rule restored from outside the active history takes a new revision.
+func TestPublishedRulesAreNeverRemoved(t *testing.T) {
+	ctx := context.Background()
+	m := knowledgetest.NewMemoryStore()
+	k := knowledge.New(m, knowledge.WithRecordValidator(&acceptAll{}))
+	s1, err := k.Publish(ctx, knowledge.Proposal{Changes: knowledgetest.CorpusProcedures(), Records: knowledgetest.CorpusRecordChanges(), Provenance: prov()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat, _ := k.At(ctx, s1)
+	vet, _ := cat.Record("rule.go.vet")
+	retyped := &knowledge.Record{Type: knowledge.TypeConcept, Key: vet.Key, Label: "no longer a rule"}
+	for name, change := range map[string]knowledge.RecordChange{"removed": {Key: vet.Key}, "retyped": {Key: vet.Key, Record: retyped}} {
+		_, err := k.Publish(ctx, knowledge.Proposal{Base: s1, Records: []knowledge.RecordChange{change}, Provenance: prov()})
+		if !errors.Is(err, knowledge.ErrInvalid) || !strings.Contains(err.Error(), "is a published rule and cannot be removed or retyped") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+
+	// An activation checks only its whole move, so an intermediate snapshot
+	// it brought in can hold a rule the active knowledge lacks.
+	extra := vet.Clone()
+	extra.Key, extra.Revision = "rule.go.extra", 4
+	doc, err := knowledge.EncodeRecord(extra)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := knowledge.RecordPath(extra.Type, extra.Key)
+	with, err := m.Stage(s1, knowledge.Commit{Changes: []knowledge.FileChange{{Path: path, Content: doc}}, Author: "mallory", Subject: "add", Body: "because"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	without, err := m.Stage(with, knowledge.Commit{Changes: []knowledge.FileChange{{Path: path, Delete: true}}, Author: "mallory", Subject: "remove", Body: "because"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := k.Activate(ctx, knowledge.Activation{Base: s1, Target: without, Provenance: decision()}); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := k.Rollback(ctx, without, with, prov())
+	if err != nil {
+		t.Fatalf("rollback to the intermediate snapshot: %v", err)
+	}
+	cat, _ = k.At(ctx, s2)
+	if got, err := cat.Record(extra.Key); err != nil || got.Revision != 5 || knowledge.RuleDigest(got) != knowledge.RuleDigest(extra) {
+		t.Fatalf("restored %+v %v", got, err)
 	}
 }
 

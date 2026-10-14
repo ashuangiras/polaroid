@@ -144,7 +144,9 @@ func TestCorpusAuthorizationAcceptance(t *testing.T) {
 	t.Cleanup(func() { _ = s.Close() })
 	resolve := func(args map[string]any) (string, bool) {
 		t.Helper()
-		args["at"] = "2026-10-14T12:00:00Z"
+		if _, ok := args["at"]; !ok {
+			args["at"] = "2026-10-14T12:00:00Z"
+		}
 		res, err := s.CallTool(ctx, &sdk.CallToolParams{Name: "resolve", Arguments: args})
 		if err != nil {
 			t.Fatal(err)
@@ -152,6 +154,15 @@ func TestCorpusAuthorizationAcceptance(t *testing.T) {
 		return res.Content[0].(*sdk.TextContent).Text, res.IsError
 	}
 	at := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	// An assertion must be valid at the evaluation time and when it is
+	// presented, so the windows below cover both at and the real clock.
+	now := time.Now().UTC().Truncate(time.Second)
+	from, until := at.Add(-time.Hour), at.Add(time.Hour)
+	if now.Before(at) {
+		from = now.Add(-time.Hour)
+	} else {
+		until = now.Add(time.Hour)
+	}
 	assertion := func(id, repository string, facts map[string]string, from, until time.Time) map[string]any {
 		t.Helper()
 		a := policy.Assertion{Reference: "assert-" + id, Key: id, Repository: repository, Facts: facts, ValidFrom: from, ValidUntil: until}
@@ -162,7 +173,7 @@ func TestCorpusAuthorizationAcceptance(t *testing.T) {
 		return map[string]any{"reference": a.Reference, "key": id, "repository": repository, "facts": facts,
 			"valid_from": from.Format(time.RFC3339), "valid_until": until.Format(time.RFC3339), "signature": base64.StdEncoding.EncodeToString(sig)}
 	}
-	ciTrue := assertion("team.ci", repo, map[string]string{"ci": "true"}, at.Add(-time.Hour), at.Add(time.Hour))
+	ciTrue := assertion("team.ci", repo, map[string]string{"ci": "true"}, from, until)
 	status_ := func(text, key string) (string, string) {
 		t.Helper()
 		var r struct {
@@ -210,13 +221,25 @@ func TestCorpusAuthorizationAcceptance(t *testing.T) {
 		}
 	}
 	expect("assertion for another project", map[string]any{"goal": "go.verify",
-		"assertions": []any{assertion("other.ci", otherRepo, nil, at.Add(-time.Hour), at.Add(time.Hour))}},
+		"assertions": []any{assertion("other.ci", otherRepo, nil, from, until)}},
 		"exc.team.vet", "not_applicable", "granted for repository "+repo)
 	refused("attestation key used for another project", map[string]any{"goal": "go.verify",
-		"assertions": []any{assertion("team.ci", otherRepo, nil, at.Add(-time.Hour), at.Add(time.Hour))}}, "attests only for "+repo)
+		"assertions": []any{assertion("team.ci", otherRepo, nil, from, until)}}, "attests only for "+repo)
 	refused("expired assertion", map[string]any{"goal": "go.verify",
-		"assertions": []any{assertion("team.ci", repo, nil, at.Add(-2*time.Hour), at.Add(-time.Hour))}}, "expired at")
-	forged := assertion("team.ci", repo, map[string]string{"ci": "false"}, at.Add(-time.Hour), at.Add(time.Hour))
+		"assertions": []any{assertion("team.ci", repo, nil, from.Add(-2*time.Hour), from.Add(-time.Hour))}}, "expired at")
+	// Choosing an earlier evaluation time never revives an expired assertion.
+	past := now.Add(-48 * time.Hour)
+	refused("back-dated replay", map[string]any{"goal": "go.verify", "at": past.Format(time.RFC3339),
+		"assertions": []any{assertion("team.ci", repo, nil, past.Add(-time.Hour), past.Add(time.Hour))}}, "checked at the current time")
+	fractional := assertion("team.ci", repo, nil, from, until)
+	fractional["valid_until"] = until.Add(999 * time.Millisecond).Format(time.RFC3339Nano)
+	refused("sub-second validity", map[string]any{"goal": "go.verify", "assertions": []any{fractional}}, "to the second")
+	many := make([]any, 17)
+	for i := range many {
+		many[i] = ciTrue
+	}
+	refused("too many assertions", map[string]any{"goal": "go.verify", "assertions": many}, "at most 16 assertions")
+	forged := assertion("team.ci", repo, map[string]string{"ci": "false"}, from, until)
 	forged["facts"] = map[string]string{"ci": "true"}
 	refused("tampered assertion", map[string]any{"goal": "go.verify", "assertions": []any{forged}}, "the signature does not verify")
 
@@ -225,7 +248,7 @@ func TestCorpusAuthorizationAcceptance(t *testing.T) {
 	expect("known trusted fact", map[string]any{"goal": "go.verify.concurrent", "context": concurrent, "assertions": []any{ciTrue}},
 		"exc.corpus.race.ci", "applied", "")
 	expect("unknown fact", map[string]any{"goal": "go.verify.concurrent", "context": map[string]any{"concurrency": "true", "ci": "true"},
-		"assertions": []any{assertion("team.ci", repo, nil, at.Add(-time.Hour), at.Add(time.Hour))}},
+		"assertions": []any{assertion("team.ci", repo, nil, from, until)}},
 		"exc.corpus.race.ci", "not_applicable", "requires trusted context ci")
 	refused("contradicting caller", map[string]any{"goal": "go.verify.concurrent", "context": map[string]any{"concurrency": "true", "ci": "false"},
 		"assertions": []any{ciTrue}}, "in the context but")
