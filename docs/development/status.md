@@ -2,15 +2,23 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
-**`gitcore.verify-integrity` added, pushed to the `corpus` remote, and exercised end to end, as of 2026-10-14.** A live-service action, not a code or doc change to `main`; no commit. Supersedes the "next action" below, which this answers.
+**Typed `Procedure` records' relationships brought in line with their documents, and a standing rule added for it, as of 2026-10-14.** A live-service action plus a docs-only change; no code commit. Supersedes the "next action" below, which this answers.
+
+- **Found while reviewing the Corpus's own structure:** `dev.change.implement` and `dev.change.review` both reference `dev.change.verify` in their Procedure documents (what `read` serves), but their typed `Procedure` records carried only `classified_as` — `resolve("dev.change.implement")` reported `applicable` as only itself and `domain.software`, with `dev.change.verify` entirely invisible to reasoning despite the document stating the dependency.
+- **Published** `composes: ["k:dev.change.verify"]` on both records (snapshot `ed3adddfe384a64cb69b8f8126dfc2a4e3dcbc20`). Verified over `/mcp/agent/v2`: `resolve` on both now reports `dev.change.verify` as `applicable`. gitcore re-checked clean throughout (`git fsck` 0 problems; daemon/git snapshots matched at every step).
+- **Pushed to `corpus`**: fast-forward `8cb075a` → `ed3addd`, 7 objects, 1,324 bytes. Reviewed first; confirmed landed via the GitHub API.
+- **Standing rule added to [knowledge-guide.md](../architecture/knowledge-guide.md):** whenever a Procedure document's `references` names another procedure and a typed record exists for the referencing key, the reference is mirrored as a `composes` edge in the same publication — a typed record that tracks less relational information than its document already states is incomplete, not minimal-by-design.
+- **`gitcore.verify-integrity` and `deployment.smoke-test` remain without a typed record**, by deliberate choice: no existing domain cleanly fits a meta-verification procedure, and neither carries any procedure reference that `composes` would need to mirror.
+
+Next action: decide what Go procedure knowledge to add next, and whether to configure an exception authority.
+
+**`gitcore.verify-integrity` added, pushed to the `corpus` remote, and exercised end to end, as of 2026-10-14 (superseded above).** A live-service action, not a code or doc change to `main`; no commit.
 
 - **Verified gitcore directly first**, since `internal/gitcore.Repository.Verify` ([ADR-0044](../architecture/decisions/0044-git-core.md)) has no CLI or API exposure: `git fsck --full --strict` (clean, 0 problems), `git count-objects -v` (0 garbage, 0 packs — all loose, as designed), and a cross-check that `knowledge-status`'s snapshot exactly equals `git rev-parse refs/heads/active` (it did, at every step of this session).
 - **Published** `gitcore.verify-integrity` (snapshot `fb22bac0b3ae4b76c196a91e39495cc9d1c08c95`): a procedure capturing that method, so a future agent does not have to rediscover it.
 - **Retrieved it over `/mcp/agent/v2`** (`discover` then `read`): byte-identical to what was published.
 - **Used it**: followed its own retrieved instructions (`fsck` → `objects` → `cross-check` → `provenance` → `roundtrip` → `report`) as a second, independent pass, including a real disposable probe record (`gitcore.probe.roundtrip-test`), published via CLI, read back byte-identical over MCP, then removed by a further publication (history keeps both commits, never rewritten).
 - **Pushed to `corpus`** (`https://github.com/ashuangiras/corpus.git`, private, `main`): fast-forward `51da4385` → `8cb075a`, 11 objects, 4,074 bytes, three commits (add, probe, remove-probe). Reviewed first (`git log -p refs/remotes/corpus/main..refs/heads/active`): no credentials or private paths. Confirmed landed via the GitHub API (`repos/ashuangiras/corpus/commits/main` reports `8cb075a`, matching the local tracking ref).
-
-Next action: decide what Go procedure knowledge to add next, and whether to configure an exception authority.
 
 **First typed records published to this repository's own live Corpus, and pushed to the `corpus` remote, as of 2026-10-14 (superseded above).** A live-service action, not a code or doc change to `main`; no commit.
 
