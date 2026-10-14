@@ -11,6 +11,17 @@ This page is a snapshot of the repository's current state, replaced at every han
   - **Deterministic output:** MCP and operator responses now encode map keys in sorted order (`encoding/json/v2` does not by default), which `trusted` exposed.
   - **Performance limitation:** resolving near the 64-combination limit takes about 0.3–1 s (`BenchmarkResolveMissingContext`), tracked in [#144](https://github.com/ashuangiras/polaroid/issues/144).
   - **Mutation probes:** 75 of 75 removed protections, rollback revisions, assertion checks and domain-path checks included, were caught by their tests.
+  - **Verification (`verify-change`, full) at `1eeb508`**, in clean detached worktrees, with the test cache cleaned first (nothing cached):
+    - `make check`: lint 0 issues, deps-check 44 modules, docs-check 800 links, records-check, loader-check 33/0.
+    - `make vuln`: 0 affecting the code. `make demo`: PASS.
+    - `make e2e`: 313/0. `make e2e-mcp E2E_INTEROP=0`: 137/0. `make lifecycle`: 69/0.
+    - Linux amd64/arm64 build, vet and lint; MCP contract tests; `-race`; daemon tests, including `TestCorpusAuthorizationAcceptance` and `TestCorpusLogicSyncBetweenDaemons`.
+    - Executions: parent `01a139ee-ce8c-797c-bc21-79703dc6dbe3`, verified. Children: build `01a139ee-1328-753f-aac8-5ec08f06ee39`, checks `01a139ee-134c-7c97-9cfa-707fd2745328` and artifact `01a139ee-95ef-7435-9f44-5b6d8f17bf9f` (`dist/artifacts/1eeb508…/`, linux/amd64, not reviewed independently). Hosted CI was skipped under the local-only policy.
+  - **Real agent at `1eeb508`:** Copilot CLI (`gpt-5.3-codex`), connected only to `/mcp/agent/v2` on an isolated build (port 7593, its own HOME, snapshot `c9fd393`), made six `resolve` calls:
+    - With caller-asserted repository and `ci`, both waivers were `not_applicable`.
+    - With the signed CI assertion, both applied and `trusted` was reported; `check.vet` stayed required through its `go.verify.concurrent` derivation.
+    - A contradicting `ci=false` gave `invalid_request`.
+    - Compositions were correct, and two derivation ids it cited were recomputed independently.
 - **Review of PR #143 (`8067f8a`) found seven defects**, fixed in `6c5effd`, `ffbf946`, `9da95eb`, `d0cae8f` and `a45f3e2`:
   - Exception approvals bound only to a rule's key and editable revision. They now sign a `rule_digest` of the rule's semantics, and every publication, rollback, activation and validated fetch enforces rule governance: a semantics change needs a higher revision, and a protected rule is never removed, unprotected, waivable, excepted or superseded by an unprotected rule.
   - The caller's own `repository` and condition context activated project waivers. Only trusted context does now: signed assertions, added by the final gate.
