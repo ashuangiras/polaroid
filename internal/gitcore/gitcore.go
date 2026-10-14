@@ -233,6 +233,34 @@ func (r *Repository) Tree(ctx context.Context, s Snapshot) (*Tree, error) {
 	return &Tree{r: r, snap: s, ix: ix}, nil
 }
 
+// StoredTree returns the view of a snapshot this repository holds: a
+// published one (Tree), or one imported after verification and not yet
+// activated (a tracking ref's snapshot or an ancestor of one). A commit
+// that is merely present in the object store is not found.
+func (r *Repository) StoredTree(ctx context.Context, s Snapshot) (*Tree, error) {
+	err := r.published(ctx, s)
+	switch {
+	case err == nil:
+		return r.Tree(ctx, s)
+	case !errors.Is(err, ErrNotFound):
+		return nil, err
+	case !s.valid():
+		return nil, err
+	}
+	ok, err := r.tracked(s)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("snapshot %s: %w", s, ErrNotFound)
+	}
+	ix, err := r.indexOf(s)
+	if err != nil {
+		return nil, err
+	}
+	return &Tree{r: r, snap: s, ix: ix}, nil
+}
+
 // Snapshot is "" for a proposed tree that is not published yet.
 func (t *Tree) Snapshot() Snapshot { return t.snap }
 

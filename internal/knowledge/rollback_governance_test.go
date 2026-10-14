@@ -87,7 +87,7 @@ func TestRollbackRestoresUnderNewRevisions(t *testing.T) {
 // A published rule is never removed or retyped, by a publication or a
 // rollback, so its revision only rises: no history can bring back a
 // (revision, digest) pair an approval was cancelled for (ADR-0050). A
-// rule restored from outside the active history takes a new revision.
+// rollback refuses to restore a rule that is not active.
 func TestPublishedRulesAreNeverRemoved(t *testing.T) {
 	ctx := context.Background()
 	m := knowledgetest.NewMemoryStore()
@@ -106,8 +106,10 @@ func TestPublishedRulesAreNeverRemoved(t *testing.T) {
 		}
 	}
 
-	// An activation checks only its whole move, so an intermediate snapshot
-	// it brought in can hold a rule the active knowledge lacks.
+	// The memory store stages imported history without a validated fetch,
+	// which checks every edge and would refuse this removal
+	// (knowledgesync.TestFetchedEdgesFromImportedHistory); activation checks
+	// only the whole move.
 	extra := vet.Clone()
 	extra.Key, extra.Revision = "rule.go.extra", 4
 	doc, err := knowledge.EncodeRecord(extra)
@@ -126,13 +128,11 @@ func TestPublishedRulesAreNeverRemoved(t *testing.T) {
 	if err := k.Activate(ctx, knowledge.Activation{Base: s1, Target: without, Provenance: decision()}); err != nil {
 		t.Fatal(err)
 	}
-	s2, err := k.Rollback(ctx, without, with, prov())
-	if err != nil {
-		t.Fatalf("rollback to the intermediate snapshot: %v", err)
-	}
-	cat, _ = k.At(ctx, s2)
-	if got, err := cat.Record(extra.Key); err != nil || got.Revision != 5 || knowledge.RuleDigest(got) != knowledge.RuleDigest(extra) {
-		t.Fatalf("restored %+v %v", got, err)
+	// A rule absent from the active knowledge has a history this instance
+	// never governed, so a rollback refuses to restore it.
+	if _, err := k.Rollback(ctx, without, with, prov()); !errors.Is(err, knowledge.ErrInvalid) ||
+		!strings.Contains(err.Error(), "records[rule.go.extra]: is a rule that is not in the active knowledge") {
+		t.Fatalf("rollback restoring an absent rule: %v", err)
 	}
 }
 

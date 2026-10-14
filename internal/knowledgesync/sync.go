@@ -219,13 +219,14 @@ func (s *Syncer) Validate(ctx context.Context, c *Candidate) error {
 	return nil
 }
 
-// checkTransition checks an incoming publication against its parent, when
-// the parent is readable here: an earlier incoming publication or local
-// published history. Trailers grant nothing: rule governance has no
-// exemptions. A parent fetched earlier but never activated is not readable
-// and its edge is not checked here; activation checks the move from the
-// active knowledge to its target, and a rollback to such a snapshot
-// restores its rules under new revisions, like any publication.
+// checkTransition checks an incoming publication against its parent: an
+// earlier incoming publication, published history, or a snapshot imported
+// earlier and not yet activated. Every edge of every history this
+// instance can activate is therefore checked, so a rule is never removed
+// and its revision never falls anywhere along it, and an approval
+// cancelled by a revision never matches again. A parent held nowhere here
+// is refused rather than skipped. Trailers grant nothing: rule governance
+// has no exemptions.
 func (s *Syncer) checkTransition(ctx context.Context, cm gitcore.Commit, cat *knowledge.Catalog, cats map[knowledge.Snapshot]*knowledge.Catalog) (problem, err error) {
 	if len(cm.Parents) == 0 {
 		return nil, nil
@@ -233,12 +234,16 @@ func (s *Syncer) checkTransition(ctx context.Context, cm gitcore.Commit, cat *kn
 	parent := knowledge.Snapshot(cm.Parents[0])
 	prev := cats[parent]
 	if prev == nil {
-		c, err := s.kernel.At(ctx, parent)
-		if errors.Is(err, knowledge.ErrNotFound) {
-			return nil, nil
+		tree, err := s.repo.StoredTree(ctx, gitcore.Snapshot(parent))
+		if errors.Is(err, gitcore.ErrNotFound) {
+			return fmt.Errorf("its parent %s is not knowledge held here, so the change from it cannot be checked", parent), nil
 		}
 		if err != nil {
 			return nil, err
+		}
+		c, err := s.kernel.Check(ctx, parent, gitstore.Files(tree))
+		if err != nil {
+			return fmt.Errorf("its parent %s: %w", parent, err), nil
 		}
 		prev = c
 	}

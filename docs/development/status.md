@@ -7,7 +7,7 @@ This page is a snapshot of the repository's current state, replaced at every han
 - **Final semantic integrity gate** (after `bd634a4`), three corrections:
   - **Rollback** is a governed publication with no exemptions.
     - Restored semantics take a revision above the active one, so no earlier approval becomes valid again.
-    - A published rule is never removed or retyped, by any publication, rollback, activation or validated fetch; it is retired by a rule that supersedes it. Its revision therefore only rises along every accepted history.
+    - A published rule is never removed or retyped, by any publication, rollback, activation or validated fetch; it is retired by a rule that supersedes it. A validated fetch checks every incoming edge, including one from a snapshot imported earlier and not yet activated, and refuses a parent it does not hold. A rule's revision therefore only rises along every history an instance can activate, and a rollback refuses to restore a rule that is not active.
     - Protected invariants stay protected.
     - The `Polaroid-Rollback-To` trailer is provenance only, and history is never rewritten.
     - Operator API `POST /v1/knowledge/rollbacks` and CLI `polaroid knowledge-rollback`.
@@ -24,7 +24,8 @@ This page is a snapshot of the repository's current state, replaced at every han
     - A rollback with an empty `to` would have emptied the catalog.
 
     It also recommended capping the number of assertions (done) and documenting the shared revocation list (done).
-  - **Mutation probes:** 80 of 80 removed protections were caught by their tests, including rollback revisions, rule removal, every assertion check, current-time validity, domain-path checks and deterministic encoding.
+  - **Re-review of `8f87b71`** found one more blocking path: a validated fetch skipped the edge from a snapshot imported earlier but never activated, so a remote could remove a rule and add it back at a cancelled revision. Fixed in the next commit: every fetched edge is checked (`gitcore.StoredTree` reads imported snapshots), a parent held nowhere is refused, and a rollback refuses to restore an absent rule. Approval validity stays judged at `at` (historical queries) and is documented as such.
+  - **Mutation probes:** 82 of 82 removed protections were caught by their tests, including rollback revisions, rule removal, fetched edges from imported history, every assertion check, current-time validity, domain-path checks and deterministic encoding.
   - `1eeb508` was verified (`verify-change` parent `01a139ee-ce8c-797c-bc21-79703dc6dbe3`) before that review; the review fixes supersede it.
 - **Review of PR #143 (`8067f8a`) found seven defects**, fixed in `6c5effd`, `ffbf946`, `9da95eb`, `d0cae8f` and `a45f3e2`:
   - Exception approvals bound only to a rule's key and editable revision. They now sign a `rule_digest` of the rule's semantics, and every publication, rollback, activation and validated fetch enforces rule governance: a semantics change needs a higher revision, and a protected rule is never removed, unprotected, waivable, excepted or superseded by an unprotected rule.

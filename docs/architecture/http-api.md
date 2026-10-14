@@ -693,7 +693,7 @@ Example `invalid_request` response:
 
   Against the published catalog, a rule whose semantics change must take a higher revision, a revision never decreases, a protected rule is never unprotected, and a published rule is never removed or retyped (retire it with a rule that supersedes it). Nothing is exempt, rollback included: a rollback (`POST /v1/knowledge/rollbacks`) is a new publication that restores semantics under a higher revision, so no earlier approval becomes valid again. A refused publication is `400` with a field per problem.
 
-  Fetched candidates are validated the same way, and activation checks the same transition from the active snapshot. A snapshot with records is format 2 and carries `corpus.json`. Instances built before ADR-0050, and any instance without the needed format or capabilities, refuse it.
+  Fetched candidates are validated the same way, each incoming publication against its parent, which must be held here (published, or imported and not yet activated); and activation checks the same transition from the active snapshot. A snapshot with records is format 2 and carries `corpus.json`. Instances built before ADR-0050, and any instance without the needed format or capabilities, refuse it.
 - **Exception trust material:** `<knowledge-dir>-authorities.json` holds `{"keys":[...],"revoked":[...]}`. Each key is `{"id","public_key"}` with exactly one role:
   - `"authority":{"level","domain","repository"}` signs exception approvals; `level` is `corpus`, `domain` or `project`;
   - `"attests":{"repository","names"}` signs context assertions for that repository, with the context names it may assert besides `repository` itself.

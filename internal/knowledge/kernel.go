@@ -356,6 +356,7 @@ func (k *Kernel) Rollback(ctx context.Context, base, to Snapshot, pv Provenance)
 		}
 	}
 	var records []RecordChange
+	var p problems
 	for _, key := range old.recordKeys {
 		r, ok := cur.records[key]
 		if ok && equalRecords(r, old.records[key]) {
@@ -363,12 +364,22 @@ func (k *Kernel) Rollback(ctx context.Context, base, to Snapshot, pv Provenance)
 		}
 		restored := old.records[key].Clone()
 		if restored.Type == TypeRule {
+			if !ok || r.Type != TypeRule {
+				// A published rule is never removed, so its absence means
+				// history this instance never governed; its revisions there
+				// are unknown, so no revision can be chosen safely.
+				p.add("records["+key+"]", "is a rule that is not in the active knowledge, so restoring it could repeat a revision an approval was cancelled for; publish it as a new rule instead")
+				continue
+			}
 			restored.Revision = restoredRevision(r, restored)
 		}
 		if ok && equalRecords(r, restored) {
 			continue
 		}
 		records = append(records, RecordChange{Key: key, Record: restored})
+	}
+	if err := p.err(); err != nil {
+		return "", err
 	}
 	for _, key := range cur.recordKeys {
 		if _, ok := old.records[key]; !ok {
@@ -381,16 +392,11 @@ func (k *Kernel) Rollback(ctx context.Context, base, to Snapshot, pv Provenance)
 	return k.publish(ctx, Proposal{Base: base, Changes: changes, Records: records, Provenance: pv}, []Trailer{{TrailerRollback, string(to)}})
 }
 
-// restoredRevision is the revision a rollback gives a restored rule: the
-// active one when the semantics do not change, otherwise one above both
-// the active and the restored revision, so approvals given for an earlier
-// revision never apply again (ADR-0050). A published rule is never
-// removed, so a rule that is not active comes from outside the active
-// history; it too takes a new revision, and needs a new approval.
+// restoredRevision is the revision a rollback gives a restored rule that is
+// active: the active one when the semantics do not change, otherwise one
+// above both the active and the restored revision, so approvals given for
+// an earlier revision never apply again (ADR-0050).
 func restoredRevision(active, restored *Record) int {
-	if active == nil || active.Type != TypeRule {
-		return restored.Revision + 1
-	}
 	if RuleDigest(active) == RuleDigest(restored) {
 		return active.Revision
 	}
