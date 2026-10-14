@@ -2,36 +2,38 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
-**Corpus Logic v1, on branch `corpus-logic-v1`, as of 2026-10-14.** Ready for owner review; not merged, released or installed. Milestone [#134](https://github.com/ashuangiras/polaroid/issues/134); workstreams A–H are #135, #136, #137, #142, #138, #139, #140 and #141. [ADR-0050](../architecture/decisions/0050-corpus-logic.md) is proposed.
+**Corpus Logic v1, on branch `corpus-logic-v1`, as of 2026-10-14.** Independent review and corrections done; ready for owner review; not merged, released or installed. Milestone [#134](https://github.com/ashuangiras/polaroid/issues/134); workstreams A–H are #135, #136, #137, #142, #138, #139, #140 and #141. [ADR-0050](../architecture/decisions/0050-corpus-logic.md) is proposed and describes what is implemented.
 
-- **Starting baseline:** annotated tag `milestone/corpus-logic-v1-start` (`65ca0da`) points at `45b88cf` and records Corpus `b143067`. It was pushed and checked against the remote.
-- **Dependencies:** an isolated experiment ran the pinned modules on linux and darwin (amd64, arm64), offline under a network-denying sandbox, with govulncheck clean.
-  - Direct modules: Mangle `codeberg.org/TauCeti/mangle-go` v0.5.0, goRDFlib v0.6.0 and json-gold v0.8.0.
-  - Compiled transitively: stringset, antlr4-go, multierr, x/exp, cayleygraph/quad and pquerna/cachecontrol, listed with verified licenses.
-  - `check-deps.sh` now recognises ANTLR's BSD-3-Clause wording.
-- **Built:**
-  - Typed records in format-2 snapshots (`corpus.json`): JSON-LD with a bundled offline context, SHACL Core shapes and an RDF projection check, all in `internal/knowledge/semantic`.
-  - Datalog reasoning on Mangle, restricted to a safe subset, in `internal/reasoning/datalog`. Mangle's ignored lookup errors are compensated.
-  - Obligation inheritance with derivations and SHA-256 explanation ids, conflicts, unknowns, evidence status, and composition (`internal/reasoning`).
-  - Ed25519 exceptions with authority, revision, scope, validity, revocation and conflict checks (`internal/reasoning/policy`).
-  - Record publication on `/v1/knowledge`, and `/mcp/agent/v2` with `resolve`. `/mcp/agent` v1 is unchanged.
-- **Gate on `ec273b1` (code head; Dispatch run `r-20261014t004640-d2afbdc8`), nothing cached:**
-  - `make check`: lint 0 issues, deps-check 44 modules, docs-check 796 links, records-check, loader-check.
+- **Review of PR #143 (`8067f8a`) found seven defects**, fixed in `6c5effd`, `ffbf946`, `9da95eb`, `d0cae8f` and `a45f3e2`:
+  - Exception approvals bound only to a rule's key and editable revision. They now sign a `rule_digest` of the rule's semantics, and every publication, rollback, activation and validated fetch enforces rule governance: a semantics change needs a higher revision, and a protected rule is never removed, unprotected, waivable, excepted or superseded by an unprotected rule.
+  - The caller's own `repository` and condition context activated project waivers. Only server-established trusted context does now; agent mode has none, so those waivers fail closed.
+  - A protected invariant could be waived with corpus authority. Now no authority can.
+  - `Resolve` panicked on a derived requirement that is not a concept. It now reports an `undefined_requirement` conflict, and publication refuses such a constant.
+  - Unknowns were silently incomplete. Equality-bound values and multi-name combinations are now enumerated without conflating values; `when` is always sufficient; `complete` and `incomplete` say what was not examined.
+  - Composition read the caller's context. It now reads only the snapshot, and `resolve` serves it through `then`.
+  - Mangle panics were not contained. They now become fixed rule errors and are logged.
+- **Independent review:** three read-only CodeReviewer passes over the corrective diff. The last confirmed every security finding closed; its remaining notes are recorded as ADR-0050 limitations.
+- **Verification (`verify-change`, full) at `a45f3e2`**, in clean detached worktrees, with the test cache cleaned first (nothing cached):
+  - `make check`: lint 0 issues, deps-check 44 modules, docs-check 799 links, records-check, loader-check 33/0.
   - `make vuln`: 0 affecting the code. `make demo`: PASS.
-  - `make e2e` 313/0, `make e2e-mcp E2E_INTEROP=0` 137/0, `make lifecycle` 69/0.
-  - Linux amd64/arm64 build, vet and lint; MCP contract tests; `-race` on the knowledge, reasoning, sync and operator packages; daemon tests, including two-instance format-2 sync and future-format rejection.
-- **Mutation probes:** 25 of 25 removed protections were caught by their tests, and sources were restored byte-identical.
-- **Real agent:** Copilot CLI (`gpt-5.3-codex`), connected only to `/mcp/agent/v2` on an isolated branch build (port 7593, its own HOME), resolved the corpus and wrote a correct plan:
-  - It kept `check.vet` required, because the inherited derivation was waived but the child's own was not.
-  - It reported `concurrency` as the undecided context.
+  - `make e2e` 313/0, `make e2e-mcp E2E_INTEROP=0` 137/0, and `make lifecycle` 69/0 (not required for this change).
+  - Linux amd64/arm64 build, vet and lint; MCP contract tests; `-race` on the knowledge, reasoning, sync and operator packages; daemon tests.
+  - Executions: parent `dev.change.verify` v7 `01a1385d-fa4f-727a-ba37-3e9516ce1c51`, verified. Children: build `01a1385d-14fd-71c6-ba86-38f3cd4239c3`, checks `01a1385d-1527-707e-903f-f39cbe5c802e`, artifact `01a1385d-b971-7733-81d3-1b7a8995e4f6`. Hosted CI was skipped (local-only policy).
+  - `01a1385d-152f-7fef-a351-339f06d61e30` was invalidated: it recorded an artifact built before the recorded checks run.
+  - Verification artifact: `dist/artifacts/a45f3e2…/` (linux/amd64, gitignored, not reviewed independently).
+- **Mutation probes:** 52 of 52 removed protections were caught by their tests, and sources were restored byte-identical.
+- **Real agent:** Copilot CLI 1.0.97 (`gpt-5.3-codex`), connected only to `/mcp/agent/v2` on an isolated `a45f3e2` build (port 7593, its own HOME, snapshot `67bfad9`), made four `resolve` calls, two of them with `then`. Its plan was correct:
+  - The team's `go vet` waiver was `not_applicable`, because a caller-asserted repository does not authorise a waiver.
+  - The corpus race waiver applied only to the rule derivations, and the declared derivation kept `check.race` required.
+  - The resolution was complete, with `concurrency=true` as `when`.
+  - It reported `incompatible` for build then deploy (input `image` missing) and `compatible` for build then smoke.
+  - Two derivation ids it cited were recomputed independently.
 - **Not done:**
-  - Composition is not served by any endpoint.
-  - Nothing was published to the live Corpus.
-  - The installed service is not upgraded.
-  - No execution was recorded against the `verify-change` binding.
-  - The full list of limitations is in ADR-0050.
+  - No transport establishes trusted context, so project-scoped and conditional exceptions never apply through `/mcp/agent/v2`.
+  - Rollback has no operator API or CLI.
+  - Nothing was published to the live Corpus, and the installed service is not upgraded.
 
-Next action: owner review of ADR-0050 and the pull request; on approval, merge, then decide whether to publish real Corpus records.
+Next action: owner review of ADR-0050 and PR #143; on approval, merge, then decide on trusted context for project exceptions and whether to publish real Corpus records.
 
 **Knowledge remote, as of 2026-10-14.**
 
