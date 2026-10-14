@@ -153,11 +153,12 @@ func checkProcedure(p *problems, field string, proc *Procedure) {
 }
 
 // checkCatalog checks a complete catalog: every procedure, every reference
-// target, applicability admission, cycles, depth and expanded size.
-func checkCatalog(procs map[string]*Procedure) error {
+// target, applicability admission, cycles, depth and expanded size, and
+// every record against the whole catalog.
+func checkCatalog(procs map[string]*Procedure, records map[string]*Record) error {
 	var p problems
-	if len(procs) > MaxProcedures {
-		p.add("procedures", "%d procedures exceed %d", len(procs), MaxProcedures)
+	if len(procs)+len(records) > MaxProcedures {
+		p.add("procedures", "%d procedures and records exceed %d", len(procs)+len(records), MaxProcedures)
 		return p.err()
 	}
 	keys := sortedKeys(procs)
@@ -182,6 +183,9 @@ func checkCatalog(procs map[string]*Procedure) error {
 	}
 	if len(p) == 0 {
 		checkGraph(&p, procs, keys)
+	}
+	if len(p) == 0 && len(records) > 0 {
+		checkRecords(&p, procs, records)
 	}
 	return p.err()
 }

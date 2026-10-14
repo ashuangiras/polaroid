@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"regexp"
@@ -11,13 +12,20 @@ import (
 
 // Kernel reads and publishes living knowledge through a Store.
 type Kernel struct {
-	store Store
+	store      Store
+	validators []RecordValidator
 
 	mu       sync.Mutex
 	catalogs map[Snapshot]*Catalog // immutable; bounded
 }
 
-func New(store Store) *Kernel { return &Kernel{store: store, catalogs: map[Snapshot]*Catalog{}} }
+func New(store Store, opts ...Option) *Kernel {
+	k := &Kernel{store: store, catalogs: map[Snapshot]*Catalog{}}
+	for _, o := range opts {
+		o(k)
+	}
+	return k
+}
 
 // Active returns the catalog of the active snapshot; an empty catalog with
 // the empty snapshot when nothing is published.
@@ -33,7 +41,7 @@ func (k *Kernel) Active(ctx context.Context) (*Catalog, error) {
 // token reads exactly that knowledge however much is published later.
 func (k *Kernel) At(ctx context.Context, s Snapshot) (*Catalog, error) {
 	if s == "" {
-		return newCatalog("", map[string]*Procedure{}), nil
+		return newCatalog("", map[string]*Procedure{}, map[string]*Record{}), nil
 	}
 	k.mu.Lock()
 	c, ok := k.catalogs[s]
@@ -45,7 +53,7 @@ func (k *Kernel) At(ctx context.Context, s Snapshot) (*Catalog, error) {
 	if err != nil {
 		return nil, err
 	}
-	c, err = loadCatalog(s, files)
+	c, err = loadCatalog(ctx, s, files, k.validators)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot %s: %w", s, err)
 	}
@@ -68,6 +76,13 @@ type Change struct {
 	Procedure *Procedure
 }
 
+// RecordChange replaces the typed record at Key, or removes it when Record
+// is nil.
+type RecordChange struct {
+	Key    string
+	Record *Record
+}
+
 // Provenance says who authorised a publication and why; it is stored with
 // the publication and travels with the knowledge's history.
 type Provenance struct {
@@ -86,6 +101,7 @@ type Provenance struct {
 type Proposal struct {
 	Base       Snapshot
 	Changes    []Change
+	Records    []RecordChange
 	Provenance Provenance
 }
 
@@ -127,7 +143,7 @@ func (k *Kernel) Publish(ctx context.Context, prop Proposal) (Snapshot, error) {
 func (k *Kernel) publish(ctx context.Context, prop Proposal, extra []Trailer) (Snapshot, error) {
 	var p problems
 	prop.Provenance.check(&p)
-	if len(prop.Changes) == 0 {
+	if len(prop.Changes)+len(prop.Records) == 0 {
 		p.add("changes", "at least one change is required")
 	}
 	seen := map[string]bool{}
@@ -187,10 +203,71 @@ func (k *Kernel) publish(ctx context.Context, prop Proposal, extra []Trailer) (S
 		procs[c.Key] = proc
 		files = append(files, FileChange{Path: Path(c.Key), Content: doc})
 	}
+	records := make(map[string]*Record, len(base.records)+len(prop.Records))
+	for key, r := range base.records {
+		records[key] = r
+	}
+	seen = map[string]bool{}
+	for i, c := range prop.Records {
+		field := fmt.Sprintf("records_changes[%d]", i)
+		checkKey(&p, field+".key", c.Key)
+		if seen[c.Key] {
+			p.add(field+".key", "%s is changed twice", c.Key)
+		}
+		seen[c.Key] = true
+		old := records[c.Key]
+		if c.Record == nil {
+			if old == nil {
+				p.add(field+".key", "%s is not a record in the catalog", c.Key)
+				continue
+			}
+			delete(records, c.Key)
+			files = append(files, FileChange{Path: RecordPath(old.Type, c.Key), Delete: true})
+			continue
+		}
+		r := normalized(c.Record)
+		if r.Key != c.Key {
+			p.add(field+".record.id", "is %q, not the change's key %q", r.Key, c.Key)
+			continue
+		}
+		var pp problems
+		checkRecord(&pp, "records["+c.Key+"]", r)
+		if len(pp) > 0 {
+			p = append(p, pp...)
+			continue
+		}
+		doc, err := EncodeRecord(r)
+		if err != nil {
+			p.add("records["+c.Key+"]", "%v", err)
+			continue
+		}
+		if len(doc) > maxDocumentBytes {
+			p.add("records["+c.Key+"]", "document of %d bytes exceeds %d", len(doc), maxDocumentBytes)
+			continue
+		}
+		if old != nil && equalRecords(old, r) {
+			p.add(field, "%s is unchanged", c.Key)
+			continue
+		}
+		if old != nil && old.Type != r.Type {
+			files = append(files, FileChange{Path: RecordPath(old.Type, c.Key), Delete: true})
+		}
+		records[c.Key] = r
+		files = append(files, FileChange{Path: RecordPath(r.Type, c.Key), Content: doc})
+	}
 	if err := p.err(); err != nil {
 		return "", err
 	}
-	if err := checkCatalog(procs); err != nil {
+	switch hadManifest := len(base.records) > 0; {
+	case len(records) > 0 && !hadManifest:
+		files = append(files, FileChange{Path: ManifestPath, Content: encodeManifest()})
+	case len(records) == 0 && hadManifest:
+		files = append(files, FileChange{Path: ManifestPath, Delete: true})
+	}
+	if err := checkCatalog(procs, records); err != nil {
+		return "", err
+	}
+	if err := validateRecords(ctx, k.validators, records); err != nil {
 		return "", err
 	}
 
@@ -202,31 +279,51 @@ func (k *Kernel) publish(ctx context.Context, prop Proposal, extra []Trailer) (S
 	if pv.Validation != "" {
 		trailers = append(trailers, Trailer{TrailerValidation, pv.Validation})
 	}
-	trailers = append(trailers, Trailer{TrailerValidated, fmt.Sprintf("catalog of %d procedures: documents, references, applicability, cycles, limits", len(procs))})
+	validated := fmt.Sprintf("catalog of %d procedures: documents, references, applicability, cycles, limits", len(procs))
+	if len(records) > 0 {
+		validated += fmt.Sprintf("; %d records: types, relationships, JSON-LD, SHACL", len(records))
+	}
+	trailers = append(trailers, Trailer{TrailerValidated, validated})
 	s, err := k.store.Commit(ctx, Commit{
 		Expected: prop.Base, Changes: files, Author: pv.Author, Subject: pv.Summary, Body: pv.Rationale, Trailers: trailers,
-		Check: func(f Files) error { return sameLayout(f, procs) },
+		Check: func(f Files) error { return sameLayout(f, procs, records) },
 	})
 	if err != nil {
 		return "", err
 	}
-	k.remember(newCatalog(s, procs))
+	k.remember(newCatalog(s, procs, records))
 	return s, nil
 }
 
 // sameLayout confirms that the store's proposed tree holds exactly the
-// documents of the validated catalog.
-func sameLayout(f Files, procs map[string]*Procedure) error {
+// documents of the validated catalog, and the manifest when it has records.
+func sameLayout(f Files, procs map[string]*Procedure, records map[string]*Record) error {
 	paths := f.Paths()
-	if len(paths) != len(procs) {
-		return fmt.Errorf("%w: the proposed tree has %d files for %d procedures", ErrInvalid, len(paths), len(procs))
+	want := len(procs) + len(records)
+	if len(records) > 0 {
+		want++
+	}
+	if len(paths) != want {
+		return fmt.Errorf("%w: the proposed tree has %d files for %d procedures and %d records", ErrInvalid, len(paths), len(procs), len(records))
 	}
 	for _, path := range paths {
+		if path == ManifestPath && len(records) > 0 {
+			continue
+		}
+		if t, key, ok := recordKeyOf(path); ok && records[key] != nil && records[key].Type == t {
+			continue
+		}
 		if key, ok := keyOf(path); !ok || procs[key] == nil {
-			return fmt.Errorf("%w: the proposed tree holds %s, which is not a validated procedure", ErrInvalid, path)
+			return fmt.Errorf("%w: the proposed tree holds %s, which is not a validated document", ErrInvalid, path)
 		}
 	}
 	return nil
+}
+
+func equalRecords(a, b *Record) bool {
+	x, err1 := EncodeRecord(a)
+	y, err2 := EncodeRecord(b)
+	return err1 == nil && err2 == nil && bytes.Equal(x, y)
 }
 
 // Rollback publishes, on top of base, the knowledge of the earlier
@@ -252,10 +349,21 @@ func (k *Kernel) Rollback(ctx context.Context, base, to Snapshot, pv Provenance)
 			changes = append(changes, Change{Key: key})
 		}
 	}
-	if len(changes) == 0 {
+	var records []RecordChange
+	for _, key := range old.recordKeys {
+		if r, ok := cur.records[key]; !ok || !equalRecords(r, old.records[key]) {
+			records = append(records, RecordChange{Key: key, Record: old.records[key]})
+		}
+	}
+	for _, key := range cur.recordKeys {
+		if _, ok := old.records[key]; !ok {
+			records = append(records, RecordChange{Key: key})
+		}
+	}
+	if len(changes)+len(records) == 0 {
 		return "", &ValidationError{Problems: []Problem{{Field: "to", Message: "the active knowledge already equals that snapshot"}}}
 	}
-	return k.publish(ctx, Proposal{Base: base, Changes: changes, Provenance: pv}, []Trailer{{TrailerRollback, string(to)}})
+	return k.publish(ctx, Proposal{Base: base, Changes: changes, Records: records, Provenance: pv}, []Trailer{{TrailerRollback, string(to)}})
 }
 
 // Publication is one entry of the knowledge history.
@@ -269,10 +377,12 @@ type Publication struct {
 	Changed    []KeyChange
 }
 
-// KeyChange: Action is "added", "modified" or "removed".
+// KeyChange: Action is "added", "modified" or "removed". Record is true
+// for a typed record, false for a procedure document.
 type KeyChange struct {
 	Key    string
 	Action string
+	Record bool
 }
 
 // History lists publications from a published snapshot back, newest first.
@@ -298,13 +408,20 @@ func (k *Kernel) History(ctx context.Context, from Snapshot, limit int) ([]Publi
 			}
 		}
 		for _, c := range e.Changed {
-			key, ok := keyOf(c.Path)
-			if !ok {
-				return nil, fmt.Errorf("%w: publication %s changed %s, which is not a procedure document", ErrCorrupt, e.Snapshot, c.Path)
+			if c.Path == ManifestPath {
+				continue
 			}
 			action := c.Action
 			if action == "deleted" {
 				action = "removed"
+			}
+			if _, key, ok := recordKeyOf(c.Path); ok {
+				pub.Changed = append(pub.Changed, KeyChange{Key: key, Action: action, Record: true})
+				continue
+			}
+			key, ok := keyOf(c.Path)
+			if !ok {
+				return nil, fmt.Errorf("%w: publication %s changed %s, which is not a knowledge document", ErrCorrupt, e.Snapshot, c.Path)
 			}
 			pub.Changed = append(pub.Changed, KeyChange{Key: key, Action: action})
 		}

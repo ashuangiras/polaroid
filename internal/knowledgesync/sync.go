@@ -100,9 +100,10 @@ type Syncer struct {
 	limits  gitcore.TransferLimits
 }
 
-// New checks the policy. The kernel reads the same repository.
-func New(repo *gitcore.Repository, p Policy) (*Syncer, error) {
-	s := &Syncer{repo: repo, kernel: knowledge.New(gitstore.New(repo)), sources: map[string]Source{}, limits: p.Limits}
+// New checks the policy. The kernel reads the same repository, configured
+// with opts.
+func New(repo *gitcore.Repository, p Policy, opts ...knowledge.Option) (*Syncer, error) {
+	s := &Syncer{repo: repo, kernel: knowledge.New(gitstore.New(repo), opts...), sources: map[string]Source{}, limits: p.Limits}
 	var probs []string
 	for _, src := range p.Sources {
 		switch {
@@ -182,7 +183,7 @@ func (s *Syncer) Validate(ctx context.Context, c *Candidate) error {
 		if err != nil {
 			return err
 		}
-		cat, err := knowledge.Load(in.Snapshot, gitstore.Files(tree))
+		cat, err := s.kernel.Check(ctx, in.Snapshot, gitstore.Files(tree))
 		if err != nil {
 			probs = append(probs, fmt.Sprintf("snapshot %s: %v", cm.Snapshot, err))
 		} else {

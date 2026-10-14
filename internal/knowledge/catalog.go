@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -17,24 +18,56 @@ var ErrNotApplicable = errors.New("procedure does not apply in this repository")
 // changes, so every read of it, and every reference it resolves, sees that
 // one snapshot.
 type Catalog struct {
-	snapshot Snapshot
-	procs    map[string]*Procedure
-	keys     []string
+	snapshot   Snapshot
+	procs      map[string]*Procedure
+	keys       []string
+	records    map[string]*Record
+	recordKeys []string
 
 	indexOnce sync.Once
 	index     map[string][]posting
 }
 
-// loadCatalog reads and validates every document of a snapshot. Files
-// other than procedure documents, documents whose key differs from their
-// path, and catalogs that fail validation are refused.
-func loadCatalog(s Snapshot, files Files) (*Catalog, error) {
+// loadCatalog reads and validates every document of a snapshot. Paths that
+// are neither procedure documents, record documents nor the manifest,
+// documents whose key differs from their path, records without a
+// manifest or a validator, and catalogs that fail validation are refused.
+func loadCatalog(ctx context.Context, s Snapshot, files Files, vs []RecordValidator) (*Catalog, error) {
 	var p problems
 	procs := map[string]*Procedure{}
+	records := map[string]*Record{}
+	hasManifest := false
 	for _, path := range files.Paths() {
+		if path == ManifestPath {
+			b, err := files.Read(path)
+			if err != nil {
+				return nil, err
+			}
+			hasManifest = true
+			checkManifest(&p, b)
+			continue
+		}
+		if t, key, ok := recordKeyOf(path); ok {
+			b, err := files.Read(path)
+			if err != nil {
+				return nil, err
+			}
+			r, err := DecodeRecord(b)
+			switch {
+			case err != nil:
+				p.add("records["+key+"]", "%v", err)
+			case r.Type != t:
+				p.add("records["+key+"].type", "is %s, but the document is stored as a %s", r.Type, t)
+			case records[key] != nil:
+				p.add("records["+key+"]", "is stored under more than one type")
+			default:
+				records[key] = r
+			}
+			continue
+		}
 		key, ok := keyOf(path)
 		if !ok {
-			p.add("files["+path+"]", "is not a procedure document path")
+			p.add("files["+path+"]", "is not a procedure document, a record document or the manifest")
 			continue
 		}
 		b, err := files.Read(path)
@@ -48,17 +81,53 @@ func loadCatalog(s Snapshot, files Files) (*Catalog, error) {
 		}
 		procs[key] = proc
 	}
+	if len(records) > 0 && !hasManifest {
+		p.add(ManifestPath, "is required in a snapshot that holds records")
+	}
 	if err := p.err(); err != nil {
 		return nil, err
 	}
-	if err := checkCatalog(procs); err != nil {
+	if err := checkCatalog(procs, records); err != nil {
 		return nil, err
 	}
-	return newCatalog(s, procs), nil
+	if err := validateRecords(ctx, vs, records); err != nil {
+		return nil, err
+	}
+	return newCatalog(s, procs, records), nil
 }
 
-func newCatalog(s Snapshot, procs map[string]*Procedure) *Catalog {
-	return &Catalog{snapshot: s, procs: procs, keys: sortedKeys(procs)}
+func newCatalog(s Snapshot, procs map[string]*Procedure, records map[string]*Record) *Catalog {
+	return &Catalog{snapshot: s, procs: procs, keys: sortedKeys(procs), records: records, recordKeys: sortedRecordKeys(records)}
+}
+
+// Format is 1 for a catalog of procedures only and FormatRecords when it
+// holds typed records.
+func (c *Catalog) Format() int {
+	if len(c.records) > 0 {
+		return FormatRecords
+	}
+	return 1
+}
+
+// RecordKeys lists every typed record, sorted.
+func (c *Catalog) RecordKeys() []string { return slices.Clone(c.recordKeys) }
+
+// Record returns a copy of the record at key.
+func (c *Catalog) Record(key string) (*Record, error) {
+	r, ok := c.records[key]
+	if !ok {
+		return nil, fmt.Errorf("record %s: %w", key, ErrNotFound)
+	}
+	return r.Clone(), nil
+}
+
+// Records returns copies of every record, sorted by key.
+func (c *Catalog) Records() []*Record {
+	out := make([]*Record, len(c.recordKeys))
+	for i, k := range c.recordKeys {
+		out[i] = c.records[k].Clone()
+	}
+	return out
 }
 
 // Snapshot is the token of the state this catalog holds.
