@@ -1,6 +1,6 @@
 # Knowledge remotes
 
-This is how an operator shares Git-native knowledge ([ADR-0045](../architecture/decisions/0045-living-knowledge-kernel.md)) between Polaroid instances through an ordinary Git remote ([ADR-0046](../architecture/decisions/0046-git-knowledge-synchronisation.md)), such as a private GitHub repository. The remote only transports knowledge. Each instance stays the authority for its own active knowledge.
+This is how an operator shares Git-native knowledge ([ADR-0045](../architecture/decisions/0045-living-knowledge-kernel.md)) between Polaroid instances through an ordinary Git remote ([ADR-0046](../architecture/decisions/0046-git-knowledge-synchronisation.md)), such as a private GitHub repository. The remote only transports knowledge. Each instance stays the authority for its own active knowledge. For setting up and using Git-native knowledge in the first place (connecting, discovering, reading, resolving, publishing), see [knowledge-guide.md](../architecture/knowledge-guide.md); this page covers only exchanging it between instances.
 
 - **Agents are unaffected.** They keep using `discover`, `read` and `feedback` at `/mcp/agent`, and they read only the instance's active, local knowledge. They never need remote credentials.
 - **No connectivity needed for reads.** When the remote is unreachable, only the operator steps below fail.

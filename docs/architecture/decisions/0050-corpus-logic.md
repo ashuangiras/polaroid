@@ -1,6 +1,6 @@
 # 0050. Corpus Logic v1: typed knowledge records and bounded reasoning on Git-native knowledge
 
-**Status:** Proposed (owner review), milestone Corpus Logic v1 ([#134](https://github.com/ashuangiras/polaroid/issues/134)).
+**Status:** Accepted (owner approval; merged as [PR #143](https://github.com/ashuangiras/polaroid/pull/143), `6e05f63`; installed), milestone Corpus Logic v1 ([#134](https://github.com/ashuangiras/polaroid/issues/134), closed).
 **Date:** 2026-10-14
 
 ## Context
