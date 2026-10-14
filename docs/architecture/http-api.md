@@ -683,11 +683,23 @@ Example `invalid_request` response:
 - **Credentials:** `fetch` and `push` take `{"credentials": {"username","password","ssh_key","ssh_passphrase","known_hosts"}}`, used for that one call only, and never stored, logged or returned.
 - **Remotes:** sources come from the trust-policy file `<knowledge-dir>-sources.json`, read at start. [knowledge-remotes.md](../development/knowledge-remotes.md) gives its format and the operator workflow.
 - **Readiness:** `GET status`'s `"empty": true` means no knowledge has been published or activated yet; this is a normal, expected state, not an error. If the knowledge path could not start (for example its directory could not be created), the daemon logs why and serves neither `/mcp/agent` nor `/v1/knowledge/*`; the legacy API and full-mode MCP are unaffected.
+- **Typed records** ([ADR-0050](decisions/0050-corpus-logic.md)): a publication may also carry `records`. These are domains, concepts, claims, rules, procedure semantics, evidence and exceptions, each a JSON-LD document using only the bundled context `urn:polaroid:context:v1`. The whole resulting catalog is validated:
+  - record types and relationships;
+  - JSON-LD, with any other context refused and never fetched;
+  - the RDF projection;
+  - SHACL Core shapes;
+  - rule programs, which must stay within the safe Datalog subset.
+
+  Fetched candidates are validated the same way. A snapshot with records is format 2 and carries `corpus.json`. Instances built before ADR-0050, and any instance without the needed format or capabilities, refuse it.
+- **Exception trust material:** `<knowledge-dir>-authorities.json` holds `{"keys":[{"id","public_key","authority":{"level","domain","repository"}}],"revoked":[...]}`.
+  - `public_key` is a base64 Ed25519 key, and `level` is `corpus`, `domain` or `project`.
+  - The file is read at start. A missing file means no exception applies.
+  - It is operator-held and is never read from the knowledge it authorises.
 
 | Method and path | Success | Purpose |
 | --- | --- | --- |
-| `GET /v1/knowledge/status` | `200` status | The active snapshot (`""` if none), whether it is empty, this instance's identity, its procedure count, and the configured sources (never their credentials). |
-| `POST /v1/knowledge/publications` | `201` publish result | Publish `{"base","changes","author","summary","rationale","finding","validation"}` (`finding`, `validation` optional). Each change is `{"key","remove","scope","repository","goal","philosophy","method","contract","instructions","references"}`; `remove: true` deletes the key. With `finding` naming a feedback report id, reconciliation is attempted immediately and reported in `reconciliation`; a failed reconciliation never undoes the publication, which has already succeeded. |
+| `GET /v1/knowledge/status` | `200` status | The active snapshot (`""` if none), whether it is empty, this instance's identity, its procedure count (`keys`), and the configured sources (never their credentials). For format-2 knowledge it also reports `format` and the `records` count. |
+| `POST /v1/knowledge/publications` | `201` publish result | Publish `{"base","changes","records","author","summary","rationale","finding","validation"}` (`records`, `finding`, `validation` optional; `changes` and `records` together hold at least one change). Each change is `{"key","remove","scope","repository","goal","philosophy","method","contract","instructions","references"}`; `remove: true` deletes the key. Each record change is `{"key","document"}` or `{"key","remove":true}`; the stored document is the record's canonical encoding. With `finding` naming a feedback report id, reconciliation is attempted immediately and reported in `reconciliation`; a failed reconciliation never undoes the publication, which has already succeeded. |
 | `POST /v1/knowledge/sources/{name}/fetch` | `200` candidate status | Transfer `{name}`'s knowledge into quarantine, with an optional `{"credentials"}` body. Nothing local changes. |
 | `POST /v1/knowledge/sources/{name}/validation` | `200` candidate status | Validate the source's fetched candidate: Git integrity, the trust policy's authorised publishers, and every new publication as a complete catalog. A rejected candidate's `problems` are in the result, not a request failure. |
 | `POST /v1/knowledge/sources/{name}/activation` | `201` activation result | Activate `{name}`'s validated, fast-forward candidate, from decision `{"author","summary","rationale","finding","validation"}`. |

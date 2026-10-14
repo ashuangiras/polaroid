@@ -12,9 +12,14 @@ import (
 	"strings"
 
 	"github.com/ashuangiras/polaroid/internal/gitcore"
+	"github.com/ashuangiras/polaroid/internal/knowledge"
+	"github.com/ashuangiras/polaroid/internal/knowledge/semantic"
 	"github.com/ashuangiras/polaroid/internal/knowledgeops"
 	"github.com/ashuangiras/polaroid/internal/knowledgesync"
 	"github.com/ashuangiras/polaroid/internal/memory"
+	"github.com/ashuangiras/polaroid/internal/reasoning"
+	"github.com/ashuangiras/polaroid/internal/reasoning/datalog"
+	"github.com/ashuangiras/polaroid/internal/reasoning/policy"
 )
 
 // defaultKnowledgeDir returns <home>/.polaroid/data/knowledge (ADR-0025's
@@ -108,17 +113,32 @@ func readOperatorToken(path string) (string, error) {
 // guards it.
 type knowledgeComponents struct {
 	agent    *knowledgeops.Agent
+	resolver *knowledgeops.Resolver
 	operator *knowledgeops.Operator
 	token    string
 }
 
+// loadTrust reads the operator-held exception trust material (ADR-0050). A
+// missing file is empty trust: no exception applies.
+func loadTrust(path string) (policy.Trust, error) {
+	b, err := os.ReadFile(path) //nolint:gosec // the operator's own configuration path
+	if errors.Is(err, fs.ErrNotExist) {
+		return policy.Trust{}, nil
+	}
+	if err != nil {
+		return policy.Trust{}, err
+	}
+	return policy.ParseTrust(b)
+}
+
 // setupKnowledge opens the knowledge repository at dir (creating it if
 // missing), loads the trust policy at sourcesPath (empty if the file does
-// not exist: no source is contacted), and loads or creates the operator
+// not exist: no source is contacted), the exception trust material at
+// authoritiesPath (empty if missing), and loads or creates the operator
 // token at tokenPath. A Git catalog that starts empty is not a failure
 // here (ADR-0048's explicit migration boundary): only a storage or policy
 // problem is.
-func setupKnowledge(dir, sourcesPath, tokenPath string, fb *memory.Service) (*knowledgeComponents, error) {
+func setupKnowledge(dir, sourcesPath, authoritiesPath, tokenPath string, fb *memory.Service) (*knowledgeComponents, error) {
 	if err := prepareKnowledgeParents(dir); err != nil {
 		return nil, err
 	}
@@ -130,7 +150,17 @@ func setupKnowledge(dir, sourcesPath, tokenPath string, fb *memory.Service) (*kn
 	if err != nil {
 		return nil, fmt.Errorf("load knowledge trust policy %s: %w", sourcesPath, err)
 	}
-	syncer, err := knowledgesync.New(repo, policy)
+	trust, err := loadTrust(authoritiesPath)
+	if err != nil {
+		return nil, fmt.Errorf("load exception trust material %s: %w", authoritiesPath, err)
+	}
+	sem, err := semantic.New(semantic.DefaultLimits)
+	if err != nil {
+		return nil, err
+	}
+	ev := datalog.Evaluator{}
+	syncer, err := knowledgesync.New(repo, policy,
+		knowledge.WithRecordValidator(sem), knowledge.WithRecordValidator(reasoning.RuleValidator{Evaluator: ev}))
 	if err != nil {
 		return nil, err
 	}
@@ -140,6 +170,7 @@ func setupKnowledge(dir, sourcesPath, tokenPath string, fb *memory.Service) (*kn
 	}
 	return &knowledgeComponents{
 		agent:    knowledgeops.NewAgent(syncer.Kernel(), fb),
+		resolver: knowledgeops.NewResolver(syncer.Kernel(), ev, trust),
 		operator: knowledgeops.NewOperator(syncer, policy, fb),
 		token:    token,
 	}, nil

@@ -116,6 +116,8 @@ type KnowledgeStatus struct {
 	Empty    bool              `json:"empty"`
 	Instance string            `json:"instance,omitzero"`
 	Keys     int               `json:"keys"`
+	Records  int               `json:"records,omitzero"`
+	Format   int               `json:"format,omitzero"`
 	Sources  []KnowledgeSource `json:"sources,omitzero"`
 }
 
@@ -228,15 +230,24 @@ type KnowledgeChange struct {
 	References   []KnowledgeReference `json:"references,omitzero"`
 }
 
+// KnowledgeRecordChange is one typed-record change of a publish call
+// (ADR-0050): a complete JSON-LD record document for Key, or its removal.
+type KnowledgeRecordChange struct {
+	Key      string         `json:"key"`
+	Remove   bool           `json:"remove,omitzero"`
+	Document jsontext.Value `json:"document,omitzero"`
+}
+
 // KnowledgePublishRequest proposes changes to the knowledge active at Base.
 type KnowledgePublishRequest struct {
-	Base       string            `json:"base" jsonschema:"the active snapshot this proposal is based on"`
-	Changes    []KnowledgeChange `json:"changes" jsonschema:"at least one change"`
-	Author     string            `json:"author"`
-	Summary    string            `json:"summary"`
-	Rationale  string            `json:"rationale"`
-	Finding    string            `json:"finding,omitzero" jsonschema:"a feedback report id this change addresses; attempts reconciliation after publishing"`
-	Validation string            `json:"validation,omitzero"`
+	Base       string                  `json:"base" jsonschema:"the active snapshot this proposal is based on"`
+	Changes    []KnowledgeChange       `json:"changes" jsonschema:"procedure changes; changes and records together hold at least one"`
+	Records    []KnowledgeRecordChange `json:"records,omitzero" jsonschema:"typed record changes"`
+	Author     string                  `json:"author"`
+	Summary    string                  `json:"summary"`
+	Rationale  string                  `json:"rationale"`
+	Finding    string                  `json:"finding,omitzero" jsonschema:"a feedback report id this change addresses; attempts reconciliation after publishing"`
+	Validation string                  `json:"validation,omitzero"`
 }
 
 // KnowledgeReconcileResult is a reconcile call's result. Status is

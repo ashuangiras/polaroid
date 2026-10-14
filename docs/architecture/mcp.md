@@ -97,6 +97,33 @@ A second endpoint on the same listener, with the same transport rules, serves on
 - **Publishing, synchronising and reconciling knowledge is an explicit operator operation**, through `/v1/knowledge/*` ([http-api.md](http-api.md#git-native-knowledge-operator-api)) or `polaroid knowledge-*`, never through agent mode: there is no scheduler, and an agent only discovers, reads and reports feedback.
 - **Migrating an agent:** point it at `http://127.0.0.1:7417/mcp/agent` instead of `/mcp`. Keep `/mcp` for administration, execution and verification records, and audit workflows; its 40 tools are unchanged. No legacy SQLite procedure is migrated into Git-native knowledge ([ADR-0049](decisions/0049-agent-mode-finalized-no-migration.md)): the two catalogs are populated independently.
 
+## Agent mode v2 (`/mcp/agent/v2`)
+
+**Proposed with Corpus Logic v1** ([ADR-0050](decisions/0050-corpus-logic.md)). This is a separate, versioned endpoint; `/mcp/agent` above is unchanged.
+
+It serves the same `discover`, `read` and `feedback` tools, with input schemas identical to v1's (a test compares them), plus one read-only tool:
+
+| Tool | Read-only | Arguments | Result |
+| --- | --- | --- | --- |
+| `resolve` | yes | `goal` (a record key: a procedure, concept or claim); `snapshot` (default: the active knowledge), `context` (an object of string name and value pairs) and `at` (RFC 3339; default now) optional | `{version, snapshot, goal, at, applicable, specializations, obligations, derived, exceptions, conflicts, unknowns, evidence, superseded}` |
+
+The result members mean:
+
+- **`obligations`**: each requirement with every independent derivation `{id, source, source_type, via, path, status, exception}`. The status is `required` while any derivation is active, otherwise `waived`.
+- **`exceptions`**: each exception that concerns the goal, with its status: `applied`, `rejected`, `not_applicable` or `conflicting`, and a reason.
+- **`unknowns`**: what a missing `context` value could change.
+- **`evidence`**: each claim's evidence status (`supported`, `contradicted`, `contested`, `unsupported`). It summarises the evidence and is never a verdict.
+
+Resolution is deterministic. The same snapshot, `context`, `at` and trust material give byte-identical results, and every derivation `id` is a SHA-256-based identifier you can reconstruct by resolving the same request again.
+
+Requests can fail with these codes:
+
+- `not_found`: the goal is not a record of the snapshot.
+- `invalid_request`.
+- `budget_exceeded` (HTTP 422): the evaluation exceeded its time or fact limits. A budget failure never returns a partial result.
+
+Exceptions are verified against the operator-held trust material at `<knowledge-dir>-authorities.json` ([http-api.md](http-api.md#git-native-knowledge-operator-api)).
+
 ## Resources
 
 All resources are read-only and returned as `application/json`, with the same body as the matching tool.

@@ -40,6 +40,7 @@ Polaroid does not run an LLM, and it does not execute instructions. Its code man
 - `GET /healthz`, a JSON HTTP API ([contract](docs/architecture/http-api.md)) and a generic CLI.
 - An MCP server at `/mcp` ([contract](docs/architecture/mcp.md)): 40 tools with the same operations, records and error codes as the HTTP API, plus read-only resources for procedures, versions and bindings. It speaks stateless streamable HTTP, protocol revisions 2026-07-28 and 2025-11-25.
 - A **Git-native agent mode** at `/mcp/agent` ([ADR-0043](docs/architecture/decisions/0043-knowledge-first-agent-mode.md), finalized by [ADR-0049](docs/architecture/decisions/0049-agent-mode-finalized-no-migration.md)): three tools, `discover`, `read` and `feedback`, for everyday procedural-knowledge use without loading the full API or recording executions, backed by living knowledge in Git ([ADR-0044](docs/architecture/decisions/0044-git-core.md)). Under the same v1 compatibility guarantee as `/mcp`.
+- **Corpus Logic** (proposed, [ADR-0050](docs/architecture/decisions/0050-corpus-logic.md)) adds typed knowledge records to Git-native knowledge: domains, concepts, claims, rules, procedure semantics, evidence and signed exceptions. Records are validated with JSON-LD and SHACL, and rules are evaluated by Mangle. A versioned agent endpoint, `/mcp/agent/v2`, adds `resolve`: obligations with their derivations, specializations, exceptions, conflicts and unknowns.
 
 ## Prerequisites
 
