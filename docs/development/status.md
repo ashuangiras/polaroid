@@ -2,14 +2,22 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
-**First typed records published to this repository's own live Corpus, and pushed to the `corpus` remote, as of 2026-10-14.** A live-service action, not a code or doc change to `main`; no commit.
+**`gitcore.verify-integrity` added, pushed to the `corpus` remote, and exercised end to end, as of 2026-10-14.** A live-service action, not a code or doc change to `main`; no commit. Supersedes the "next action" below, which this answers.
+
+- **Verified gitcore directly first**, since `internal/gitcore.Repository.Verify` ([ADR-0044](../architecture/decisions/0044-git-core.md)) has no CLI or API exposure: `git fsck --full --strict` (clean, 0 problems), `git count-objects -v` (0 garbage, 0 packs — all loose, as designed), and a cross-check that `knowledge-status`'s snapshot exactly equals `git rev-parse refs/heads/active` (it did, at every step of this session).
+- **Published** `gitcore.verify-integrity` (snapshot `fb22bac0b3ae4b76c196a91e39495cc9d1c08c95`): a procedure capturing that method, so a future agent does not have to rediscover it.
+- **Retrieved it over `/mcp/agent/v2`** (`discover` then `read`): byte-identical to what was published.
+- **Used it**: followed its own retrieved instructions (`fsck` → `objects` → `cross-check` → `provenance` → `roundtrip` → `report`) as a second, independent pass, including a real disposable probe record (`gitcore.probe.roundtrip-test`), published via CLI, read back byte-identical over MCP, then removed by a further publication (history keeps both commits, never rewritten).
+- **Pushed to `corpus`** (`https://github.com/ashuangiras/corpus.git`, private, `main`): fast-forward `51da4385` → `8cb075a`, 11 objects, 4,074 bytes, three commits (add, probe, remove-probe). Reviewed first (`git log -p refs/remotes/corpus/main..refs/heads/active`): no credentials or private paths. Confirmed landed via the GitHub API (`repos/ashuangiras/corpus/commits/main` reports `8cb075a`, matching the local tracking ref).
+
+Next action: decide what Go procedure knowledge to add next, and whether to configure an exception authority.
+
+**First typed records published to this repository's own live Corpus, and pushed to the `corpus` remote, as of 2026-10-14 (superseded above).** A live-service action, not a code or doc change to `main`; no commit.
 
 - **Published** (snapshot `51da4385bf14ec6a5e9df69f812ad23c95356973`, format 2, 14 records, author `operator.ashuangiras`): two domains (`domain.software`, `domain.software.go`), four concepts (`check.vet`, `check.lint`, `check.tests`, `check.race`) and four rules obligating them for `domain.software.go` procedures, directly formalizing AGENTS.md's `make check` gates (go vet, golangci-lint 2.14.0, `go test`, `go test -race`). All four rules are `waivable: true`, not `protected` — no exception authority is configured yet ([ADR-0050](../architecture/decisions/0050-corpus-logic.md)'s `<knowledge-dir>-authorities.json` does not exist on the installed instance), so this is a safe default pending an explicit owner decision, not a claim that these are permanently unwaivable.
 - **Classified the five existing published procedures** by their actual content, not assumption: `go.validate.slug-string` as `domain.software.go` (it is genuinely Go-specific); `dev.change.implement`, `dev.change.verify` and `dev.change.review` as `domain.software` only, because `dev.change.verify`'s own instructions are explicitly language-agnostic (it names Go tooling only as one example branch when a repository documents no gates of its own) — giving them Go-specific obligations would have been inaccurate. `deployment.smoke-test` was left unclassified: it is a meta smoke test of the knowledge path itself and fits neither domain's obligations.
 - **Verified by `resolve`:** `go.validate.slug-string` reports all four obligations (`check.vet`, `check.lint`, `check.tests`, `check.race`) as `required`, each with correct derivation provenance; `dev.change.implement`/`verify`/`review` report no obligations at all (`applicable` is only themselves and `domain.software`), confirming no Go-specific obligation leaks onto a procedure that does not actually carry one. `complete: true` on every resolution.
 - **Pushed to `corpus`** (`https://github.com/ashuangiras/corpus.git`, private, `main`): fast-forward `b143067` → `51da4385`, 27 objects, 3,279 bytes. Reviewed first (`git log -p refs/remotes/corpus/main..refs/heads/active`): one commit, holding only the 14 new record files and `corpus.json`'s updated capabilities, no credentials or private paths. Confirmed landed via the GitHub API (`repos/ashuangiras/corpus/commits/main` reports `51da4385`, matching the local tracking ref).
-
-Next action: decide what Go procedure knowledge to add next, and whether to configure an exception authority.
 
 **Corpus Logic v1 merged, installed, and its one open follow-up fixed, on `main` at `cf87e02`, as of 2026-10-14.** Supersedes both handoffs below, which are kept as history.
 
