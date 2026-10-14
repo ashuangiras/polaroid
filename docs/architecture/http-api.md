@@ -691,7 +691,7 @@ Example `invalid_request` response:
   - rule programs, which must stay within the safe Datalog subset, and whose stated requirements must be concepts;
   - rule governance: a protected rule is never waivable, targeted by an exception, or superseded by an unprotected rule. An exception carries `rule_digest`, the SHA-256 of its target rule's semantics, which its approval signs.
 
-  Against the published catalog, a rule whose semantics change must take a higher revision, a revision never decreases, and a protected rule is never removed or unprotected; a rollback is exempt only for the rules it restores exactly. A refused publication is `400` with a field per problem.
+  Against the published catalog, a rule whose semantics change must take a higher revision, a revision never decreases, and a protected rule is never removed or unprotected. A rollback to knowledge published here is exempt from the revision checks for the rules it restores exactly, never from the protection checks; a rollback to knowledge that arrived through an activation is not exempt. A refused publication is `400` with a field per problem.
 
   Fetched candidates are validated the same way, and activation checks the same transition from the active snapshot. A snapshot with records is format 2 and carries `corpus.json`. Instances built before ADR-0050, and any instance without the needed format or capabilities, refuse it.
 - **Exception trust material:** `<knowledge-dir>-authorities.json` holds `{"keys":[{"id","public_key","authority":{"level","domain","repository"}}],"revoked":[...]}`.

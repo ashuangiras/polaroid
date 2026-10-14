@@ -9,8 +9,10 @@ package datalog
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"maps"
 	"reflect"
+	"runtime/debug"
 	"slices"
 	"strings"
 
@@ -160,7 +162,12 @@ func restrict(r reasoning.Rule, heads map[string]string) ([]ast.Clause, error) {
 // Literals implements reasoning.Evaluator. A variable argument carries the
 // string constants that `=` premises of its clause bind it to.
 func (Evaluator) Literals(rules []reasoning.Rule, predicate string, arity int, head bool) (out []reasoning.Literal, err error) {
-	defer contain(&err)
+	defer func() {
+		if err != nil {
+			out = nil
+		}
+	}()
+	defer contain(&err) // runs first; recover must be called by the deferred function itself
 	for _, r := range rules {
 		unit, err := parseUnit(r.Key, r.Text)
 		if err != nil {
@@ -250,9 +257,10 @@ func (Evaluator) Evaluate(ctx context.Context, p reasoning.Program) (res reasoni
 }
 
 // contain turns a panic in the Datalog engine into an error. Its value is
-// internal and is not reported: rule errors reach clients.
+// internal: it is logged, and the error clients see is fixed.
 func contain(err *error) {
-	if recover() != nil {
+	if r := recover(); r != nil {
+		slog.Error("the Datalog engine panicked", "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
 		*err = &RuleError{Rule: "program", Reason: "the Datalog engine failed on this program"}
 	}
 }

@@ -223,9 +223,11 @@ func (s *Syncer) Validate(ctx context.Context, c *Candidate) error {
 // the parent is readable here: an earlier incoming publication or local
 // published history. Fetched history gets no rollback exemption: its
 // trailers are the remote's claims. A parent fetched earlier but never
-// activated is not readable; activation checks the transition from the
-// active knowledge to its target in every case, so nothing unchecked
-// becomes active.
+// activated is not readable and its edge is not checked here; activation
+// checks the transition from the active knowledge to its target, and a
+// rollback to imported knowledge gets no exemption, so an unchecked
+// intermediate snapshot can neither become active nor be restored as
+// governed knowledge.
 func (s *Syncer) checkTransition(ctx context.Context, cm gitcore.Commit, cat *knowledge.Catalog, cats map[knowledge.Snapshot]*knowledge.Catalog) (problem, err error) {
 	if len(cm.Parents) == 0 {
 		return nil, nil

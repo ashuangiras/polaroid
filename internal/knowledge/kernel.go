@@ -366,7 +366,18 @@ func (k *Kernel) Rollback(ctx context.Context, base, to Snapshot, pv Provenance)
 	if len(changes)+len(records) == 0 {
 		return "", &ValidationError{Problems: []Problem{{Field: "to", Message: "the active knowledge already equals that snapshot"}}}
 	}
-	return k.publish(ctx, Proposal{Base: base, Changes: changes, Records: records, Provenance: pv}, []Trailer{{TrailerRollback, string(to)}}, old)
+	// Only knowledge published here was governed edge by edge. A snapshot
+	// that arrived through an activation may be an intermediate one whose
+	// own transition was never checked, so restoring it gets no exemption.
+	restoring := old
+	imported, err := k.store.Imported(ctx, to)
+	if err != nil {
+		return "", err
+	}
+	if imported {
+		restoring = nil
+	}
+	return k.publish(ctx, Proposal{Base: base, Changes: changes, Records: records, Provenance: pv}, []Trailer{{TrailerRollback, string(to)}}, restoring)
 }
 
 // Publication is one entry of the knowledge history.

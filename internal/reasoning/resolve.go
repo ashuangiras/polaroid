@@ -631,6 +631,7 @@ func hypothesize(ctx context.Context, ev Evaluator, rules []Rule, facts []Fact, 
 		at := produced[c][0]
 		first := assignment(at)
 		skip := make([]bool, len(names))
+		reason := "holds if the context also has these values, which were not given"
 		for j := range names {
 			skip[j] = true
 			key := fmt.Sprint(at, skip)
@@ -642,6 +643,9 @@ func hypothesize(ctx context.Context, ev Evaluator, rules []Rule, facts []Fact, 
 				}
 				probes[key], ok = got, true
 			}
+			if !ok {
+				reason = "holds if the context also has these values, which were not given; not every one was tested as necessary"
+			}
 			if !ok || !got[c] {
 				skip[j] = false
 			}
@@ -652,7 +656,7 @@ func hypothesize(ctx context.Context, ev Evaluator, rules []Rule, facts []Fact, 
 				when = append(when, ContextValue{Name: n, Value: first[j]})
 			}
 		}
-		u := Unknown{Kind: c.kind, Source: c.source, When: when, Reason: "holds if the context also has these values, which were not given"}
+		u := Unknown{Kind: c.kind, Source: c.source, When: when, Reason: reason}
 		if c.kind == "obligation" {
 			u.Requirement = c.a
 		} else {
