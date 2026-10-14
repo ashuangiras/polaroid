@@ -4,9 +4,8 @@ Follow [AGENTS.md](../AGENTS.md). It is the canonical rule set for this reposito
 
 - Path-specific rules in `.github/instructions/*.instructions.md` apply automatically to matching files: storage, and the HTTP API and CLI.
 - Copilot Chat in VS Code: the workspace's `.vscode/mcp.json` names the MCP servers.
-  - `polaroid-agent` (`http://127.0.0.1:7417/mcp/agent/v2`) is the knowledge interface: `discover`, then `read`, then `feedback`; `resolve` reasons over typed records (Corpus Logic, ADR-0050) once this repository's Corpus holds domains, concepts and rules. [docs/architecture/knowledge-guide.md](../docs/architecture/knowledge-guide.md) is the full usage guide.
+  - `polaroid-agent` (`http://127.0.0.1:7417/mcp/agent/v2`) is the knowledge interface: `discover`, then `read`, then `feedback`; `resolve` reasons over typed records (Corpus Logic, ADR-0050) once this repository's Corpus holds domains, concepts and rules. [docs/architecture/knowledge-guide.md](../docs/architecture/knowledge-guide.md) is the full usage guide. It is the only Polaroid server configured here: the legacy `/mcp` (40 tools) is deliberately not wired into this workspace, so it cannot be reached by accident. Operator and evidence work it would have served — binding resolution, execution recording, feedback triage — is done with the `polaroid` CLI instead.
   - `dispatch` runs commands and keeps their output.
-  - `polaroid` (`/mcp`) is the operator and evidence interface. Do not use it for procedural knowledge.
 
   `polaroid-agent` and `dispatch` are local entries. If a server's tools are missing or stale after the service is upgraded, restart that MCP server and open a new chat: a chat keeps the tool list it started with.
 - Copilot cloud agent: the Go toolchain comes from `go.mod` (the `toolchain` line), and golangci-lint must be 2.14.0. Before you push, run the gate of the binding that matches your change (AGENTS.md, "Before you call it done"). The `ci` workflow runs only when dispatched by hand; do not wait for it. If a tool is missing in your environment, report that check as not run. Never report it as passed.
