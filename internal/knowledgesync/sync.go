@@ -242,8 +242,11 @@ func (s *Syncer) checkTransition(ctx context.Context, cm gitcore.Commit, cat *kn
 			return nil, err
 		}
 		c, err := s.kernel.Check(ctx, parent, gitstore.Files(tree))
-		if err != nil {
+		if errors.Is(err, knowledge.ErrInvalid) {
 			return fmt.Errorf("its parent %s: %w", parent, err), nil
+		}
+		if err != nil {
+			return nil, err
 		}
 		prev = c
 	}
