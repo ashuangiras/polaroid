@@ -2,6 +2,8 @@ package knowledge
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"slices"
 	"time"
 )
@@ -55,12 +57,22 @@ func (k *Kernel) Activate(ctx context.Context, a Activation) error {
 		trailers = append(trailers, Trailer{TrailerValidation, pv.Validation})
 	}
 	trailers = append(trailers, Trailer{TrailerAccepted, "complete catalog: documents, references, applicability, cycles, limits"})
+	base, err := k.At(ctx, a.Base)
+	if errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("%w: base %s is not published here", ErrStale, a.Base)
+	}
+	if err != nil {
+		return err
+	}
 	var cat *Catalog
-	err := k.store.Advance(ctx, Advance{Expected: a.Base, Target: a.Target, Author: pv.Author, Subject: pv.Summary, Body: pv.Rationale, Trailers: trailers,
+	err = k.store.Advance(ctx, Advance{Expected: a.Base, Target: a.Target, Author: pv.Author, Subject: pv.Summary, Body: pv.Rationale, Trailers: trailers,
 		Check: func(f Files) error {
 			c, err := loadCatalog(ctx, a.Target, f, k.validators)
+			if err != nil {
+				return err
+			}
 			cat = c
-			return err
+			return CheckTransition(base, c, nil)
 		}})
 	if err != nil {
 		return err

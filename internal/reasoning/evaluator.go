@@ -52,11 +52,27 @@ var DefaultLimits = Limits{Rules: 1000, ProgramBytes: 1 << 20, Facts: 200_000, D
 // Result holds the queried predicates' facts, each predicate's rows sorted.
 type Result map[string][][]string
 
+// Term is one argument of a rule literal: a string constant, or a variable
+// with the constants an `=` premise of the same clause binds it to (none:
+// the variable is open).
+type Term struct {
+	Constant   string
+	IsConstant bool
+	Bound      []string
+}
+
+// Literal is one occurrence of a predicate in a rule.
+type Literal struct {
+	Rule string
+	Args []Term
+}
+
 // Evaluator evaluates programs to a fixed point. internal/reasoning/datalog
 // implements it on Mangle.
 type Evaluator interface {
 	Evaluate(ctx context.Context, p Program) (Result, error)
-	// Constants returns, for each rule, the distinct argument tuples of the
-	// body atoms of predicate/arity whose arguments are all constants.
-	Constants(rules []Rule, predicate string, arity int) (map[string][][]string, error)
+	// Literals lists the occurrences of predicate/arity in the rules'
+	// bodies, or in their heads (before provenance is added) when head is
+	// true.
+	Literals(rules []Rule, predicate string, arity int, head bool) ([]Literal, error)
 }

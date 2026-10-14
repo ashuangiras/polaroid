@@ -137,10 +137,10 @@ func (pv Provenance) check(p *problems) {
 // the base is no longer active, and a ValidationError if the resulting
 // catalog is not valid; nothing is published in either case.
 func (k *Kernel) Publish(ctx context.Context, prop Proposal) (Snapshot, error) {
-	return k.publish(ctx, prop, nil)
+	return k.publish(ctx, prop, nil, nil)
 }
 
-func (k *Kernel) publish(ctx context.Context, prop Proposal, extra []Trailer) (Snapshot, error) {
+func (k *Kernel) publish(ctx context.Context, prop Proposal, extra []Trailer, restoring *Catalog) (Snapshot, error) {
 	var p problems
 	prop.Provenance.check(&p)
 	if len(prop.Changes)+len(prop.Records) == 0 {
@@ -267,6 +267,9 @@ func (k *Kernel) publish(ctx context.Context, prop Proposal, extra []Trailer) (S
 	if err := checkCatalog(procs, records); err != nil {
 		return "", err
 	}
+	if err := CheckTransition(base, newCatalog("", procs, records), restoring); err != nil {
+		return "", err
+	}
 	if err := validateRecords(ctx, k.validators, records); err != nil {
 		return "", err
 	}
@@ -363,7 +366,7 @@ func (k *Kernel) Rollback(ctx context.Context, base, to Snapshot, pv Provenance)
 	if len(changes)+len(records) == 0 {
 		return "", &ValidationError{Problems: []Problem{{Field: "to", Message: "the active knowledge already equals that snapshot"}}}
 	}
-	return k.publish(ctx, Proposal{Base: base, Changes: changes, Records: records, Provenance: pv}, []Trailer{{TrailerRollback, string(to)}})
+	return k.publish(ctx, Proposal{Base: base, Changes: changes, Records: records, Provenance: pv}, []Trailer{{TrailerRollback, string(to)}}, old)
 }
 
 // Publication is one entry of the knowledge history.

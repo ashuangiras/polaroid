@@ -60,7 +60,7 @@ func (t *tools) agentFeedback(ctx context.Context, in wire.KnowledgeFeedbackRequ
 // at /mcp/agent exactly as ADR-0049 finalized it.
 
 const agentInstructionsV2 = agentInstructions + `
-5. resolve a record's key (a procedure, concept or claim) with your situation as context, to learn what applies: obligations with every derivation, specializations, exceptions that verified or were rejected, derived facts, conflicts, unknowns and the evidence status of claims. An unknown means your context did not decide it, never that it does not hold. Evidence status summarises evidence; it is not a verdict.`
+5. resolve a record's key (a procedure, concept or claim) with your situation as context, to learn what applies: obligations with every derivation, specializations, exceptions that verified or were rejected, derived facts, conflicts, unknowns and the evidence status of claims. An unknown means your context did not decide it, never that it does not hold; complete false means not every unknown could be examined. Your context never authorises an exception. Evidence status summarises evidence; it is not a verdict. Pass then with a second procedure's key to learn whether it can follow the goal.`
 
 // AgentResolver is what agent mode v2 adds: resolution, expressed only in
 // wire shapes. internal/knowledgeops.Resolver satisfies it.
@@ -75,7 +75,7 @@ func newAgentServerV2(agent AgentKnowledge, resolver AgentResolver, logger *slog
 	add(s, t, "discover", "Find published knowledge for a task, best match first (lexical: shared words). Returns a snapshot token and, for each candidate, its canonical key and goal. An empty result means nothing is published yet.", read, t.agentDiscover)
 	add(s, t, "read", "Get one procedure's executable guidance by its canonical key, at a snapshot (the active one by default): contract, instructions, and each reference's key, condition and mapped inputs, resolved one level.", read, t.agentRead)
 	add(s, t, "feedback", "Report a finding that changes what is known about the procedure at key, as served by snapshot, with a classification. Not for product defects, environment problems or transient failures.", write, t.agentFeedback)
-	add(s, t, "resolve", "Resolve what applies to a record (procedure, concept or claim) in your context, at a snapshot: obligations with derivation identifiers, specializations, verified and rejected exceptions, derived facts, conflicts, unknowns and evidence status. Deterministic for the same snapshot, context and time.", read, t.agentResolve)
+	add(s, t, "resolve", "Resolve what applies to a record (procedure, concept or claim) in your context, at a snapshot: obligations with derivation identifiers, specializations, verified and rejected exceptions, derived facts, conflicts, unknowns, whether the result is complete, evidence status, and with then, whether a second procedure can follow it. Deterministic for the same snapshot, context and time.", read, t.agentResolve)
 	return s
 }
 

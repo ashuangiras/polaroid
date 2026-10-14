@@ -112,6 +112,7 @@ type Record struct {
 
 	// Exception
 	Excepts       []string
+	RuleDigest    string
 	AppliesTo     []string
 	Conditions    []Condition
 	Waives        string
@@ -198,6 +199,7 @@ type recordDoc struct {
 	Invariants         []string      `json:"invariants,omitzero"`
 	InformalConditions []string      `json:"informal_conditions,omitzero"`
 	Excepts            []string      `json:"excepts,omitzero"`
+	RuleDigest         string        `json:"rule_digest,omitzero"`
 	AppliesTo          []string      `json:"applies_to,omitzero"`
 	Conditions         []Condition   `json:"conditions,omitzero"`
 	Waives             string        `json:"waives,omitzero"`
@@ -266,7 +268,7 @@ func EncodeRecord(r *Record) ([]byte, error) {
 		Inputs: ports(n.Inputs), Outputs: ports(n.Outputs), OutputsComplete: n.OutputsComplete,
 		Preconditions: ids(n.Preconditions), Postconditions: ids(n.Postconditions), Invariants: ids(n.Invariants),
 		InformalConditions: n.InformalConditions,
-		Excepts:            ids(n.Excepts), AppliesTo: ids(n.AppliesTo), Conditions: n.Conditions,
+		Excepts:            ids(n.Excepts), RuleDigest: n.RuleDigest, AppliesTo: ids(n.AppliesTo), Conditions: n.Conditions,
 		Waives: id(n.Waives), Replacement: id(n.Replacement), Justification: n.Justification,
 	}
 	if a := n.Authority; a != nil {
@@ -390,7 +392,7 @@ func ParseRecord(b []byte) (*Record, error) {
 		Program: d.Program, Revision: d.Revision, Protected: d.Protected, Waivable: d.Waivable,
 		OutputsComplete: d.OutputsComplete, Preconditions: unids("preconditions", d.Preconditions, &p),
 		Postconditions: unids("postconditions", d.Postconditions, &p), Invariants: unids("invariants", d.Invariants, &p),
-		InformalConditions: d.InformalConditions, Excepts: unids("excepts", d.Excepts, &p),
+		InformalConditions: d.InformalConditions, Excepts: unids("excepts", d.Excepts, &p), RuleDigest: d.RuleDigest,
 		AppliesTo: unids("applies_to", d.AppliesTo, &p), Conditions: d.Conditions,
 		Waives: unid("waives", d.Waives, &p), Replacement: unid("replacement", d.Replacement, &p), Justification: d.Justification,
 	}

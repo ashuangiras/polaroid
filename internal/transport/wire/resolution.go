@@ -7,7 +7,8 @@ package wire
 type KnowledgeResolveRequest struct {
 	Goal     string            `json:"goal" jsonschema:"the key of the record to resolve: a procedure, concept or claim"`
 	Snapshot string            `json:"snapshot,omitzero" jsonschema:"a snapshot token; omit for the active knowledge"`
-	Context  map[string]string `json:"context,omitzero" jsonschema:"facts about your situation as name and value strings, for example repository and concurrency; a rule that needs one you omit reports an unknown, never a no"`
+	Context  map[string]string `json:"context,omitzero" jsonschema:"facts about your situation as name and value strings, for example concurrency; they can add obligations and decide unknowns, but never authorise an exception: a rule that needs one you omit reports an unknown, never a no"`
+	Then     string            `json:"then,omitzero" jsonschema:"a procedure key to compose after goal (itself a procedure): the result's composition says compatible, incompatible or undetermined from both formal contracts; nothing is executed"`
 	At       string            `json:"at,omitzero" jsonschema:"evaluation time, RFC 3339 (default now; echoed in the result)"`
 }
 
@@ -58,14 +59,58 @@ type KnowledgeConflict struct {
 	Reason string   `json:"reason"`
 }
 
-// KnowledgeUnknown is a conclusion the inputs do not decide.
+// KnowledgeContextValue is one context name and value.
+type KnowledgeContextValue struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// KnowledgeUnknown is a conclusion the inputs do not decide: it holds when
+// the context also has When.
 type KnowledgeUnknown struct {
-	Kind        string   `json:"kind"`
-	Requirement string   `json:"requirement,omitzero"`
-	Source      string   `json:"source,omitzero"`
-	Context     string   `json:"context,omitzero"`
-	Values      []string `json:"values,omitzero"`
-	Reason      string   `json:"reason"`
+	Kind        string                  `json:"kind"`
+	Requirement string                  `json:"requirement,omitzero"`
+	Predicate   string                  `json:"predicate,omitzero"`
+	Object      string                  `json:"object,omitzero"`
+	Source      string                  `json:"source"`
+	When        []KnowledgeContextValue `json:"when"`
+	Reason      string                  `json:"reason"`
+}
+
+// KnowledgePort is a procedure input or output.
+type KnowledgePort struct {
+	Name    string `json:"name"`
+	Concept string `json:"concept,omitzero"`
+}
+
+// KnowledgeContract is a procedure's formal contract.
+type KnowledgeContract struct {
+	Key                string          `json:"key"`
+	Inputs             []KnowledgePort `json:"inputs,omitzero"`
+	Outputs            []KnowledgePort `json:"outputs,omitzero"`
+	OutputsComplete    bool            `json:"outputs_complete"`
+	Preconditions      []string        `json:"preconditions,omitzero"`
+	Postconditions     []string        `json:"postconditions,omitzero"`
+	Invariants         []string        `json:"invariants,omitzero"`
+	InformalConditions []string        `json:"informal_conditions,omitzero"`
+}
+
+// KnowledgeFinding is one reason for a composition verdict.
+type KnowledgeFinding struct {
+	Kind   string `json:"kind"`
+	Item   string `json:"item"`
+	Status string `json:"status"`
+	Reason string `json:"reason"`
+}
+
+// KnowledgeComposition is the verdict on running the goal, then Then.
+type KnowledgeComposition struct {
+	Version  string             `json:"version"`
+	Snapshot string             `json:"snapshot"`
+	Producer KnowledgeContract  `json:"producer"`
+	Consumer KnowledgeContract  `json:"consumer"`
+	Verdict  string             `json:"verdict"`
+	Findings []KnowledgeFinding `json:"findings"`
 }
 
 // KnowledgeClaimStatus summarises the evidence present for a claim.
@@ -82,6 +127,8 @@ type KnowledgeResolution struct {
 	Snapshot        string                     `json:"snapshot"`
 	Goal            string                     `json:"goal"`
 	At              string                     `json:"at"`
+	Complete        bool                       `json:"complete"`
+	Incomplete      []string                   `json:"incomplete,omitzero"`
 	Applicable      []string                   `json:"applicable"`
 	Specializations []KnowledgeSpecialization  `json:"specializations,omitzero"`
 	Obligations     []KnowledgeObligation      `json:"obligations,omitzero"`
@@ -91,4 +138,5 @@ type KnowledgeResolution struct {
 	Unknowns        []KnowledgeUnknown         `json:"unknowns,omitzero"`
 	Evidence        []KnowledgeClaimStatus     `json:"evidence,omitzero"`
 	Superseded      []string                   `json:"superseded,omitzero"`
+	Composition     *KnowledgeComposition      `json:"composition,omitzero"`
 }

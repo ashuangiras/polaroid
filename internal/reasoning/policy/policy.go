@@ -42,6 +42,7 @@ type payload struct {
 	Exception           string             `json:"exception"`
 	Rule                string             `json:"rule"`
 	Revision            int                `json:"revision"`
+	RuleDigest          string             `json:"rule_digest"`
 	AppliesTo           []string           `json:"applies_to"`
 	Conditions          []payloadCondition `json:"conditions"`
 	Waives              string             `json:"waives"`
@@ -55,7 +56,8 @@ type payload struct {
 }
 
 // Payload returns the exact bytes an exception's approval signs: the RFC
-// 8785 canonical JSON of its purpose, identity, target rule and revision,
+// 8785 canonical JSON of its purpose, identity, target rule, revision and
+// rule digest (the SHA-256 of the rule's semantics, knowledge.RuleDigest),
 // scope, conditions, effect, the SHA-256 of its justification, authority,
 // approval reference, key and validity period. Every member that decides
 // whether or how the exception applies is signed.
@@ -65,7 +67,7 @@ func Payload(r *knowledge.Record) ([]byte, error) {
 	}
 	sum := sha256.Sum256([]byte(r.Justification))
 	p := payload{
-		Purpose: Purpose, Exception: r.Key, Rule: r.Excepts[0], Revision: r.Revision,
+		Purpose: Purpose, Exception: r.Key, Rule: r.Excepts[0], Revision: r.Revision, RuleDigest: r.RuleDigest,
 		AppliesTo: slices.Sorted(slices.Values(r.AppliesTo)), Conditions: []payloadCondition{},
 		Waives: r.Waives, Replacement: r.Replacement, JustificationSHA256: hex.EncodeToString(sum[:]),
 		Authority: payloadAuthority{Level: string(r.Authority.Level), Domain: r.Authority.Domain, Repository: r.Authority.Repository},
@@ -157,6 +159,7 @@ func ParseTrust(b []byte) (Trust, error) {
 type Rule struct {
 	Key       string
 	Revision  int
+	Digest    string // knowledge.RuleDigest
 	Protected bool
 	Waivable  bool
 	// Domains are the rule's domains and every broader domain.
@@ -171,9 +174,13 @@ type Derivation struct {
 	Via         string // the record the obligation is inherited from; Subject when its own
 }
 
-// Request is the resolution context the exceptions are judged in.
+// Request is the resolution context the exceptions are judged in. Context
+// holds what the caller asserts; Trusted holds only what the server
+// established itself. An exception's project scope and conditions are
+// judged on Trusted alone: an assertion never authorises a waiver.
 type Request struct {
 	Context map[string]string
+	Trusted map[string]string
 	At      time.Time
 }
 
@@ -289,21 +296,29 @@ func judge(trust Trust, e *knowledge.Record, rules map[string]Rule, derivs []Der
 		return reject("rule %s is not in the snapshot", e.Excepts[0])
 	case rule.Revision != e.Revision:
 		return reject("approved for revision %d of %s, which is now at revision %d", e.Revision, rule.Key, rule.Revision)
+	case rule.Digest != e.RuleDigest:
+		return reject("approved for different semantics of %s (rule digest %s, now %s)", rule.Key, short(e.RuleDigest), short(rule.Digest))
+	case rule.Protected:
+		return reject("%s is a protected invariant: no exception may waive it, at any authority; change it by a governed revision", rule.Key)
 	case !rule.Waivable:
 		return reject("%s is not waivable", rule.Key)
-	case rule.Protected && e.Authority.Level != knowledge.AuthorityCorpus:
-		return reject("%s is a protected invariant; only corpus authority may except it", rule.Key)
 	case e.Authority.Level == knowledge.AuthorityDomain && !slices.Contains(rule.Domains, e.Authority.Domain):
 		return reject("%s is not in domain %s", rule.Key, e.Authority.Domain)
 	}
 	v.Status = NotApplicable
-	if e.Authority.Level == knowledge.AuthorityProject && req.Context["repository"] != e.Authority.Repository {
-		v.Reason = fmt.Sprintf("granted for repository %s", e.Authority.Repository)
+	if e.Authority.Level == knowledge.AuthorityProject && req.Trusted["repository"] != e.Authority.Repository {
+		v.Reason = fmt.Sprintf("granted for repository %s, which this request has not established by trusted context", e.Authority.Repository)
+		if req.Context["repository"] == e.Authority.Repository {
+			v.Reason += "; a caller's assertion of its repository does not authorise a waiver"
+		}
 		return v
 	}
 	for _, c := range e.Conditions {
-		if got, ok := req.Context[c.Name]; !ok || got != c.Value {
-			v.Reason = fmt.Sprintf("requires context %s = %q", c.Name, c.Value)
+		if got, ok := req.Trusted[c.Name]; !ok || got != c.Value {
+			v.Reason = fmt.Sprintf("requires trusted context %s = %q", c.Name, c.Value)
+			if req.Context[c.Name] == c.Value {
+				v.Reason += "; a caller's assertion does not authorise a waiver"
+			}
 			return v
 		}
 	}
@@ -318,6 +333,13 @@ func judge(trust Trust, e *knowledge.Record, rules map[string]Rule, derivs []Der
 	}
 	v.Status, v.Reason = Applied, ""
 	return v
+}
+
+func short(digest string) string {
+	if len(digest) > 12 {
+		return digest[:12]
+	}
+	return digest
 }
 
 func describe(a knowledge.Authority) string {

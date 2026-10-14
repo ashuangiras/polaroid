@@ -23,23 +23,58 @@ type Finding struct {
 	Reason string `json:"reason"`
 }
 
-// CompositionResult is the verdict on running producer, then consumer.
+// Port is a procedure input or output in a contract summary.
+type Port struct {
+	Name    string `json:"name"`
+	Concept string `json:"concept,omitzero"`
+}
+
+// Contract is a procedure's formal contract as composition reads it.
+type Contract struct {
+	Key                string   `json:"key"`
+	Inputs             []Port   `json:"inputs,omitzero"`
+	Outputs            []Port   `json:"outputs,omitzero"`
+	OutputsComplete    bool     `json:"outputs_complete"`
+	Preconditions      []string `json:"preconditions,omitzero"`
+	Postconditions     []string `json:"postconditions,omitzero"`
+	Invariants         []string `json:"invariants,omitzero"`
+	InformalConditions []string `json:"informal_conditions,omitzero"`
+}
+
+func contractOf(r *knowledge.Record) Contract {
+	c := Contract{Key: r.Key, OutputsComplete: r.OutputsComplete, Preconditions: r.Preconditions, Postconditions: r.Postconditions,
+		Invariants: r.Invariants, InformalConditions: r.InformalConditions}
+	for _, p := range r.Inputs {
+		c.Inputs = append(c.Inputs, Port(p))
+	}
+	for _, p := range r.Outputs {
+		c.Outputs = append(c.Outputs, Port(p))
+	}
+	return c
+}
+
+// CompositionResult is the verdict on running producer, then consumer:
+// both formal contracts, and one finding per consumer input, precondition
+// and informal condition. Findings that are not satisfied or established
+// are the missing prerequisites.
 type CompositionResult struct {
 	Version  string    `json:"version"`
 	Snapshot string    `json:"snapshot"`
-	Producer string    `json:"producer"`
-	Consumer string    `json:"consumer"`
+	Producer Contract  `json:"producer"`
+	Consumer Contract  `json:"consumer"`
 	Verdict  string    `json:"verdict"`
 	Findings []Finding `json:"findings"`
 }
 
 // Compose decides whether the consumer may follow the producer, from their
 // formal contracts only: typed inputs and outputs, and pre-, post-conditions
-// and invariants named as concepts. It never executes either procedure. A
-// requirement is incompatible only when it is formally contradicted, or when
-// a typed input matches no output of a producer that declares its outputs
-// complete; anything informal or not formally established is undetermined.
-func Compose(ctx context.Context, cat *knowledge.Catalog, ev Evaluator, producer, consumer string, ctxVals map[string]string, limits Limits) (*CompositionResult, error) {
+// and invariants named as concepts. It never executes either procedure and
+// reads no caller context: nothing a caller asserts establishes a
+// precondition. A requirement is incompatible only when it is formally
+// contradicted, or when a typed input matches no output of a producer that
+// declares its outputs complete; anything informal or not formally
+// established is undetermined.
+func Compose(ctx context.Context, cat *knowledge.Catalog, ev Evaluator, producer, consumer string, limits Limits) (*CompositionResult, error) {
 	p, err := cat.Record(producer)
 	if err != nil || p.Type != knowledge.TypeProcedure {
 		return nil, fmt.Errorf("%w: producer %s is not a Procedure record", ErrUnknownGoal, producer)
@@ -51,7 +86,7 @@ func Compose(ctx context.Context, cat *knowledge.Catalog, ev Evaluator, producer
 	if limits == (Limits{}) {
 		limits = DefaultLimits
 	}
-	facts, _ := Facts(cat, ctxVals, "")
+	facts, _ := Facts(cat, nil, "")
 	facts = append(facts, Fact{Predicate: "composition", Args: []string{producer, consumer}})
 	res, err := ev.Evaluate(ctx, Program{System: System, Heads: Heads, EDB: EDB, Facts: facts,
 		Query: []string{"established", "contradicted", "supplied"}, Limits: limits})
@@ -61,7 +96,7 @@ func Compose(ctx context.Context, cat *knowledge.Catalog, ev Evaluator, producer
 	has := func(pred string, a, b string) bool {
 		return slices.ContainsFunc(res[pred], func(row []string) bool { return row[0] == a && row[1] == b })
 	}
-	out := &CompositionResult{Version: Version, Snapshot: string(cat.Snapshot()), Producer: producer, Consumer: consumer, Verdict: Compatible}
+	out := &CompositionResult{Version: Version, Snapshot: string(cat.Snapshot()), Producer: contractOf(p), Consumer: contractOf(q), Verdict: Compatible}
 	worsen := func(v string) {
 		if v == Incompatible || (v == Undetermined && out.Verdict == Compatible) {
 			out.Verdict = v

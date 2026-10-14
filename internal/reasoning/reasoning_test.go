@@ -3,7 +3,9 @@ package reasoning_test
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
@@ -94,11 +96,57 @@ func (w *world) resolve(goal string, ctx map[string]string) *reasoning.Resolutio
 // exception builds and signs an exception with the named key.
 func (w *world) exception(key, signer string, auth knowledge.Authority, rule, waives string, appliesTo ...string) *knowledge.Record {
 	w.t.Helper()
-	e := &knowledge.Record{Type: knowledge.TypeException, Key: key, Label: key, Excepts: []string{rule}, Revision: 1,
-		AppliesTo: appliesTo, Waives: waives, Justification: "Justified for " + key, Authority: &auth,
+	cat, err := w.kernel.At(context.Background(), w.snap)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	target, err := cat.Record(rule)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	e := &knowledge.Record{Type: knowledge.TypeException, Key: key, Label: key, Excepts: []string{rule}, Revision: target.Revision,
+		RuleDigest: knowledge.RuleDigest(target), AppliesTo: appliesTo, Waives: waives, Justification: "Justified for " + key, Authority: &auth,
 		Approval: &knowledge.Approval{Reference: "approval-" + key, Key: signer, ValidFrom: at.Add(-24 * time.Hour), ValidUntil: at.Add(24 * time.Hour)}}
 	w.sign(e, signer)
 	return e
+}
+
+// resolveTrusted resolves with context the server established itself.
+func (w *world) resolveTrusted(goal string, ctx, trusted map[string]string) *reasoning.Resolution {
+	w.t.Helper()
+	cat, err := w.kernel.At(context.Background(), w.snap)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	r, err := reasoning.Resolve(context.Background(), cat, ev, w.trust, reasoning.Request{Goal: goal, Context: ctx, Trusted: trusted, At: at})
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return r
+}
+
+// publishErr publishes records and returns the error.
+func (w *world) publishErr(records ...*knowledge.Record) error {
+	var changes []knowledge.RecordChange
+	for _, r := range records {
+		changes = append(changes, knowledge.RecordChange{Key: r.Key, Record: r})
+	}
+	_, err := w.kernel.Publish(context.Background(), knowledge.Proposal{Base: w.snap, Records: changes,
+		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "try", Rationale: "test"}})
+	return err
+}
+
+func (w *world) rule(key string) *knowledge.Record {
+	w.t.Helper()
+	cat, err := w.kernel.At(context.Background(), w.snap)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	r, err := cat.Record(key)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return r
 }
 
 func (w *world) sign(e *knowledge.Record, signer string) {
@@ -173,12 +221,118 @@ func TestMissingContextIsUndetermined(t *testing.T) {
 	if obligation(r, "check.race") != nil {
 		t.Fatal("check.race required without knowing whether the change is concurrent")
 	}
-	if len(r.Unknowns) != 1 || r.Unknowns[0].Requirement != "check.race" || r.Unknowns[0].Context != "concurrency" ||
-		!slices.Equal(r.Unknowns[0].Values, []string{"true"}) || r.Unknowns[0].Source != "rule.go.race" {
-		t.Fatalf("unknowns %+v", r.Unknowns)
+	if len(r.Unknowns) != 1 || r.Unknowns[0].Kind != "obligation" || r.Unknowns[0].Requirement != "check.race" || r.Unknowns[0].Source != "rule.go.race" ||
+		!slices.Equal(r.Unknowns[0].When, []reasoning.ContextValue{{Name: "concurrency", Value: "true"}}) || !r.Complete {
+		t.Fatalf("unknowns %+v complete %v %v", r.Unknowns, r.Complete, r.Incomplete)
 	}
-	if r2 := newWorld(t).resolve("go.verify", map[string]string{"concurrency": "false"}); len(r2.Unknowns) != 0 || obligation(r2, "check.race") != nil {
+	if r2 := newWorld(t).resolve("go.verify", map[string]string{"concurrency": "false"}); len(r2.Unknowns) != 0 || obligation(r2, "check.race") != nil || !r2.Complete {
 		t.Fatalf("with concurrency=false: %+v", r2)
+	}
+}
+
+func goRule(key, program string) *knowledge.Record {
+	return &knowledge.Record{Type: knowledge.TypeRule, Key: key, Label: key, Statement: key, Program: program, Revision: 1, Waivable: true,
+		ClassifiedAs: []string{"domain.software.go"}}
+}
+
+const goProc = `record(P, "Procedure"), in_domain(P, "domain.software.go")`
+
+// Unknowns cover equality-bound values and combinations of names, and
+// never conflate two values of one name.
+func TestUnknownsAreEnumerated(t *testing.T) {
+	w := newWorld(t)
+	w.publish(
+		goRule("rule.eq", `obligation(P, "check.review") :- `+goProc+`, context("mode", V), V = "ci".`),
+		goRule("rule.both", `obligation(P, "check.leak") :- `+goProc+`, context("mode", "a"), context("mode", "b").`),
+		goRule("rule.multi", `obligation(P, "check.review") :- `+goProc+`, context("os", "linux"), context("arch", "arm64").`),
+	)
+	r := w.resolve("go.verify", nil)
+	got := map[string][]reasoning.ContextValue{}
+	for _, u := range r.Unknowns {
+		got[u.Requirement+"/"+u.Source] = u.When
+	}
+	want := map[string][]reasoning.ContextValue{
+		"check.race/rule.go.race": {{Name: "concurrency", Value: "true"}},
+		"check.review/rule.eq":    {{Name: "mode", Value: "ci"}},
+		"check.review/rule.multi": {{Name: "arch", Value: "arm64"}, {Name: "os", Value: "linux"}},
+	}
+	if len(got) != len(want) || !r.Complete {
+		t.Fatalf("unknowns %+v complete %v %v", r.Unknowns, r.Complete, r.Incomplete)
+	}
+	for k, v := range want {
+		if !slices.Equal(got[k], v) {
+			t.Errorf("%s: when %+v, want %+v", k, got[k], v)
+		}
+	}
+}
+
+// What cannot be enumerated makes the resolution explicitly incomplete.
+func TestIncompleteIsExplicit(t *testing.T) {
+	w := newWorld(t)
+	w.publish(goRule("rule.open", `obligation(P, "check.review") :- `+goProc+`, context("mode", V).`))
+	r := w.resolve("go.verify", nil)
+	if r.Complete || len(r.Incomplete) != 1 || !strings.Contains(r.Incomplete[0], `rule rule.open reads any value of context "mode"`) {
+		t.Fatalf("open value: complete %v %v", r.Complete, r.Incomplete)
+	}
+	if r := w.resolve("go.verify", map[string]string{"mode": "x"}); !r.Complete || obligation(r, "check.review") == nil {
+		t.Fatalf("given mode: complete %v %v", r.Complete, r.Incomplete)
+	}
+
+	w = newWorld(t)
+	var clauses []string
+	for i := range 7 {
+		for _, v := range []string{"a", "b"} {
+			clauses = append(clauses, fmt.Sprintf(`obligation(P, "check.review") :- %s, context("n%d", %q).`, goProc, i, v))
+		}
+	}
+	w.publish(goRule("rule.wide", strings.Join(clauses, "\n")))
+	r = w.resolve("go.verify", nil)
+	if r.Complete || len(r.Unknowns) != 0 || len(r.Incomplete) != 1 || !strings.Contains(r.Incomplete[0], "more than 64 combinations") {
+		t.Fatalf("too many combinations: complete %v %v unknowns %+v", r.Complete, r.Incomplete, r.Unknowns)
+	}
+}
+
+// A requirement that is not a concept is refused at publication when a
+// rule states it, and reported, never dereferenced, when it is derived.
+func TestUndefinedRequirement(t *testing.T) {
+	w := newWorld(t)
+	if err := w.publishErr(goRule("rule.undefined", `obligation(P, "check.nothing") :- `+goProc+`.`)); !errors.Is(err, knowledge.ErrInvalid) ||
+		!strings.Contains(err.Error(), `requires "check.nothing", which is not a Concept record`) {
+		t.Fatalf("constant: %v", err)
+	}
+	claim := &knowledge.Record{Type: knowledge.TypeClaim, Key: "claim.required", Label: "required", Statement: "Something is required.",
+		ClassifiedAs: []string{"domain.software.go"}, Asserts: []knowledge.Assertion{{Subject: "go", Predicate: "requires", Object: "not.a.concept"}}}
+	w.publish(claim, goRule("rule.indirect", `obligation(P, X) :- `+goProc+`, asserts(C, "go", "requires", X).`))
+	r := w.resolve("go.verify", nil)
+	if !slices.ContainsFunc(r.Conflicts, func(c reasoning.Conflict) bool {
+		return c.Kind == "undefined_requirement" && slices.Equal(c.Keys, []string{"not.a.concept"})
+	}) {
+		t.Fatalf("conflicts %+v", r.Conflicts)
+	}
+}
+
+// Every explanation identifier can be recomputed from the snapshot alone.
+func TestExplanationIDsAreReconstructible(t *testing.T) {
+	r := newWorld(t).resolve("go.verify.concurrent", map[string]string{"concurrency": "true"})
+	recompute := func(parts ...string) string {
+		h := sha256.Sum256([]byte(strings.Join(append([]string{reasoning.Version, r.Snapshot, r.Goal}, parts...), "\x00")))
+		return hex.EncodeToString(h[:16])
+	}
+	n := 0
+	for _, o := range r.Obligations {
+		for _, d := range o.Derivations {
+			if d.ID != recompute("obligation", o.Requirement, d.Source, d.Via) {
+				t.Fatalf("%s via %s: %s", o.Requirement, d.Via, d.ID)
+			}
+			n++
+		}
+	}
+	if n == 0 {
+		t.Fatal("no derivations")
+	}
+	r = newWorld(t).resolve("audio.phase.analyze", nil)
+	if d := r.Derived[0]; d.ID != recompute("derived", d.Predicate, d.Object) {
+		t.Fatalf("derived %s", d.ID)
 	}
 }
 
@@ -263,8 +417,9 @@ func TestAuthorizedExceptionWaivesOnlyItsDerivation(t *testing.T) {
 	w := newWorld(t)
 	proj := knowledge.Authority{Level: knowledge.AuthorityProject, Repository: repo}
 	w.publish(w.exception("exc.vet", "project", proj, "rule.go.vet", "check.vet", "go.verify"))
+	trusted := map[string]string{"repository": repo}
 
-	r := w.resolve("go.verify", map[string]string{"repository": repo})
+	r := w.resolveTrusted("go.verify", nil, trusted)
 	if o := obligation(r, "check.vet"); o == nil || o.Status != "waived" {
 		t.Fatalf("check.vet %+v", o)
 	}
@@ -272,42 +427,151 @@ func TestAuthorizedExceptionWaivesOnlyItsDerivation(t *testing.T) {
 		t.Fatalf("exception %+v", e)
 	}
 	// The child's own derivation of check.vet is independent of go.verify's.
-	r = w.resolve("go.verify.concurrent", map[string]string{"repository": repo, "concurrency": "true"})
+	r = w.resolveTrusted("go.verify.concurrent", map[string]string{"concurrency": "true"}, trusted)
 	if got := derivations(obligation(r, "check.vet")); !slices.Equal(got, []string{
 		"rule:rule.go.vet@go.verify.concurrent=active", "rule:rule.go.vet@go.verify=waived"}) || obligation(r, "check.vet").Status != "required" {
 		t.Fatalf("check.vet derivations %v", got)
 	}
 	// Another repository is not covered.
-	r = w.resolve("go.verify", map[string]string{"repository": "github.com/other/app"})
+	r = w.resolveTrusted("go.verify", nil, map[string]string{"repository": "github.com/other/app"})
 	if o := obligation(r, "check.vet"); o.Status != "required" || exceptionStatus(r, "exc.vet").Status != policy.NotApplicable {
 		t.Fatalf("other repository: %+v %+v", o, r.Exceptions)
 	}
 }
 
-func TestProtectedInvariant(t *testing.T) {
+// A caller that merely asserts the approved repository, or a condition,
+// never activates a project or conditional waiver (priority B).
+func TestAssertedContextNeverAuthorizes(t *testing.T) {
 	w := newWorld(t)
-	w.publish(
-		w.exception("exc.tests.project", "project", knowledge.Authority{Level: knowledge.AuthorityProject, Repository: repo}, "rule.software.tests", "check.tests", "go.verify"),
-		w.exception("exc.tests.domain", "software", knowledge.Authority{Level: knowledge.AuthorityDomain, Domain: "domain.software"}, "rule.software.tests", "check.tests", "go.verify"),
-	)
-	r := w.resolve("go.verify", map[string]string{"repository": repo})
-	for _, k := range []string{"exc.tests.project", "exc.tests.domain"} {
-		if e := exceptionStatus(r, k); e.Status != policy.Rejected || !strings.Contains(e.Reason, "protected invariant") {
+	proj := knowledge.Authority{Level: knowledge.AuthorityProject, Repository: repo}
+	cond := w.exception("exc.vet.ci", "corpus", knowledge.Authority{Level: knowledge.AuthorityCorpus}, "rule.go.vet", "check.vet", "go.verify")
+	cond.Conditions = []knowledge.Condition{{Name: "ci", Value: "true"}}
+	w.sign(cond, "corpus")
+	w.publish(w.exception("exc.vet", "project", proj, "rule.go.vet", "check.vet", "go.verify"), cond)
+	r := w.resolve("go.verify", map[string]string{"repository": repo, "ci": "true"})
+	if o := obligation(r, "check.vet"); o.Status != "required" {
+		t.Fatalf("an asserted context waived check.vet: %+v", o)
+	}
+	for k, want := range map[string]string{"exc.vet": "a caller's assertion of its repository does not authorise a waiver",
+		"exc.vet.ci": "a caller's assertion does not authorise a waiver"} {
+		if e := exceptionStatus(r, k); e.Status != policy.NotApplicable || !strings.Contains(e.Reason, want) {
 			t.Fatalf("%s: %+v", k, e)
 		}
 	}
-	if o := obligation(r, "check.tests"); o.Status != "required" || slices.ContainsFunc(o.Derivations, func(d reasoning.Derivation) bool { return d.Status != "active" }) {
-		t.Fatalf("check.tests %+v", o)
+}
+
+// Protected invariants are never waived by an exception, at any authority
+// (priority C): publication refuses such exceptions, and policy rejects
+// one even if it were present.
+func TestProtectedInvariant(t *testing.T) {
+	w := newWorld(t)
+	for signer, auth := range map[string]knowledge.Authority{
+		"project":  {Level: knowledge.AuthorityProject, Repository: repo},
+		"software": {Level: knowledge.AuthorityDomain, Domain: "domain.software"},
+		"corpus":   {Level: knowledge.AuthorityCorpus},
+	} {
+		err := w.publishErr(w.exception("exc.tests."+signer, signer, auth, "rule.software.tests", "check.tests", "go.verify"))
+		if !errors.Is(err, knowledge.ErrInvalid) || !strings.Contains(err.Error(), "rule.software.tests is a protected invariant; no exception may target it") {
+			t.Errorf("%s exception published: %v", signer, err)
+		}
+	}
+	rule := w.rule("rule.software.tests")
+	corpusExc := w.exception("exc.tests.corpus", "corpus", knowledge.Authority{Level: knowledge.AuthorityCorpus}, "rule.software.tests", "check.tests", "go.verify")
+	out := policy.Decide(w.trust, []*knowledge.Record{corpusExc}, map[string]policy.Rule{rule.Key: {Key: rule.Key, Revision: rule.Revision,
+		Digest: knowledge.RuleDigest(rule), Protected: true, Waivable: true, Domains: []string{"domain.software"}}},
+		[]policy.Derivation{{Subject: "go.verify", Requirement: "check.tests", Source: rule.Key, Via: "go.verify"}}, policy.Request{At: at})
+	if v := out.Verdicts[0]; v.Status != policy.Rejected || !strings.Contains(v.Reason, "no exception may waive it, at any authority") || len(out.Effects) != 0 {
+		t.Fatalf("policy accepted a corpus exception to a protected invariant: %+v", out)
+	}
+
+	unprotect := w.rule("rule.software.tests")
+	unprotect.Protected, unprotect.Waivable, unprotect.Revision = false, true, 2
+	superseding := &knowledge.Record{Type: knowledge.TypeRule, Key: "rule.software.tests.lax", Label: "lax", Statement: "lax", Revision: 1, Waivable: true,
+		Supersedes: []string{"rule.software.tests"}, Program: `obligation(P, "check.build") :- record(P, "Procedure").`}
+	waivable := w.rule("rule.software.tests")
+	waivable.Waivable, waivable.Revision = true, 2
+	for name, tc := range map[string]struct {
+		r    *knowledge.Record
+		want string
+	}{
+		"unprotect":              {unprotect, "a protected invariant cannot be unprotected"},
+		"supersede":              {superseding, "only a protected rule may supersede it"},
+		"protected and waivable": {waivable, "a protected invariant is never waivable"},
+	} {
+		if err := w.publishErr(tc.r); !errors.Is(err, knowledge.ErrInvalid) || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	_, err := w.kernel.Publish(context.Background(), knowledge.Proposal{Base: w.snap, Records: []knowledge.RecordChange{{Key: "rule.software.tests"}},
+		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "remove", Rationale: "test"}})
+	if !errors.Is(err, knowledge.ErrInvalid) || !strings.Contains(err.Error(), "is a protected invariant and cannot be removed") {
+		t.Errorf("remove: %v", err)
+	}
+	// A governed revision may change a protected invariant's program.
+	governed := w.rule("rule.software.tests")
+	governed.Program, governed.Revision = `obligation(P, "check.tests") :- record(P, "Procedure"), in_domain(P, "domain.software"), record(P, T).`, 2
+	if err := w.publishErr(governed); err != nil {
+		t.Fatalf("governed revision: %v", err)
+	}
+}
+
+// An approval binds the exact semantics of the rule it waives (priority A).
+func TestApprovalBindsRuleSemantics(t *testing.T) {
+	w := newWorld(t)
+	corpus := knowledge.Authority{Level: knowledge.AuthorityCorpus}
+	e := w.exception("exc.vet", "corpus", corpus, "rule.go.vet", "check.vet", "go.verify")
+	w.publish(e)
+	if o := obligation(w.resolve("go.verify", nil), "check.vet"); o.Status != "waived" {
+		t.Fatalf("approved exception does not apply: %+v", o)
+	}
+	// The rule's program cannot change under the same revision.
+	altered := w.rule("rule.go.vet")
+	altered.Program = `obligation(P, "check.vet") :- record(P, "Procedure").`
+	if err := w.publishErr(altered); !errors.Is(err, knowledge.ErrInvalid) || !strings.Contains(err.Error(), "semantics changed, so its revision must rise above 1") {
+		t.Fatalf("same-revision change: %v", err)
+	}
+	// Nor may the revision go back.
+	w.publish(func() *knowledge.Record { r := w.rule("rule.go.vet"); r.Revision = 3; return r }())
+	if err := w.publishErr(func() *knowledge.Record { r := w.rule("rule.go.vet"); r.Revision = 2; return r }()); err == nil || !strings.Contains(err.Error(), "below the published revision 3") {
+		t.Fatalf("revision decrease: %v", err)
+	}
+	// A properly revised rule leaves the old approval behind.
+	altered.Revision = 4
+	w.publish(altered)
+	r := w.resolve("go.verify", nil)
+	if s := exceptionStatus(r, "exc.vet"); s.Status != policy.Rejected {
+		t.Fatalf("old approval after a revision: %+v", s)
+	}
+	if o := obligation(r, "check.vet"); o.Status != "required" {
+		t.Fatalf("check.vet %+v", o)
+	}
+	// Policy refuses a semantics mismatch even at an equal revision, which
+	// history that skipped the transition check could present.
+	rule := w.rule("rule.go.vet")
+	sameRev := w.exception("exc.same", "corpus", corpus, "rule.go.vet", "check.vet", "go.verify")
+	out := policy.Decide(w.trust, []*knowledge.Record{sameRev}, map[string]policy.Rule{rule.Key: {Key: rule.Key, Revision: rule.Revision,
+		Digest: knowledge.RuleDigest(&knowledge.Record{Key: rule.Key, Program: "something else"}), Waivable: true}},
+		[]policy.Derivation{{Subject: "go.verify", Requirement: "check.vet", Source: rule.Key, Via: "go.verify"}}, policy.Request{At: at})
+	if v := out.Verdicts[0]; v.Status != policy.Rejected || !strings.Contains(v.Reason, "approved for different semantics") {
+		t.Fatalf("digest mismatch: %+v", v)
+	}
+	// The digest is signed: editing it breaks the signature.
+	tampered := w.exception("exc.tampered", "corpus", corpus, "rule.go.vet", "check.vet", "go.verify")
+	tampered.RuleDigest = knowledge.RuleDigest(&knowledge.Record{Key: "x"})
+	w.publish(tampered)
+	if s := exceptionStatus(w.resolve("go.verify", nil), "exc.tampered"); s.Status != policy.Rejected || !strings.Contains(s.Reason, "signature does not verify") {
+		t.Fatalf("tampered digest: %+v", s)
 	}
 }
 
 func TestCorpusAuthorityAndIndependentDerivation(t *testing.T) {
 	w := newWorld(t)
-	w.publish(w.exception("exc.tests.corpus", "corpus", knowledge.Authority{Level: knowledge.AuthorityCorpus}, "rule.software.tests", "check.tests", "change.verify"))
-	r := w.resolve("change.verify", nil)
-	o := obligation(r, "check.tests")
-	if got := derivations(o); !slices.Equal(got, []string{"declared:change.verify@change.verify=active", "rule:rule.software.tests@change.verify=waived"}) || o.Status != "required" {
-		t.Fatalf("check.tests: %v %s", got, o.Status)
+	w.publish(w.exception("exc.race.corpus", "corpus", knowledge.Authority{Level: knowledge.AuthorityCorpus}, "rule.go.race", "check.race", "go.verify.concurrent"))
+	r := w.resolve("go.verify.concurrent", map[string]string{"concurrency": "true"})
+	o := obligation(r, "check.race")
+	if got := derivations(o); !slices.Equal(got, []string{"declared:go.verify.concurrent@go.verify.concurrent=active",
+		"rule:rule.go.race@go.verify.concurrent=waived", "rule:rule.go.race@go.verify=waived"}) || o.Status != "required" {
+		t.Fatalf("check.race: %v %s", got, o.Status)
 	}
 }
 
@@ -359,16 +623,15 @@ func TestInvalidExceptionsNeverApply(t *testing.T) {
 			return w.exception("exc", "mathematics", knowledge.Authority{Level: knowledge.AuthorityDomain, Domain: "domain.mathematics"}, "rule.go.vet", "check.vet", "go.verify")
 		}, "is not in domain domain.mathematics"},
 		"old revision": {func(w *world) *knowledge.Record {
-			cat, _ := w.kernel.At(context.Background(), w.snap)
-			rule, _ := cat.Record("rule.go.vet")
+			e := w.exception("exc", "project", proj, "rule.go.vet", "check.vet", "go.verify")
+			rule := w.rule("rule.go.vet")
 			rule.Revision = 2
 			w.publish(rule)
-			return w.exception("exc", "project", proj, "rule.go.vet", "check.vet", "go.verify")
+			return e
 		}, "approved for revision 1 of rule.go.vet, which is now at revision 2"},
 		"not waivable": {func(w *world) *knowledge.Record {
-			cat, _ := w.kernel.At(context.Background(), w.snap)
-			rule, _ := cat.Record("rule.go.vet")
-			rule.Waivable = false
+			rule := w.rule("rule.go.vet")
+			rule.Waivable, rule.Revision = false, 2
 			w.publish(rule)
 			return w.exception("exc", "project", proj, "rule.go.vet", "check.vet", "go.verify")
 		}, "is not waivable"},
@@ -376,7 +639,7 @@ func TestInvalidExceptionsNeverApply(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			w := newWorld(t)
 			w.publish(tc.build(w))
-			r := w.resolve("go.verify", map[string]string{"repository": repo})
+			r := w.resolveTrusted("go.verify", nil, map[string]string{"repository": repo})
 			e := exceptionStatus(r, "exc")
 			if e.Status != policy.Rejected || !strings.Contains(e.Reason, tc.want) {
 				t.Fatalf("exception %+v, want rejected: %q", e, tc.want)
@@ -395,11 +658,12 @@ func TestExceptionConditionsAndReplacement(t *testing.T) {
 	e.Conditions, e.Replacement = []knowledge.Condition{{Name: "ci", Value: "true"}}, "check.lint"
 	w.sign(e, "project")
 	w.publish(e)
-	r := w.resolve("go.verify", map[string]string{"repository": repo})
-	if s := exceptionStatus(r, "exc.vet.ci"); s.Status != policy.NotApplicable || !strings.Contains(s.Reason, `requires context ci = "true"`) {
+	trusted := map[string]string{"repository": repo}
+	r := w.resolveTrusted("go.verify", nil, trusted)
+	if s := exceptionStatus(r, "exc.vet.ci"); s.Status != policy.NotApplicable || !strings.Contains(s.Reason, `requires trusted context ci = "true"`) {
 		t.Fatalf("without ci: %+v", s)
 	}
-	r = w.resolve("go.verify", map[string]string{"repository": repo, "ci": "true"})
+	r = w.resolveTrusted("go.verify", nil, map[string]string{"repository": repo, "ci": "true"})
 	if o := obligation(r, "check.vet"); o.Status != "waived" || o.Derivations[0].Status != "replaced" {
 		t.Fatalf("check.vet %+v", o)
 	}
@@ -416,7 +680,7 @@ func TestConflictingExceptions(t *testing.T) {
 	replace.Replacement = "check.lint"
 	w.sign(replace, "project")
 	w.publish(waive, replace)
-	r := w.resolve("go.verify", map[string]string{"repository": repo})
+	r := w.resolveTrusted("go.verify", nil, map[string]string{"repository": repo})
 	for _, k := range []string{"exc.a", "exc.b"} {
 		if s := exceptionStatus(r, k); s.Status != policy.Conflicting {
 			t.Fatalf("%s %+v", k, s)
@@ -433,22 +697,30 @@ func TestComposition(t *testing.T) {
 		Outputs: []knowledge.Port{{Name: "binary", Concept: "artifact.binary"}}, OutputsComplete: true, Postconditions: []string{"state.built", "network.forbidden"}}
 	cons := &knowledge.Record{Type: knowledge.TypeProcedure, Key: "artifact.smoke", Label: "artifact.smoke", ClassifiedAs: []string{"domain.software"},
 		Inputs: []knowledge.Port{{Name: "binary", Concept: "artifact.binary"}}, Preconditions: []string{"state.built"}, Postconditions: []string{"state.smoked"}}
-	cat, _ := w.kernel.At(context.Background(), w.snap)
 	compose := func(p, q string) *reasoning.CompositionResult {
 		t.Helper()
 		c, err := w.kernel.At(context.Background(), w.snap)
 		if err != nil {
 			t.Fatal(err)
 		}
-		r, err := reasoning.Compose(context.Background(), c, ev, p, q, nil, reasoning.Limits{})
+		r, err := reasoning.Compose(context.Background(), c, ev, p, q, reasoning.Limits{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return r
 	}
-	_ = cat
 	if r := compose("artifact.build", "artifact.smoke"); r.Verdict != reasoning.Compatible {
 		t.Fatalf("build -> smoke: %+v", r)
+	}
+	// Through resolve: the goal composes with then, contracts included.
+	c, _ := w.kernel.At(context.Background(), w.snap)
+	res, err := reasoning.Resolve(context.Background(), c, ev, w.trust, reasoning.Request{Goal: "artifact.build", Then: "artifact.deploy", At: at})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cp := res.Composition; cp == nil || cp.Verdict != reasoning.Incompatible || cp.Producer.Key != "artifact.build" || !cp.Producer.OutputsComplete ||
+		cp.Consumer.Inputs[0].Concept != "artifact.image" || cp.Findings[0].Status != "missing" {
+		t.Fatalf("resolve then: %+v", res.Composition)
 	}
 	if r := compose("artifact.build", "artifact.deploy"); r.Verdict != reasoning.Incompatible || r.Findings[0].Status != "missing" {
 		t.Fatalf("build -> deploy: %+v", r)

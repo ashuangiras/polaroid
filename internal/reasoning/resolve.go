@@ -50,7 +50,6 @@ relevant(E) :- relevant(C), supports(E, C).
 relevant(E) :- relevant(C), contradicts(E, C).
 established(Q, C) :- composition(P, Q), precondition(Q, C), postcondition(P, C).
 established(Q, C) :- composition(P, Q), precondition(Q, C), invariant(P, C).
-established(Q, C) :- composition(P, Q), precondition(Q, C), context("established", C).
 contradicted(Q, C) :- composition(P, Q), precondition(Q, C), postcondition(P, D), contradicts(D, C).
 contradicted(Q, C) :- composition(P, Q), precondition(Q, C), postcondition(P, D), contradicts(C, D).
 supplied(Q, N) :- composition(P, Q), input_type(Q, N, T), output_type(P, M, T).
@@ -70,9 +69,16 @@ var Heads = map[string]string{"obligation/2": "own_obligation", "derived/3": "de
 var ErrUnknownGoal = errors.New("goal is not a record in this snapshot")
 
 // Request is one resolution's input besides the snapshot and trust.
+// Context is what the caller asserts: it can add obligations and decide
+// unknowns, but never authorise a waiver. Trusted is context the server
+// established itself (for example an authenticated project identity); an
+// exception's scope and conditions are judged on it alone. Then, when set,
+// names a consumer procedure to compose after the goal.
 type Request struct {
 	Goal    string
 	Context map[string]string
+	Trusted map[string]string
+	Then    string
 	At      time.Time
 	Limits  Limits
 }
@@ -124,14 +130,22 @@ type Conflict struct {
 	Reason string   `json:"reason"`
 }
 
-// Unknown is a conclusion the inputs do not decide.
+// ContextValue is one name and value of a resolution context.
+type ContextValue struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// Unknown is a conclusion the inputs do not decide: it holds when the
+// context also has When, which the caller did not give.
 type Unknown struct {
-	Kind        string   `json:"kind"`
-	Requirement string   `json:"requirement,omitzero"`
-	Source      string   `json:"source,omitzero"`
-	Context     string   `json:"context,omitzero"`
-	Values      []string `json:"values,omitzero"`
-	Reason      string   `json:"reason"`
+	Kind        string         `json:"kind"` // obligation or derived
+	Requirement string         `json:"requirement,omitzero"`
+	Predicate   string         `json:"predicate,omitzero"`
+	Object      string         `json:"object,omitzero"`
+	Source      string         `json:"source"`
+	When        []ContextValue `json:"when"`
+	Reason      string         `json:"reason"`
 }
 
 // ClaimStatus summarises the evidence present for a claim. It is never a
@@ -144,25 +158,31 @@ type ClaimStatus struct {
 }
 
 // Resolution is what applies to a goal: concise, deterministic, and
-// explainable by its derivation identifiers.
+// explainable by its derivation identifiers. Complete is false whenever
+// the unknowns could not all be examined; Incomplete says why.
 type Resolution struct {
-	Version         string            `json:"version"`
-	Snapshot        string            `json:"snapshot"`
-	Goal            string            `json:"goal"`
-	At              string            `json:"at"`
-	Applicable      []string          `json:"applicable"`
-	Specializations []Specialization  `json:"specializations,omitzero"`
-	Obligations     []Obligation      `json:"obligations,omitzero"`
-	Derived         []DerivedFact     `json:"derived,omitzero"`
-	Exceptions      []ExceptionResult `json:"exceptions,omitzero"`
-	Conflicts       []Conflict        `json:"conflicts,omitzero"`
-	Unknowns        []Unknown         `json:"unknowns,omitzero"`
-	Evidence        []ClaimStatus     `json:"evidence,omitzero"`
-	Superseded      []string          `json:"superseded,omitzero"`
+	Version         string             `json:"version"`
+	Snapshot        string             `json:"snapshot"`
+	Goal            string             `json:"goal"`
+	At              string             `json:"at"`
+	Complete        bool               `json:"complete"`
+	Incomplete      []string           `json:"incomplete,omitzero"`
+	Applicable      []string           `json:"applicable"`
+	Specializations []Specialization   `json:"specializations,omitzero"`
+	Obligations     []Obligation       `json:"obligations,omitzero"`
+	Derived         []DerivedFact      `json:"derived,omitzero"`
+	Exceptions      []ExceptionResult  `json:"exceptions,omitzero"`
+	Conflicts       []Conflict         `json:"conflicts,omitzero"`
+	Unknowns        []Unknown          `json:"unknowns,omitzero"`
+	Evidence        []ClaimStatus      `json:"evidence,omitzero"`
+	Superseded      []string           `json:"superseded,omitzero"`
+	Composition     *CompositionResult `json:"composition,omitzero"`
 }
 
-// maxHypotheses bounds the context names probed for unknowns.
-const maxHypotheses = 8
+// maxAssignments bounds the hypothetical evaluations one resolution runs:
+// one per combination of a value for every missing context name. Beyond
+// it the resolution is reported incomplete.
+const maxAssignments = 64
 
 // Facts states a catalog's records, a context and a goal as facts.
 func Facts(cat *knowledge.Catalog, ctxVals map[string]string, goal string) ([]Fact, []Rule) {
@@ -210,8 +230,12 @@ func Facts(cat *knowledge.Catalog, ctxVals map[string]string, goal string) ([]Fa
 	return facts, rules
 }
 
-func explanationID(parts ...string) string {
-	h := sha256.Sum256([]byte(Version + "\x00" + strings.Join(parts, "\x00")))
+// ExplanationID is the identifier of one derivation: the first 16 bytes,
+// hex, of SHA-256 over Version, the snapshot, the goal and the derivation's
+// parts (for an obligation: "obligation", requirement, source, via),
+// joined by NUL bytes. Anyone holding the snapshot can recompute it.
+func ExplanationID(snapshot, goal string, parts ...string) string {
+	h := sha256.Sum256([]byte(Version + "\x00" + strings.Join(append([]string{snapshot, goal}, parts...), "\x00")))
 	return hex.EncodeToString(h[:16])
 }
 
@@ -240,9 +264,7 @@ func Resolve(ctx context.Context, cat *knowledge.Catalog, ev Evaluator, trust po
 		return nil, err
 	}
 	res := &Resolution{Version: Version, Snapshot: string(cat.Snapshot()), Goal: goal.Key, At: req.At.UTC().Format(time.RFC3339)}
-	id := func(parts ...string) string {
-		return explanationID(append([]string{res.Snapshot, goal.Key}, parts...)...)
-	}
+	id := func(parts ...string) string { return ExplanationID(res.Snapshot, goal.Key, parts...) }
 
 	superseded := map[string]bool{}
 	for _, r := range records {
@@ -268,7 +290,7 @@ func Resolve(ctx context.Context, cat *knowledge.Catalog, ev Evaluator, trust po
 	for _, r := range records {
 		switch r.Type {
 		case knowledge.TypeRule:
-			policyRules[r.Key] = policy.Rule{Key: r.Key, Revision: r.Revision, Protected: r.Protected, Waivable: r.Waivable, Domains: domains[r.Key]}
+			policyRules[r.Key] = policy.Rule{Key: r.Key, Revision: r.Revision, Digest: knowledge.RuleDigest(r), Protected: r.Protected, Waivable: r.Waivable, Domains: domains[r.Key]}
 		case knowledge.TypeException:
 			if !superseded[r.Key] {
 				exceptions = append(exceptions, r)
@@ -276,7 +298,7 @@ func Resolve(ctx context.Context, cat *knowledge.Catalog, ev Evaluator, trust po
 		}
 	}
 	slices.SortFunc(exceptions, func(a, b *knowledge.Record) int { return strings.Compare(a.Key, b.Key) })
-	outcome := policy.Decide(trust, exceptions, policyRules, derivs, policy.Request{Context: req.Context, At: req.At})
+	outcome := policy.Decide(trust, exceptions, policyRules, derivs, policy.Request{Context: req.Context, Trusted: req.Trusted, At: req.At})
 
 	byReq := map[string]*Obligation{}
 	derivIDs := make([]string, len(derivs))
@@ -339,7 +361,13 @@ func Resolve(ctx context.Context, cat *knowledge.Catalog, ev Evaluator, trust po
 	}
 
 	for _, r1 := range slices.Sorted(maps.Keys(required)) {
-		for _, r2 := range records[r1].Contradicts {
+		rec := records[r1]
+		if rec == nil || rec.Type != knowledge.TypeConcept {
+			res.Conflicts = append(res.Conflicts, Conflict{Kind: "undefined_requirement", Keys: []string{r1},
+				Reason: fmt.Sprintf("%s is required but is not a concept in this snapshot", r1)})
+			continue
+		}
+		for _, r2 := range rec.Contradicts {
 			if required[r2] {
 				pair := []string{r1, r2}
 				slices.Sort(pair)
@@ -397,11 +425,16 @@ func Resolve(ctx context.Context, cat *knowledge.Catalog, ev Evaluator, trust po
 		}
 	}
 
-	unknowns, err := hypothesize(ctx, ev, rules, facts, goal.Key, req.Context, base["obligation_of"], limits, superseded)
+	unknowns, incomplete, err := hypothesize(ctx, ev, rules, facts, goal.Key, req.Context, base, limits, superseded)
 	if err != nil {
 		return nil, err
 	}
-	res.Unknowns = unknowns
+	res.Unknowns, res.Incomplete, res.Complete = unknowns, incomplete, len(incomplete) == 0
+	if req.Then != "" {
+		if res.Composition, err = Compose(ctx, cat, ev, goal.Key, req.Then, limits); err != nil {
+			return nil, err
+		}
+	}
 	return res, nil
 }
 
@@ -462,53 +495,180 @@ func claimStatus(records map[string]*knowledge.Record, claim string) ClaimStatus
 	return cs
 }
 
-// hypothesize finds obligations that hold only for a context value the
-// caller did not give: positive inference is monotone, so adding the
-// candidate values of one missing name and comparing with the base result
-// shows exactly what that name could add. Absence is never read as "no".
+// termValues is the values a rule term can take: its constant, the
+// constants an equality binds it to, or nil when it is open.
+func termValues(t Term) []string {
+	switch {
+	case t.IsConstant:
+		return []string{t.Constant}
+	case len(t.Bound) > 0:
+		return t.Bound
+	}
+	return nil
+}
+
+// hypothesize finds conclusions that hold only for context the caller did
+// not give. Positive inference is monotone, so every conclusion that some
+// realizable context could add appears when each missing name takes one of
+// the values rules compare it with: it evaluates every such combination
+// (one value per name, as a real request has) and compares it with the
+// base result. Absence is never read as "no". What cannot be enumerated
+// (an open name or value, too many combinations) is returned as
+// incompleteness, never silently skipped.
 func hypothesize(ctx context.Context, ev Evaluator, rules []Rule, facts []Fact, goal string, given map[string]string,
-	base [][]string, limits Limits, superseded map[string]bool) ([]Unknown, error) {
-	consts, err := ev.Constants(rules, "context", 2)
+	base Result, limits Limits, superseded map[string]bool) ([]Unknown, []string, error) {
+	lits, err := ev.Literals(rules, "context", 2, false)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	values := map[string][]string{}
-	for _, rows := range consts {
-		for _, row := range rows {
-			if _, ok := given[row[0]]; !ok && !slices.Contains(values[row[0]], row[1]) {
-				values[row[0]] = append(values[row[0]], row[1])
+	var incomplete []string
+	note := func(format string, args ...any) {
+		if msg := fmt.Sprintf(format, args...); !slices.Contains(incomplete, msg) {
+			incomplete = append(incomplete, msg)
+		}
+	}
+	for _, l := range lits {
+		names, vals := termValues(l.Args[0]), termValues(l.Args[1])
+		if names == nil {
+			note("rule %s reads a context name it does not fix, so what it could add cannot be enumerated", l.Rule)
+			continue
+		}
+		for _, n := range names {
+			if _, ok := given[n]; ok {
+				continue
+			}
+			if vals == nil {
+				note("rule %s reads any value of context %q, which was not given, so what it could add cannot be enumerated", l.Rule, n)
+				continue
+			}
+			for _, v := range vals {
+				if !slices.Contains(values[n], v) {
+					values[n] = append(values[n], v)
+				}
 			}
 		}
 	}
 	names := slices.Sorted(maps.Keys(values))
-	var out []Unknown
-	if len(names) > maxHypotheses {
-		out = append(out, Unknown{Kind: "context", Reason: fmt.Sprintf("rules read %d context names that were not given; only the first %d were examined", len(names), maxHypotheses)})
-		names = names[:maxHypotheses]
+	total := 1
+	for _, n := range names {
+		slices.Sort(values[n])
+		total *= len(values[n])
+		if total > maxAssignments {
+			note("the %d missing context names %v have more than %d combinations of values; none was examined", len(names), names, maxAssignments)
+			slices.Sort(incomplete)
+			return nil, incomplete, nil
+		}
+	}
+	if len(names) == 0 {
+		slices.Sort(incomplete)
+		return nil, incomplete, nil
 	}
 	known := map[string]bool{}
-	for _, row := range base {
-		known[strings.Join(row, "\x00")] = true
-	}
-	for _, name := range names {
-		vals := slices.Sorted(slices.Values(values[name]))
-		extra := slices.Clone(facts)
-		for _, v := range vals {
-			extra = append(extra, Fact{Predicate: "context", Args: []string{name, v}})
+	for _, pred := range []string{"obligation_of", "derived_by"} {
+		for _, row := range base[pred] {
+			known[pred+"\x00"+strings.Join(row, "\x00")] = true
 		}
-		res, err := ev.Evaluate(ctx, Program{System: System, Rules: rules, Heads: Heads, EDB: EDB, Facts: extra, Query: []string{"obligation_of"}, Limits: limits})
+	}
+	type conclusion struct{ kind, a, b, source string }
+	produced := map[conclusion][]int{}
+	assignment := func(i int) []string {
+		out := make([]string, len(names))
+		for j := len(names) - 1; j >= 0; j-- {
+			vs := values[names[j]]
+			out[j] = vs[i%len(vs)]
+			i /= len(vs)
+		}
+		return out
+	}
+	// conclusions evaluates the program with assignment i, without name
+	// skip (-1 keeps every name), and returns the new conclusions.
+	conclusions := func(i, skip int) (map[conclusion]bool, error) {
+		extra := slices.Clone(facts)
+		for j, v := range assignment(i) {
+			if j != skip {
+				extra = append(extra, Fact{Predicate: "context", Args: []string{names[j], v}})
+			}
+		}
+		res, err := ev.Evaluate(ctx, Program{System: System, Rules: rules, Heads: Heads, EDB: EDB, Facts: extra,
+			Query: []string{"obligation_of", "derived_by"}, Limits: limits})
 		if err != nil {
 			return nil, err
 		}
-		seen := map[[2]string]bool{}
+		out := map[conclusion]bool{}
 		for _, row := range res["obligation_of"] {
-			if row[0] != goal || known[strings.Join(row, "\x00")] || superseded[row[2]] || seen[[2]string{row[1], row[2]}] {
-				continue
+			if row[0] == goal && !known["obligation_of\x00"+strings.Join(row, "\x00")] && !superseded[row[2]] {
+				out[conclusion{"obligation", row[1], "", row[2]}] = true
 			}
-			seen[[2]string{row[1], row[2]}] = true
-			out = append(out, Unknown{Kind: "obligation", Requirement: row[1], Source: row[2], Context: name, Values: vals,
-				Reason: fmt.Sprintf("%s may require %s depending on context %q, which was not given", row[2], row[1], name)})
+		}
+		for _, row := range res["derived_by"] {
+			if row[0] == goal && !known["derived_by\x00"+strings.Join(row, "\x00")] && !superseded[row[3]] {
+				out[conclusion{"derived", row[1], row[2], row[3]}] = true
+			}
+		}
+		return out, nil
+	}
+	for i := range total {
+		got, err := conclusions(i, -1)
+		if err != nil {
+			return nil, nil, err
+		}
+		for c := range got {
+			produced[c] = append(produced[c], i)
 		}
 	}
-	return out, nil
+	keys := slices.SortedFunc(maps.Keys(produced), func(x, y conclusion) int {
+		return cmp.Or(strings.Compare(x.kind, y.kind), strings.Compare(x.a, y.a), strings.Compare(x.b, y.b), strings.Compare(x.source, y.source))
+	})
+	// A name matters to a conclusion when removing it, or changing only its
+	// value, loses the conclusion. Removal probes are bounded; past the
+	// bound a name is kept, so When stays a sufficient condition.
+	probes, budget := map[[2]int]map[conclusion]bool{}, maxAssignments
+	var out []Unknown
+	for _, c := range keys {
+		at := produced[c]
+		first := assignment(at[0])
+		var when []ContextValue
+		for j, n := range names {
+			matters := false
+			for _, v := range values[n] {
+				b := slices.Clone(first)
+				b[j] = v
+				if !slices.ContainsFunc(at, func(k int) bool { return slices.Equal(assignment(k), b) }) {
+					matters = true
+				}
+			}
+			if !matters {
+				key := [2]int{at[0], j}
+				got, ok := probes[key]
+				if !ok && budget > 0 {
+					budget--
+					if got, err = conclusions(at[0], j); err != nil {
+						return nil, nil, err
+					}
+					probes[key], ok = got, true
+				}
+				matters = !ok || !got[c]
+			}
+			if matters {
+				when = append(when, ContextValue{Name: n, Value: first[j]})
+			}
+		}
+		reason := "holds if the context also has these values, which were not given"
+		if len(when) == 0 {
+			for j, n := range names {
+				when = append(when, ContextValue{Name: n, Value: first[j]})
+			}
+			reason = "holds if the context also has these values, which were not given; some of them alone may suffice"
+		}
+		u := Unknown{Kind: c.kind, Source: c.source, When: when, Reason: reason}
+		if c.kind == "obligation" {
+			u.Requirement = c.a
+		} else {
+			u.Predicate, u.Object = c.a, c.b
+		}
+		out = append(out, u)
+	}
+	slices.Sort(incomplete)
+	return out, incomplete, nil
 }

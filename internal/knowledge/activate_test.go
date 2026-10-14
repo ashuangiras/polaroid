@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ashuangiras/polaroid/internal/knowledge"
@@ -27,6 +28,66 @@ func stage(t *testing.T, m *knowledgetest.MemoryStore, base knowledge.Snapshot, 
 
 func decision() knowledge.Provenance {
 	return knowledge.Provenance{Author: "operator", Summary: "accept team knowledge", Rationale: "reviewed", Validation: "fetched and validated"}
+}
+
+// Knowledge fetched from elsewhere obeys the same rule governance as a
+// local publication (ADR-0050): a rule's semantics never change under the
+// same revision, and a protected invariant is never unprotected.
+func TestActivationEnforcesRuleGovernance(t *testing.T) {
+	ctx := context.Background()
+	m := knowledgetest.NewMemoryStore()
+	k := knowledge.New(m, knowledge.WithRecordValidator(&acceptAll{}))
+	s1, err := k.Publish(ctx, knowledge.Proposal{Changes: knowledgetest.CorpusProcedures(), Records: knowledgetest.CorpusRecordChanges(), Provenance: prov()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat, err := k.At(ctx, s1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stageRule := func(edit func(r *knowledge.Record)) knowledge.Snapshot {
+		r, err := cat.Record("rule.software.tests")
+		if err != nil {
+			t.Fatal(err)
+		}
+		edit(r)
+		doc, err := knowledge.EncodeRecord(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := m.Stage(s1, knowledge.Commit{Changes: []knowledge.FileChange{{Path: knowledge.RecordPath(r.Type, r.Key), Content: doc}},
+			Author: "alice", Subject: "from elsewhere", Body: "because"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	for name, tc := range map[string]struct {
+		edit func(r *knowledge.Record)
+		want string
+	}{
+		"same revision": {func(r *knowledge.Record) { r.Statement = "Only some software needs tests." }, "its revision must rise above 1"},
+		"unprotected":   {func(r *knowledge.Record) { r.Protected, r.Revision = false, 2 }, "cannot be unprotected"},
+	} {
+		err := k.Activate(ctx, knowledge.Activation{Base: s1, Target: stageRule(tc.edit), Provenance: decision()})
+		if !errors.Is(err, knowledge.ErrInvalid) || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if s, _ := m.Active(ctx); s != s1 {
+		t.Fatalf("a refused activation moved the active snapshot to %s", s)
+	}
+	governed := stageRule(func(r *knowledge.Record) {
+		r.Statement, r.Revision = "Every software procedure requires passing tests, always.", 2
+	})
+	if err := k.Activate(ctx, knowledge.Activation{Base: s1, Target: governed, Provenance: decision()}); err != nil {
+		t.Fatalf("governed revision: %v", err)
+	}
+	// A rollback restores the earlier governed rule exactly, so its lower
+	// revision is not a regression.
+	if _, err := k.Rollback(ctx, governed, s1, prov()); err != nil {
+		t.Fatalf("rollback to the earlier revision: %v", err)
+	}
 }
 
 func TestActivateIsAValidatedFastForward(t *testing.T) {

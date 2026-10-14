@@ -59,7 +59,9 @@ func (r *Resolver) Resolve(ctx context.Context, in wire.KnowledgeResolveRequest)
 	}
 	ctx, cancel := context.WithTimeout(ctx, ResolveTimeout)
 	defer cancel()
-	res, err := reasoning.Resolve(ctx, cat, r.ev, r.trust, reasoning.Request{Goal: in.Goal, Context: in.Context, At: at})
+	// Agent mode authenticates no project identity, so no trusted context is
+	// established: project-scoped and conditional exceptions fail closed here.
+	res, err := reasoning.Resolve(ctx, cat, r.ev, r.trust, reasoning.Request{Goal: in.Goal, Context: in.Context, Then: in.Then, At: at})
 	switch {
 	case errors.Is(err, reasoning.ErrUnknownGoal):
 		return wire.KnowledgeResolution{}, wire.NewKnowledgeError(http.StatusNotFound, wire.ErrorDetail{Code: "not_found", Message: err.Error()})

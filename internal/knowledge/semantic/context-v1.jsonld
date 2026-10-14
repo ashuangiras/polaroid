@@ -47,6 +47,7 @@
     "invariants": {"@id": "pc:invariant", "@type": "@id", "@container": "@set"},
     "informal_conditions": {"@id": "pc:informalCondition", "@container": "@set"},
     "excepts": {"@id": "pc:excepts", "@type": "@id", "@container": "@set"},
+    "rule_digest": "pc:ruleDigest",
     "applies_to": {"@id": "pc:appliesTo", "@type": "@id", "@container": "@set"},
     "conditions": {"@id": "pc:condition", "@container": "@set"},
     "value": "pc:value",

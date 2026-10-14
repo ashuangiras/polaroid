@@ -157,30 +157,57 @@ func restrict(r reasoning.Rule, heads map[string]string) ([]ast.Clause, error) {
 	return out, nil
 }
 
-// Constants implements reasoning.Evaluator.
-func (Evaluator) Constants(rules []reasoning.Rule, predicate string, arity int) (map[string][][]string, error) {
-	out := map[string][][]string{}
+// Literals implements reasoning.Evaluator. A variable argument carries the
+// string constants that `=` premises of its clause bind it to.
+func (Evaluator) Literals(rules []reasoning.Rule, predicate string, arity int, head bool) ([]reasoning.Literal, error) {
+	var out []reasoning.Literal
 	for _, r := range rules {
 		unit, err := parseUnit(r.Key, r.Text)
 		if err != nil {
 			return nil, err
 		}
 		for _, c := range unit.Clauses {
+			bound := map[ast.Variable][]string{}
 			for _, p := range c.Premises {
-				a, ok := p.(ast.Atom)
-				if !ok || a.Predicate.Symbol != predicate || a.Predicate.Arity != arity {
+				eq, ok := p.(ast.Eq)
+				if !ok {
 					continue
 				}
-				row := make([]string, 0, arity)
-				for _, arg := range a.Args {
-					if c, ok := arg.(ast.Constant); ok && c.Type == ast.StringType {
-						s, _ := c.StringValue()
-						row = append(row, s)
+				for _, pair := range [][2]ast.BaseTerm{{eq.Left, eq.Right}, {eq.Right, eq.Left}} {
+					v, isVar := pair[0].(ast.Variable)
+					k, isConst := pair[1].(ast.Constant)
+					if isVar && isConst && k.Type == ast.StringType {
+						s, _ := k.StringValue()
+						bound[v] = append(bound[v], s)
 					}
 				}
-				if len(row) == arity && !slices.ContainsFunc(out[r.Key], func(x []string) bool { return slices.Equal(x, row) }) {
-					out[r.Key] = append(out[r.Key], row)
+			}
+			atoms := []ast.Atom{c.Head}
+			if !head {
+				atoms = nil
+				for _, p := range c.Premises {
+					if a, ok := p.(ast.Atom); ok {
+						atoms = append(atoms, a)
+					}
 				}
+			}
+			for _, a := range atoms {
+				if a.Predicate.Symbol != predicate || a.Predicate.Arity != arity {
+					continue
+				}
+				lit := reasoning.Literal{Rule: r.Key}
+				for _, arg := range a.Args {
+					switch t := arg.(type) {
+					case ast.Constant:
+						s, err := t.StringValue()
+						lit.Args = append(lit.Args, reasoning.Term{Constant: s, IsConstant: err == nil})
+					case ast.Variable:
+						lit.Args = append(lit.Args, reasoning.Term{Bound: slices.Clone(bound[t])})
+					default:
+						lit.Args = append(lit.Args, reasoning.Term{})
+					}
+				}
+				out = append(out, lit)
 			}
 		}
 	}
@@ -215,8 +242,18 @@ func (s *store) Contains(a ast.Atom) bool {
 	return s.stopped == nil && s.SimpleInMemoryStore.Contains(a)
 }
 
-// Evaluate implements reasoning.Evaluator.
-func (Evaluator) Evaluate(ctx context.Context, p reasoning.Program) (reasoning.Result, error) {
+// Evaluate implements reasoning.Evaluator. A panic inside Mangle (rule
+// text is untrusted input) is returned as an error, never propagated.
+func (Evaluator) Evaluate(ctx context.Context, p reasoning.Program) (res reasoning.Result, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			res, err = nil, &RuleError{Rule: "program", Reason: fmt.Sprintf("the Datalog engine failed: %v", r)}
+		}
+	}()
+	return evaluate(ctx, p)
+}
+
+func evaluate(ctx context.Context, p reasoning.Program) (reasoning.Result, error) {
 	l := p.Limits
 	size := 0
 	for _, r := range p.Rules {

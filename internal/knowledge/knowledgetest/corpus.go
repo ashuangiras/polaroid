@@ -124,7 +124,7 @@ func CorpusRecords() []*knowledge.Record {
 
 	rule := func(key, statement, program string, protected bool, domains ...string) {
 		r := add(rec(knowledge.TypeRule, key, statement))
-		r.Statement, r.Program, r.Revision, r.Protected, r.Waivable, r.ClassifiedAs = statement, program, 1, protected, true, domains
+		r.Statement, r.Program, r.Revision, r.Protected, r.Waivable, r.ClassifiedAs = statement, program, 1, protected, !protected, domains
 	}
 	rule("rule.software.tests", "Every software procedure requires passing tests.",
 		`obligation(P, "check.tests") :- record(P, "Procedure"), in_domain(P, "domain.software").`, true, "domain.software")

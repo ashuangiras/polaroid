@@ -167,6 +167,7 @@ func (s *Syncer) Validate(ctx context.Context, c *Candidate) error {
 	}
 	src := s.sources[c.Source]
 	var probs []string
+	cats := map[knowledge.Snapshot]*knowledge.Catalog{}
 	c.Incoming = nil
 	for _, cm := range commits {
 		in := Incoming{Snapshot: knowledge.Snapshot(cm.Snapshot), Publisher: cm.Author, When: cm.When, Summary: cm.Subject, Rationale: cm.Body}
@@ -188,6 +189,10 @@ func (s *Syncer) Validate(ctx context.Context, c *Candidate) error {
 			probs = append(probs, fmt.Sprintf("snapshot %s: %v", cm.Snapshot, err))
 		} else {
 			in.Procedures = cat.Len()
+			cats[in.Snapshot] = cat
+			if err := s.checkTransition(ctx, cm, cat, cats); err != nil {
+				probs = append(probs, fmt.Sprintf("snapshot %s: %v", cm.Snapshot, err))
+			}
 		}
 		c.Incoming = append(c.Incoming, in)
 	}
@@ -208,6 +213,36 @@ func (s *Syncer) Validate(ctx context.Context, c *Candidate) error {
 	c.Local = knowledge.Snapshot(local)
 	c.Status = map[gitcore.Relation]Status{gitcore.Same: Identical, gitcore.Behind: FastForward, gitcore.Ahead: LocalAhead, gitcore.Diverged: Diverged}[rel]
 	return nil
+}
+
+// checkTransition checks an incoming publication against its parent, when
+// the parent is readable here (an earlier incoming publication or local
+// history). Activation always checks the transition from the active
+// knowledge to its target, so nothing unchecked becomes active.
+func (s *Syncer) checkTransition(ctx context.Context, cm gitcore.Commit, cat *knowledge.Catalog, cats map[knowledge.Snapshot]*knowledge.Catalog) error {
+	if len(cm.Parents) == 0 {
+		return nil
+	}
+	read := func(snap knowledge.Snapshot) *knowledge.Catalog {
+		if c := cats[snap]; c != nil {
+			return c
+		}
+		if c, err := s.kernel.At(ctx, snap); err == nil {
+			return c
+		}
+		return nil
+	}
+	prev := read(knowledge.Snapshot(cm.Parents[0]))
+	if prev == nil {
+		return nil
+	}
+	var restoring *knowledge.Catalog
+	for _, t := range cm.Trailers {
+		if t.Key == knowledge.TrailerRollback {
+			restoring = read(knowledge.Snapshot(t.Value))
+		}
+	}
+	return knowledge.CheckTransition(prev, cat, restoring)
 }
 
 func (s *Syncer) reject(c *Candidate, probs ...string) error {

@@ -76,8 +76,14 @@ func TestCorpusLogicAcceptance(t *testing.T) {
 		changes = append(changes, map[string]any{"key": p.Key, "scope": "shared", "goal": p.Goal, "philosophy": p.Philosophy,
 			"method": p.Method, "contract": json.RawMessage(p.Contract), "instructions": json.RawMessage(p.Instructions)})
 	}
+	var vetRule *knowledge.Record
+	for _, r := range knowledgetest.CorpusRecords() {
+		if r.Key == "rule.go.vet" {
+			vetRule = r
+		}
+	}
 	exc := &knowledge.Record{Type: knowledge.TypeException, Key: "exc.team.vet", Label: "Team waives go vet", Excepts: []string{"rule.go.vet"},
-		Revision: 1, AppliesTo: []string{"go.verify"}, Waives: "check.vet", Justification: "The team runs staticcheck instead.",
+		Revision: 1, RuleDigest: knowledge.RuleDigest(vetRule), AppliesTo: []string{"go.verify"}, Waives: "check.vet", Justification: "The team runs staticcheck instead.",
 		Authority: &knowledge.Authority{Level: knowledge.AuthorityProject, Repository: repo},
 		Approval: &knowledge.Approval{Reference: "team-2026-10", Key: "team.lead",
 			ValidFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), ValidUntil: time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)}}
@@ -178,6 +184,7 @@ func TestCorpusLogicAcceptance(t *testing.T) {
 	}
 	var res struct {
 		Snapshot    string `json:"snapshot"`
+		Complete    bool   `json:"complete"`
 		Obligations []struct {
 			Requirement string `json:"requirement"`
 			Status      string `json:"status"`
@@ -185,17 +192,48 @@ func TestCorpusLogicAcceptance(t *testing.T) {
 				Source, Via, Status, Exception string
 			} `json:"derivations"`
 		} `json:"obligations"`
-		Exceptions []struct{ Key, Status string } `json:"exceptions"`
+		Exceptions []struct{ Key, Status, Reason string } `json:"exceptions"`
 	}
 	if err := json.Unmarshal([]byte(first), &res); err != nil {
 		t.Fatal(err)
 	}
-	if res.Snapshot != snap || len(res.Exceptions) != 1 || res.Exceptions[0].Status != "applied" {
+	// The agent interface establishes no trusted project identity, so the
+	// caller's assertion of the repository never activates the waiver.
+	if res.Snapshot != snap || !res.Complete || len(res.Exceptions) != 1 || res.Exceptions[0].Status != "not_applicable" ||
+		!strings.Contains(res.Exceptions[0].Reason, "a caller's assertion of its repository does not authorise a waiver") {
 		t.Fatalf("resolution %s", first)
 	}
 	for _, o := range res.Obligations {
-		if o.Requirement == "check.vet" && (o.Status != "required" || len(o.Derivations) != 2) {
-			t.Fatalf("check.vet: the child's own derivation must stay required: %+v", o)
+		if o.Requirement == "check.vet" && (o.Status != "required" || len(o.Derivations) != 2 ||
+			slices.ContainsFunc(o.Derivations, func(d struct{ Source, Via, Status, Exception string }) bool { return d.Status != "active" })) {
+			t.Fatalf("check.vet must stay required through every derivation: %+v", o)
+		}
+	}
+
+	// Composition through resolve: the goal, then the next procedure.
+	type composition struct {
+		Composition struct {
+			Verdict  string `json:"verdict"`
+			Producer struct {
+				Key     string `json:"key"`
+				Outputs []struct{ Name, Concept string }
+			} `json:"producer"`
+			Findings []struct{ Kind, Item, Status string } `json:"findings"`
+		} `json:"composition"`
+	}
+	for then, want := range map[string]string{"artifact.smoke": "compatible", "artifact.deploy": "incompatible", "artifact.review": "undetermined"} {
+		r := call(v2, "resolve", map[string]any{"goal": "artifact.build", "then": then, "at": "2026-10-14T12:00:00Z"})
+		var comp composition
+		if err := json.Unmarshal([]byte(r), &comp); err != nil {
+			t.Fatal(err)
+		}
+		if comp.Composition.Verdict != want || comp.Composition.Producer.Key != "artifact.build" || len(comp.Composition.Producer.Outputs) != 1 {
+			t.Fatalf("then %s: %s", then, r)
+		}
+		if then == "artifact.deploy" && !slices.ContainsFunc(comp.Composition.Findings, func(f struct{ Kind, Item, Status string }) bool {
+			return f.Kind == "input" && f.Item == "image" && f.Status == "missing"
+		}) {
+			t.Fatalf("deploy findings: %s", r)
 		}
 	}
 	if r := call(v2, "resolve", map[string]any{"goal": "go.verify"}); !strings.Contains(r, `"at":"`) || !strings.Contains(r, `"unknowns"`) {

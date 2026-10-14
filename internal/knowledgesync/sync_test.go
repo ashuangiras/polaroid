@@ -355,6 +355,70 @@ func TestUntrustedKnowledgeIsRejected(t *testing.T) {
 	}
 }
 
+type acceptRecords struct{}
+
+func (acceptRecords) ValidateRecords(context.Context, []knowledge.RecordDocument) error { return nil }
+
+// A fetched publication that changes a rule's semantics under the same
+// revision, written behind the publisher's kernel, is rejected at
+// validation (ADR-0050): rule governance holds across instances.
+func TestFetchedRuleGovernance(t *testing.T) {
+	ctx := context.Background()
+	remote := bareRemote(t)
+	open := func() *instance {
+		repo, err := gitcore.Open(t.TempDir(), gitcore.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = repo.Close() })
+		s, err := knowledgesync.New(repo, team(remote, "alice"), knowledge.WithRecordValidator(acceptRecords{}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &instance{repo: repo, sync: s, k: s.Kernel()}
+	}
+	a, b := open(), open()
+	s1, err := a.k.Publish(ctx, knowledge.Proposal{Changes: knowledgetest.CorpusProcedures(), Records: knowledgetest.CorpusRecordChanges(),
+		Provenance: knowledge.Provenance{Author: "alice", Summary: "corpus", Rationale: "Because."}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.push(t)
+	if err := b.sync.Activate(ctx, b.fetchValidated(t, "team"), decision("operator.b")); err != nil {
+		t.Fatal(err)
+	}
+	cat, err := a.k.At(ctx, s1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule, err := cat.Record("rule.software.tests")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule.Statement = "Only some software needs tests."
+	doc, err := knowledge.EncodeRecord(rule)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.repo.Publish(ctx, gitcore.Publication{Expected: gitcore.Snapshot(s1), Author: "alice", Subject: "weaken", Body: "no kernel",
+		Changes: []gitcore.Change{{Path: knowledge.RecordPath(rule.Type, rule.Key), Content: doc}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.repo.Push(ctx, gitcore.Remote{Name: "team", URL: remote}, none); err != nil {
+		t.Fatal(err)
+	}
+	c, err := b.sync.Fetch(ctx, "team", none)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.sync.Validate(ctx, c); !errors.Is(err, knowledgesync.ErrRejected) || !strings.Contains(err.Error(), "its revision must rise above 1") {
+		t.Fatalf("validate: %v", err)
+	}
+	if b.active(t) != s1 {
+		t.Fatal("a rejected candidate changed the active knowledge")
+	}
+}
+
 // A candidate validated against a snapshot that is no longer active cannot
 // be activated; whichever of the activation and a local publication comes
 // first wins, and the other is refused.

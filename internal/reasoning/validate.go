@@ -2,6 +2,7 @@ package reasoning
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/ashuangiras/polaroid/internal/knowledge"
 )
@@ -29,6 +30,28 @@ func (v RuleValidator) ValidateRecords(ctx context.Context, docs []knowledge.Rec
 			return err
 		}
 		return &knowledge.ValidationError{Problems: []knowledge.Problem{{Field: "records.program", Message: err.Error()}}}
+	}
+	concepts := map[string]bool{}
+	for _, d := range docs {
+		if d.Record.Type == knowledge.TypeConcept {
+			concepts[d.Record.Key] = true
+		}
+	}
+	heads, err := v.Evaluator.Literals(rules, "obligation", 2, true)
+	if err != nil {
+		return &knowledge.ValidationError{Problems: []knowledge.Problem{{Field: "records.program", Message: err.Error()}}}
+	}
+	var probs []knowledge.Problem
+	for _, h := range heads {
+		for _, req := range termValues(h.Args[1]) {
+			if !concepts[req] {
+				probs = append(probs, knowledge.Problem{Field: "records[" + h.Rule + "].program",
+					Message: fmt.Sprintf("requires %q, which is not a Concept record", req)})
+			}
+		}
+	}
+	if len(probs) > 0 {
+		return &knowledge.ValidationError{Problems: probs}
 	}
 	return nil
 }

@@ -119,9 +119,18 @@ type failing struct{ factstore.SimpleInMemoryStore }
 
 func (failing) GetFacts(ast.Atom, func(ast.Atom) error) error { return errors.New("lookup failed") }
 
-func TestConstants(t *testing.T) {
-	got, err := ev.Constants([]reasoning.Rule{{Key: "r", Text: `obligation(P, "x") :- record(P, T), context("ci", "true"), context("os", V).`}}, "context", 2)
-	if err != nil || fmt.Sprint(got) != "map[r:[[ci true]]]" {
-		t.Fatalf("%v %v", got, err)
+func TestLiterals(t *testing.T) {
+	rules := []reasoning.Rule{{Key: "r", Text: `obligation(P, "x") :- record(P, T), context("ci", "true"), context("os", V), context("mode", M), M = "ci", context(N, "y").`}}
+	got, err := ev.Literals(rules, "context", 2, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `[{r [{ci true []} {true true []}]} {r [{os true []} { false []}]} {r [{mode true []} { false [ci]}]} {r [{ false []} {y true []}]}]`
+	if fmt.Sprint(got) != want {
+		t.Fatalf("body literals\n got %v\nwant %s", got, want)
+	}
+	heads, err := ev.Literals(rules, "obligation", 2, true)
+	if err != nil || fmt.Sprint(heads) != `[{r [{ false []} {x true []}]}]` {
+		t.Fatalf("head literals %v %v", heads, err)
 	}
 }

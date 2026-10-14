@@ -106,6 +106,7 @@ pc:ExceptionShape a sh:NodeShape ;
   sh:ignoredProperties ( rdf:type skos:prefLabel dcterms:subject dcterms:replaces ) ;
   sh:property [ sh:path pc:excepts ; sh:minCount 1 ; sh:maxCount 1 ; sh:class pc:Rule ] ;
   sh:property [ sh:path pc:revision ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:integer ; sh:minInclusive 1 ] ;
+  sh:property [ sh:path pc:ruleDigest ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ; sh:pattern "^[0-9a-f]{64}$" ] ;
   sh:property [ sh:path pc:appliesTo ; sh:minCount 1 ; sh:or ( [ sh:class pc:Procedure ] [ sh:class skos:Concept ] ) ] ;
   sh:property [ sh:path pc:condition ; sh:node pc:ConditionShape ] ;
   sh:property [ sh:path pc:waives ; sh:minCount 1 ; sh:maxCount 1 ; sh:class skos:Concept ] ;

@@ -95,6 +95,7 @@ var scalars = []scalar{
 	{"waives", func(r *Record) bool { return r.Waives != "" }, []RecordType{TypeException}, []RecordType{TypeException}},
 	{"replacement", func(r *Record) bool { return r.Replacement != "" }, []RecordType{TypeException}, nil},
 	{"justification", func(r *Record) bool { return r.Justification != "" }, []RecordType{TypeException}, []RecordType{TypeException}},
+	{"rule_digest", func(r *Record) bool { return r.RuleDigest != "" }, []RecordType{TypeException}, []RecordType{TypeException}},
 	{"authority", func(r *Record) bool { return r.Authority != nil }, []RecordType{TypeException}, []RecordType{TypeException}},
 	{"approval", func(r *Record) bool { return r.Approval != nil }, []RecordType{TypeException}, []RecordType{TypeException}},
 }
@@ -272,6 +273,7 @@ func checkRecords(p *problems, procs map[string]*Procedure, records map[string]*
 			checkAcyclic(p, rel, records, keys)
 		}
 	}
+	checkGovernance(p, records)
 }
 
 // within reports whether a child's applicability lies within its parent's.
