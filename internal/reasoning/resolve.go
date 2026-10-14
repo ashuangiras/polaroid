@@ -294,12 +294,23 @@ func Resolve(ctx context.Context, cat *knowledge.Catalog, ev Evaluator, trust po
 	}
 	paths := specializationPaths(records, goal.Key)
 
+	// silenced is what a superseded rule would have contributed to the
+	// goal: its program still evaluates, so its rows reach obligation_of
+	// and derived_by, but a superseded source is reported only here, never
+	// as an active obligation, derived fact or applicable rule.
+	silenced := map[string]bool{}
+
 	// Obligations of the goal, one derivation per (requirement, source, via).
 	var derivs []policy.Derivation
 	for _, row := range base["obligation_of"] {
-		if row[0] == goal.Key && !superseded[row[2]] {
-			derivs = append(derivs, policy.Derivation{Subject: row[0], Requirement: row[1], Source: row[2], Via: row[3]})
+		if row[0] != goal.Key {
+			continue
 		}
+		if superseded[row[2]] {
+			silenced[row[2]] = true
+			continue
+		}
+		derivs = append(derivs, policy.Derivation{Subject: row[0], Requirement: row[1], Source: row[2], Via: row[3]})
 	}
 	policyRules := map[string]policy.Rule{}
 	var exceptions []*knowledge.Record
@@ -397,10 +408,15 @@ func Resolve(ctx context.Context, cat *knowledge.Catalog, ev Evaluator, trust po
 
 	derived := map[[2]string][]string{}
 	for _, row := range base["derived_by"] {
-		if row[0] == goal.Key && !superseded[row[3]] {
-			k := [2]string{row[1], row[2]}
-			derived[k] = append(derived[k], row[3])
+		if row[0] != goal.Key {
+			continue
 		}
+		if superseded[row[3]] {
+			silenced[row[3]] = true
+			continue
+		}
+		k := [2]string{row[1], row[2]}
+		derived[k] = append(derived[k], row[3])
 	}
 	for _, k := range slices.SortedFunc(maps.Keys(derived), func(a, b [2]string) int { return slices.Compare(a[:], b[:]) }) {
 		res.Derived = append(res.Derived, DerivedFact{ID: id("derived", k[0], k[1]), Predicate: k[0], Object: k[1], Rules: derived[k]})
@@ -423,10 +439,10 @@ func Resolve(ctx context.Context, cat *knowledge.Catalog, ev Evaluator, trust po
 	}
 	for k := range applicable {
 		if superseded[k] {
-			res.Superseded = append(res.Superseded, k)
+			silenced[k] = true
 		}
 	}
-	slices.Sort(res.Superseded)
+	res.Superseded = slices.Sorted(maps.Keys(silenced))
 	res.Applicable = slices.Sorted(maps.Keys(applicable))
 
 	for _, row := range base["specializes_star"] {

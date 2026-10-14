@@ -506,6 +506,8 @@ func Establish(trust Trust, as []Assertion, at time.Time) (map[string]string, er
 			return fail("the signature does not verify")
 		}
 		switch {
+		case a.ValidFrom.Nanosecond() != 0 || a.ValidUntil.Nanosecond() != 0:
+			return fail("its validity times must be whole seconds, as they are signed")
 		case !a.ValidFrom.Before(a.ValidUntil):
 			return fail("its validity period is empty")
 		case at.Before(a.ValidFrom):

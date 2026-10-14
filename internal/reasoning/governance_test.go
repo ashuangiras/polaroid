@@ -201,6 +201,8 @@ func TestTrustedContextFromAssertions(t *testing.T) {
 	empty := assertion("ci", repo, nil)
 	empty.ValidFrom, empty.ValidUntil = at.Add(time.Hour), at.Add(time.Hour)
 	empty.Signature, _ = policy.SignAssertion(w.keys["ci"], empty)
+	fractional := assertion("ci", repo, nil)
+	fractional.ValidUntil = fractional.ValidUntil.Add(900 * time.Millisecond)
 	for name, tc := range map[string]struct {
 		as   []policy.Assertion
 		want string
@@ -208,6 +210,7 @@ func TestTrustedContextFromAssertions(t *testing.T) {
 		"expired":           {[]policy.Assertion{expired}, "expired at"},
 		"not yet valid":     {[]policy.Assertion{early}, "not valid before"},
 		"empty validity":    {[]policy.Assertion{empty}, "its validity period is empty"},
+		"fractional":        {[]policy.Assertion{fractional}, "validity times must be whole seconds"},
 		"tampered":          {[]policy.Assertion{tampered}, "the signature does not verify"},
 		"unauthorised name": {[]policy.Assertion{assertion("ci", repo, map[string]string{"environment": "prod"})}, `may not attest "environment"`},
 		"other repository":  {[]policy.Assertion{wrongRepo}, "attests only for github.com/team/app"},
@@ -275,6 +278,39 @@ func TestPolicyJudgesTheSignedPath(t *testing.T) {
 	w.trust.Keys["ci"] = policy.Key{ID: "ci", Public: priv.Public().(ed25519.PublicKey), Attests: &policy.Attestation{Repository: repo}}
 	if v := verdict(exc("ci", knowledge.Authority{})); v.Status != policy.Rejected || !strings.Contains(v.Reason, `key "ci" holds`) {
 		t.Errorf("an attestation key approved an exception: %+v", v)
+	}
+}
+
+// Supersession silences a rule, so it is part of the superseding rule's
+// governed semantics: adding it takes a new revision; only a rule may
+// supersede a rule (supersedes names a record of its own type), and only
+// a protected rule a protected one (ADR-0050).
+func TestSupersessionIsGoverned(t *testing.T) {
+	w := newWorld(t)
+	guard := &knowledge.Record{Type: knowledge.TypeRule, Key: "rule.software.guard", Label: "guard", Statement: "Software builds.", Revision: 1,
+		Protected: true, ClassifiedAs: []string{"domain.software"}, Program: `obligation(P, "check.build") :- record(P, "Procedure"), in_domain(P, "domain.software").`}
+	w.publish(guard)
+	silencing := w.rule(guard.Key)
+	silencing.Supersedes = []string{"rule.software.tests"}
+	if err := w.publishErr(silencing); !errors.Is(err, knowledge.ErrInvalid) || !strings.Contains(err.Error(), "the rule's semantics changed, so its revision must rise above 1") {
+		t.Fatalf("supersession without a revision: %v", err)
+	}
+	if knowledge.RuleDigest(silencing) == knowledge.RuleDigest(guard) {
+		t.Fatal("supersedes is not part of the rule digest")
+	}
+	using := w.rule(guard.Key)
+	using.Uses = []string{"check.build"}
+	if knowledge.RuleDigest(using) == knowledge.RuleDigest(guard) {
+		t.Fatal("uses is not part of the rule digest")
+	}
+	concept := &knowledge.Record{Type: knowledge.TypeConcept, Key: "retired.vet", Label: "retired", Supersedes: []string{"rule.go.vet"}}
+	if err := w.publishErr(concept); !errors.Is(err, knowledge.ErrInvalid) || !strings.Contains(err.Error(), "names the Rule rule.go.vet; it must name a Concept") {
+		t.Fatalf("a concept superseding a rule: %v", err)
+	}
+	silencing.Revision = 2
+	w.publish(silencing)
+	if r := w.resolve("go.verify", nil); !slices.Contains(r.Superseded, "rule.software.tests") {
+		t.Fatalf("governed supersession: %v", r.Superseded)
 	}
 }
 

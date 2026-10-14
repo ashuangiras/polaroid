@@ -9,10 +9,19 @@ import (
 )
 
 // RuleDigest is the SHA-256 of a rule's normative semantics: its key,
-// statement, program, protection, waivability and domains, as RFC 8785
-// canonical JSON. An exception approval signs it, so an approval never
-// covers a rule whose semantics changed after it was given (ADR-0050).
+// statement, program, protection, waivability, domains, the rules it
+// supersedes and the records it uses, as RFC 8785 canonical JSON. An
+// exception approval signs it, so an approval never covers a rule whose
+// semantics changed after it was given, and a change to any of them needs
+// a governed revision (ADR-0050).
 func RuleDigest(r *Record) string {
+	sorted := func(s []string) []string {
+		out := slices.Sorted(slices.Values(s))
+		if out == nil {
+			out = []string{}
+		}
+		return out
+	}
 	sem := struct {
 		Key          string   `json:"key"`
 		Statement    string   `json:"statement"`
@@ -20,10 +29,9 @@ func RuleDigest(r *Record) string {
 		Protected    bool     `json:"protected"`
 		Waivable     bool     `json:"waivable"`
 		ClassifiedAs []string `json:"classified_as"`
-	}{r.Key, r.Statement, r.Program, r.Protected, r.Waivable, slices.Sorted(slices.Values(r.ClassifiedAs))}
-	if sem.ClassifiedAs == nil {
-		sem.ClassifiedAs = []string{}
-	}
+		Supersedes   []string `json:"supersedes"`
+		Uses         []string `json:"uses"`
+	}{r.Key, r.Statement, r.Program, r.Protected, r.Waivable, sorted(r.ClassifiedAs), sorted(r.Supersedes), sorted(r.Uses)}
 	b, _ := json.Marshal(sem)
 	v := jsontext.Value(b)
 	_ = v.Canonicalize()
