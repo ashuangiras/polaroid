@@ -2,7 +2,19 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
-**Corpus Logic v1, on branch `corpus-logic-v1` at `8df8641`, as of 2026-10-14.** Owner-approved; merge-ready. Supersedes the handoff below (`6773c8e`), which is kept as history.
+**Corpus Logic v1 merged, installed, and its one open follow-up fixed, on `main` at `cf87e02`, as of 2026-10-14.** Supersedes both handoffs below, which are kept as history.
+
+- **Merged:** PR #143 (`6e05f63`), tree identical to the gated `8df8641`. Milestone #134 and workstreams #135-#142 closed.
+- **Built and installed from `main`** in a clean detached worktree (`modified: false`): the managed service is now `v1.0.2-0.20261014172740-6e05f6375254` upgraded to include this fix below, `/mcp/agent/v2` `resolve` confirmed live, all prior records (21 procedures, 316 executions, 14 feedback, 2 toil items) byte-for-byte unchanged. Catalog and knowledge/operator-token backups taken first.
+- **#144 fixed (`cf87e02`):** `resolve`'s missing-context enumeration (up to 128 Datalog evaluations per resolution near the 64-combination limit) re-parsed and re-analyzed the full System and Rules program on every evaluation, though only the facts differ between combinations. `Evaluator` gains `Compile(Program) (Compiled, error)`: it analyzes System, Rules, Heads and EDB once; `Compiled.Run` evaluates that analysis against one fact set. `Evaluate` is unchanged in behaviour (Compile then Run once). `Resolve` compiles the goal's program once and reuses it for the base evaluation and every hypothesize combination.
+  - `BenchmarkResolveMissingContext` (missing=6, Apple M1 Pro): 300 ms → 175 ms on the test corpus, 1022 ms → 883 ms with 500 more records. The remaining cost is inherent: still a full evaluation per combination, still exponential in missing names (completeness never reads absence as "no"), tracked in ADR-0050's limitations, not a new issue.
+  - Issue #144 closed: its stated acceptance ("the benchmark above improves measurably at missing=6, for both corpus sizes") is met.
+- **Verification (`verify-change`, full) at `cf87e02`**, clean detached worktree, test cache cleaned first (nothing cached): `make check` (lint 0 issues, deps-check 44 modules, docs-check 802 links, records-check, loader-check 33/0), `make vuln` (0 affecting the code), `make demo` (PASS), `make e2e` 313/0, `make e2e-mcp E2E_INTEROP=0` 137/0. `make lifecycle` not run (reasoning-only change). Verification artifact: `dist/artifacts/cf87e02…/` (linux/amd64, gitignored).
+- **Not done:** still nothing published to the live Corpus, and no context-assertion issuer is set up; that decision is still open.
+
+Next action: decide what knowledge to author in the Git-native Corpus, and who issues signed context assertions, then publish it.
+
+**Corpus Logic v1, on branch `corpus-logic-v1` at `8df8641`, as of 2026-10-14 (superseded).** Owner-approved; merge-ready. Supersedes the handoff below (`6773c8e`), which is kept as history.
 
 - **Found before merge, while checking the branch was actually complete:** `resolve`'s `superseded` result member was unreachable in the general case. A superseded rule's source was dropped before applicability was computed, so a rule could never be found both superseded and applicable at once; `superseded` stayed empty for every ordinary supersession. Fixed in `8df8641`: a superseded source's rows still reach `obligation_of` and `derived_by` (its program still evaluates), so they are now tracked separately (`silenced`) and reported in `superseded` instead of `obligations`, `derived` or `applicable`. `TestSupersessionIsGoverned` fails without the fix.
 - **Same commit, found independently while writing that test:** `RuleDigest` did not cover a rule's `Supersedes` or `Uses`, so changing which rule it retires, or which records it reads, was not a governed semantics change — it could be changed without a revision rise, silently invalidating what an exception approval's `rule_digest` was meant to guarantee. Both are now part of the digest.
