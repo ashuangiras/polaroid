@@ -2,7 +2,24 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
-**Corpus Logic v1, on branch `corpus-logic-v1`, as of 2026-10-14.** Independent review and corrections done; ready for owner review; not merged, released or installed. Milestone [#134](https://github.com/ashuangiras/polaroid/issues/134); workstreams A–H are #135, #136, #137, #142, #138, #139, #140 and #141. [ADR-0050](../architecture/decisions/0050-corpus-logic.md) is proposed and describes what is implemented.
+**Corpus Logic v1, on branch `corpus-logic-v1` at `8df8641`, as of 2026-10-14.** Owner-approved; merge-ready. Supersedes the handoff below (`6773c8e`), which is kept as history.
+
+- **Found before merge, while checking the branch was actually complete:** `resolve`'s `superseded` result member was unreachable in the general case. A superseded rule's source was dropped before applicability was computed, so a rule could never be found both superseded and applicable at once; `superseded` stayed empty for every ordinary supersession. Fixed in `8df8641`: a superseded source's rows still reach `obligation_of` and `derived_by` (its program still evaluates), so they are now tracked separately (`silenced`) and reported in `superseded` instead of `obligations`, `derived` or `applicable`. `TestSupersessionIsGoverned` fails without the fix.
+- **Same commit, found independently while writing that test:** `RuleDigest` did not cover a rule's `Supersedes` or `Uses`, so changing which rule it retires, or which records it reads, was not a governed semantics change — it could be changed without a revision rise, silently invalidating what an exception approval's `rule_digest` was meant to guarantee. Both are now part of the digest.
+- **Hardening, not a new behaviour:** `policy.Establish` now also refuses a fractional-second assertion validity time, matching what `internal/knowledgeops` (the transport layer) already enforced and what `mcp.md` and ADR-0050 already documented.
+- **Docs:** `mcp.md` now documents the `superseded` result member, which the result shape listed but never explained.
+- **Verification (`verify-change`, full) at `8df8641`**, in a clean detached worktree, test cache cleaned first (nothing cached):
+  - `make check`: lint 0 issues, deps-check 44 modules, docs-check 802 links, records-check, loader-check 33/0.
+  - `make vuln`: 0 affecting the code. `make demo`: PASS.
+  - `make e2e` 313/0, `make e2e-mcp E2E_INTEROP=0` 137/0.
+  - `make lifecycle` was not run (this change is reasoning/knowledge only; it cannot alter installation or service behaviour).
+  - Verification artifact: `dist/artifacts/8df8641…/` (darwin/arm64 build and tests ran natively; the artifact itself is linux/amd64, gitignored, not reviewed independently).
+  - No mutation probing beyond the regression test added: this is a bounded fix on top of an already mutation-probed body of work (83/83 at `a617709`), not a new review round.
+- **Not done:** nothing published to the live Corpus; the installed service is not upgraded.
+
+Next action: merge PR #143; build and install from `main`; then decide whether to publish real Corpus records and who issues context assertions.
+
+**Corpus Logic v1, on branch `corpus-logic-v1` at `6773c8e`, as of 2026-10-14 (superseded).** Independent review and corrections done; ready for owner review; not merged, released or installed. Milestone [#134](https://github.com/ashuangiras/polaroid/issues/134); workstreams A–H are #135, #136, #137, #142, #138, #139, #140 and #141. [ADR-0050](../architecture/decisions/0050-corpus-logic.md) is proposed and describes what is implemented.
 
 - **Final semantic integrity gate** (after `bd634a4`), three corrections:
   - **Rollback** is a governed publication with no exemptions.
