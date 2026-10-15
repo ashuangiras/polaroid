@@ -114,7 +114,8 @@ func (a *Agent) discoverStats(ctx context.Context, in wire.KnowledgeDiscoverRequ
 	return wire.KnowledgeDiscovery{
 		Snapshot: string(cat.Snapshot()), Kind: wire.KindStats, GeneratedAt: time.Now().UTC().Round(0),
 		ByType: st.ByType, ByDomain: st.ByDomain,
-		Procedures: &wire.KnowledgeProcedureStats{Total: st.Procedures.Total, ByRepository: st.Procedures.ByRepository},
+		Procedures:   &wire.KnowledgeProcedureStats{Total: st.Procedures.Total, ByRepository: st.Procedures.ByRepository},
+		Completeness: &wire.KnowledgeCompletenessStats{MissingDefinition: st.Completeness.MissingDefinition, MissingObligation: st.Completeness.MissingObligation},
 	}, nil
 }
 

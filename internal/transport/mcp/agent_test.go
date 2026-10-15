@@ -266,6 +266,13 @@ func TestAgentDiscoverStats(t *testing.T) {
 	if byRepo["shared"] != float64(1) || byRepo["github.com/team/app"] != float64(1) {
 		t.Fatalf("procedures.by_repository = %v", byRepo)
 	}
+	completeness, ok := d["completeness"].(map[string]any)
+	if !ok {
+		t.Fatalf("stats must carry completeness: %v", d)
+	}
+	if completeness["missing_definition"] != float64(0) || completeness["missing_obligation"] != float64(0) {
+		t.Fatalf("completeness = %v, want zero (no typed records published)", completeness)
+	}
 
 	scoped := decodeJSON(t, agent.ok(t, "discover", `{"kind":"stats","repository":"github.com/team/app"}`))
 	if sp := scoped["procedures"].(map[string]any); sp["total"] != float64(2) {

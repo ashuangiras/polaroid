@@ -48,6 +48,16 @@ type KnowledgeProcedureStats struct {
 	ByRepository map[string]int `json:"by_repository"`
 }
 
+// KnowledgeCompletenessStats counts typed records that fall short of
+// ADR-0057's completeness bar (a non-empty definition on every Domain,
+// Concept and Procedure; at least one formal obligation source, own or
+// inherited, on every Procedure). Informational only: nothing is refused
+// for this today; ADR-0057's validation rule is not yet activated.
+type KnowledgeCompletenessStats struct {
+	MissingDefinition int `json:"missing_definition"`
+	MissingObligation int `json:"missing_obligation"`
+}
+
 // KnowledgeToolInfo is one tool of a discover(kind="tools") self-description.
 type KnowledgeToolInfo struct {
 	Name        string `json:"name"`
@@ -57,20 +67,22 @@ type KnowledgeToolInfo struct {
 
 // KnowledgeDiscovery is a discover call's result. Empty is true, with no
 // candidates, when no knowledge has been published yet; it is a well-formed
-// result, not an error. Kind, GeneratedAt, ByType, ByDomain, Procedures and
-// Tools are set only for kind "stats" and "tools" (ADR-0051); kind
-// "procedures" (the default) is exactly the shape above, unchanged.
+// result, not an error. Kind, GeneratedAt, ByType, ByDomain, Procedures,
+// Completeness and Tools are set only for kind "stats" and "tools"
+// (ADR-0051, Completeness added by ADR-0057); kind "procedures" (the
+// default) is exactly the shape above, unchanged.
 type KnowledgeDiscovery struct {
-	Snapshot    string                   `json:"snapshot,omitzero"`
-	Kind        string                   `json:"kind,omitzero"`
-	Empty       bool                     `json:"empty,omitzero"`
-	Message     string                   `json:"message,omitzero"`
-	Candidates  []KnowledgeCandidate     `json:"candidates,omitzero"`
-	GeneratedAt time.Time                `json:"generated_at,omitzero"`
-	ByType      map[string]int           `json:"by_type,omitzero"`
-	ByDomain    map[string]int           `json:"by_domain,omitzero"`
-	Procedures  *KnowledgeProcedureStats `json:"procedures,omitzero"`
-	Tools       []KnowledgeToolInfo      `json:"tools,omitzero"`
+	Snapshot     string                      `json:"snapshot,omitzero"`
+	Kind         string                      `json:"kind,omitzero"`
+	Empty        bool                        `json:"empty,omitzero"`
+	Message      string                      `json:"message,omitzero"`
+	Candidates   []KnowledgeCandidate        `json:"candidates,omitzero"`
+	GeneratedAt  time.Time                   `json:"generated_at,omitzero"`
+	ByType       map[string]int              `json:"by_type,omitzero"`
+	ByDomain     map[string]int              `json:"by_domain,omitzero"`
+	Procedures   *KnowledgeProcedureStats    `json:"procedures,omitzero"`
+	Completeness *KnowledgeCompletenessStats `json:"completeness,omitzero"`
+	Tools        []KnowledgeToolInfo         `json:"tools,omitzero"`
 }
 
 // KnowledgeReadRequest is a read call.
