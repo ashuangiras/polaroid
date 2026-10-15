@@ -55,5 +55,11 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0049](0049-agent-mode-finalized-no-migration.md) | `/mcp/agent` finalized under ADR-0038's v1 guarantee; milestone E does not migrate the legacy SQLite catalog | Accepted (milestone E; amended by ADR-0051) |
 | [0050](0050-corpus-logic.md) | Corpus Logic v1: typed knowledge records and bounded reasoning on Git-native knowledge | Accepted |
 | [0051](0051-agent-mode-discover-kinds.md) | `discover` gains a `kind` selector: procedure matching (default, unchanged), corpus statistics and a tool list | Accepted |
+| [0052](0052-ordered-sibling-steps.md) | Guided Procedures M1: a `precedes` relation and `resolve`'s stateless `plan` | Accepted |
+| [0053](0053-guided-walkthroughs.md) | Guided Procedures M2: stateful, expiring walkthroughs at a new `/mcp/agent/v3` | Accepted (amended by ADR-0054, ADR-0055, ADR-0056) |
+| [0054](0054-multi-level-plans.md) | Guided Procedures M3: multi-level plans, path-addressed leaves | Accepted |
+| [0055](0055-walkthrough-completion.md) | Guided Procedures M4: walkthrough completion semantics and an explicit early close | Accepted |
+| [0056](0056-walkthrough-visibility-and-status.md) | Guided Procedures M5: operator visibility, an agent-reported `blocked` status, and an expand option | Accepted |
+| [0057](0057-typed-record-completeness.md) | Guided Procedures prerequisite: mandatory definitions and formal obligations for typed records (two-phase; activation gated on #152) | Accepted (not yet activated) |
 
 Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.
