@@ -44,6 +44,7 @@ var relations = []relation{
 	{"uses", func(r *Record) []string { return r.Uses }, []RecordType{TypeConcept, TypeClaim, TypeRule, TypeProcedure},
 		[]RecordType{TypeConcept, TypeClaim, TypeRule, TypeProcedure}, false},
 	{"composes", func(r *Record) []string { return r.Composes }, []RecordType{TypeProcedure}, []RecordType{TypeProcedure}, true},
+	{"precedes", func(r *Record) []string { return r.Precedes }, []RecordType{TypeProcedure}, []RecordType{TypeProcedure}, true},
 	{"requires", func(r *Record) []string { return r.Requires }, []RecordType{TypeProcedure}, []RecordType{TypeConcept}, false},
 	{"supports", func(r *Record) []string { return r.Supports }, []RecordType{TypeClaim, TypeEvidence}, []RecordType{TypeClaim}, false},
 	{"contradicts", func(r *Record) []string { return r.Contradicts }, []RecordType{TypeClaim, TypeEvidence, TypeConcept},
@@ -288,6 +289,7 @@ func checkRecords(p *problems, procs map[string]*Procedure, records map[string]*
 			checkAcyclic(p, rel, records, keys)
 		}
 	}
+	checkPrecedesSiblings(p, records, keys)
 	checkGovernance(p, records)
 }
 
@@ -324,6 +326,42 @@ func checkAcyclic(p *problems, rel relation, records map[string]*Record, keys []
 	for _, k := range keys {
 		if !visit(k, nil) {
 			return
+		}
+	}
+}
+
+// checkPrecedesSiblings requires every precedes target to be a sibling of
+// its source (ADR-0052): another key in the same parent's composes set.
+// Scoped per composing parent, not relation-wide: two keys composed by
+// different parents are never siblings of each other, even if each
+// appears in some other procedure's composes set.
+func checkPrecedesSiblings(p *problems, records map[string]*Record, keys []string) {
+	siblings := map[string]map[string]bool{}
+	for _, r := range records {
+		if r.Type != TypeProcedure {
+			continue
+		}
+		for _, a := range r.Composes {
+			for _, b := range r.Composes {
+				if a == b {
+					continue
+				}
+				if siblings[a] == nil {
+					siblings[a] = map[string]bool{}
+				}
+				siblings[a][b] = true
+			}
+		}
+	}
+	for _, k := range keys {
+		r := records[k]
+		if r.Type != TypeProcedure {
+			continue
+		}
+		for i, t := range r.Precedes {
+			if !siblings[k][t] {
+				p.add(fmt.Sprintf("records[%s].precedes[%d]", k, i), "%s must be a sibling of %s: another key in the same parent's composes set", t, k)
+			}
 		}
 	}
 }

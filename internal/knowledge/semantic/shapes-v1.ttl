@@ -83,6 +83,7 @@ pc:ProcedureShape a sh:NodeShape ;
   sh:property [ sh:path skos:definition ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
   sh:property [ sh:path pc:specializes ; sh:class pc:Procedure ] ;
   sh:property [ sh:path pc:composes ; sh:class pc:Procedure ] ;
+  sh:property [ sh:path pc:precedes ; sh:class pc:Procedure ] ;
   sh:property [ sh:path pc:requires ; sh:class skos:Concept ] ;
   sh:property [ sh:path pc:uses ; sh:or ( [ sh:class skos:Concept ] [ sh:class pc:Claim ] [ sh:class pc:Rule ] [ sh:class pc:Procedure ] ) ] ;
   sh:property [ sh:path pc:input ; sh:node pc:PortShape ] ;

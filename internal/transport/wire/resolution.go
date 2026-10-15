@@ -11,6 +11,7 @@ type KnowledgeResolveRequest struct {
 	Then       string               `json:"then,omitzero" jsonschema:"a procedure key to compose after goal (itself a procedure): the result's composition says compatible, incompatible or undetermined from both formal contracts; nothing is executed"`
 	At         string               `json:"at,omitzero" jsonschema:"evaluation time, RFC 3339 (default now; echoed in the result)"`
 	Assertions []KnowledgeAssertion `json:"assertions,omitzero" jsonschema:"signed context assertions you were given, for example by your CI or operator; only these establish trusted context, which can authorise project-scoped and conditional exceptions"`
+	Completed  []string             `json:"completed,omitzero" jsonschema:"keys of goal's immediate composed children you already consider done; the result's plan marks them done and names the next one, in precedes order"`
 }
 
 // KnowledgeAssertion is a signed context assertion (ADR-0050): facts about
@@ -135,6 +136,15 @@ type KnowledgeClaimStatus struct {
 	Contradicting []string `json:"contradicting,omitzero"`
 }
 
+// KnowledgePlanEntry is one entry of a resolve result's plan (ADR-0052):
+// an immediate composed child of the goal, in precedes order. Status is
+// "done" (named in the request's completed), "next" (the first not-done
+// entry), or absent (the rest).
+type KnowledgePlanEntry struct {
+	Key    string `json:"key"`
+	Status string `json:"status,omitzero"`
+}
+
 // KnowledgeResolution is what applies to a goal.
 type KnowledgeResolution struct {
 	Version         string                     `json:"version"`
@@ -154,4 +164,5 @@ type KnowledgeResolution struct {
 	Evidence        []KnowledgeClaimStatus     `json:"evidence,omitzero"`
 	Superseded      []string                   `json:"superseded,omitzero"`
 	Composition     *KnowledgeComposition      `json:"composition,omitzero"`
+	Plan            []KnowledgePlanEntry       `json:"plan,omitzero"`
 }
