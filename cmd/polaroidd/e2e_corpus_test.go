@@ -177,6 +177,18 @@ func TestCorpusLogicAcceptance(t *testing.T) {
 	if r := call(v1, "read", map[string]any{"key": "go.verify"}); !strings.Contains(r, `"key":"go.verify"`) {
 		t.Fatalf("v1 read %s", r)
 	}
+	// discover(kind="tools") differs only in whether resolve is listed,
+	// the one place the two endpoints' shared discover handler (ADR-0051)
+	// behaves differently, since only the transport layer, not the
+	// knowledge-only Agent behind both, knows which endpoint is calling.
+	v1Tools := call(v1, "discover", map[string]any{"kind": "tools"})
+	if strings.Contains(v1Tools, `"resolve"`) {
+		t.Fatalf("discover(kind=tools) at v1 must not list resolve: %s", v1Tools)
+	}
+	v2Tools := call(v2, "discover", map[string]any{"kind": "tools"})
+	if !strings.Contains(v2Tools, `"resolve"`) {
+		t.Fatalf("discover(kind=tools) at v2 must list resolve: %s", v2Tools)
+	}
 	args := map[string]any{"goal": "go.verify.concurrent", "context": map[string]any{"repository": repo, "concurrency": "true"}, "at": "2026-10-14T12:00:00Z"}
 	first := call(v2, "resolve", args)
 	if again := call(v2, "resolve", args); again != first {

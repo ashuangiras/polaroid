@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/ashuangiras/polaroid/internal/knowledge"
 	"github.com/ashuangiras/polaroid/internal/memory"
@@ -45,9 +46,38 @@ func NewAgent(kernel *knowledge.Kernel, feedback *memory.Service) *Agent {
 	return &Agent{kernel: kernel, feedback: feedback}
 }
 
-// Discover ranks published knowledge for a task. An empty catalog (nothing
-// published yet) is a well-formed, explicit empty result, never an error.
+// Discover ranks published knowledge for a task (kind "" or "procedures",
+// the default and unchanged), summarizes the corpus (kind "stats"), or
+// self-describes agent mode's common tools (kind "tools": discover, read,
+// feedback; the MCP transport layer adds resolve where it serves one,
+// since this Agent backs both /mcp/agent and /mcp/agent/v2 and has no
+// notion of which endpoint called it). An empty catalog (nothing
+// published yet) is a well-formed, explicit empty result for
+// "procedures", never an error; "stats" reports zero counts instead,
+// itself a true answer, not a special case.
 func (a *Agent) Discover(ctx context.Context, in wire.KnowledgeDiscoverRequest) (wire.KnowledgeDiscovery, error) {
+	switch in.Kind {
+	case "", wire.KindProcedures:
+		if in.Task == "" {
+			return wire.KnowledgeDiscovery{}, requiredField("task")
+		}
+		return a.discoverProcedures(ctx, in)
+	case wire.KindStats:
+		if in.Limit != 0 {
+			return wire.KnowledgeDiscovery{}, invalidField("limit", `is not used by kind "stats"`)
+		}
+		return a.discoverStats(ctx, in)
+	case wire.KindTools:
+		if in.Limit != 0 {
+			return wire.KnowledgeDiscovery{}, invalidField("limit", `is not used by kind "tools"`)
+		}
+		return wire.KnowledgeDiscovery{Kind: wire.KindTools, Tools: commonTools()}, nil
+	default:
+		return wire.KnowledgeDiscovery{}, invalidField("kind", `must be "procedures", "stats" or "tools"`)
+	}
+}
+
+func (a *Agent) discoverProcedures(ctx context.Context, in wire.KnowledgeDiscoverRequest) (wire.KnowledgeDiscovery, error) {
 	cat, err := a.kernel.Active(ctx)
 	if err != nil {
 		return wire.KnowledgeDiscovery{}, classify(err)
@@ -65,6 +95,37 @@ func (a *Agent) Discover(ctx context.Context, in wire.KnowledgeDiscoverRequest) 
 		out.Candidates[i] = wire.KnowledgeCandidate{Key: c.Key, Goal: c.Goal, Score: c.Score}
 	}
 	return out, nil
+}
+
+// discoverStats answers discover(kind="stats") at a snapshot (the active
+// one, or a given one, exactly as Read resolves one).
+func (a *Agent) discoverStats(ctx context.Context, in wire.KnowledgeDiscoverRequest) (wire.KnowledgeDiscovery, error) {
+	var cat *knowledge.Catalog
+	var err error
+	if in.Snapshot != "" {
+		cat, err = a.kernel.At(ctx, knowledge.Snapshot(in.Snapshot))
+	} else {
+		cat, err = a.kernel.Active(ctx)
+	}
+	if err != nil {
+		return wire.KnowledgeDiscovery{}, classify(err)
+	}
+	st := cat.Stats(in.Repository)
+	return wire.KnowledgeDiscovery{
+		Snapshot: string(cat.Snapshot()), Kind: wire.KindStats, GeneratedAt: time.Now().UTC().Round(0),
+		ByType: st.ByType, ByDomain: st.ByDomain,
+		Procedures: &wire.KnowledgeProcedureStats{Total: st.Procedures.Total, ByRepository: st.Procedures.ByRepository},
+	}, nil
+}
+
+// commonTools is discover(kind="tools")'s self-description of the tools
+// every agent-mode endpoint serves.
+func commonTools() []wire.KnowledgeToolInfo {
+	return []wire.KnowledgeToolInfo{
+		{Name: "discover", Description: "Find published knowledge for a task, best match first (lexical: shared words), summarize the corpus, or list agent mode's own tools.", ReadOnly: true},
+		{Name: "read", Description: "Get one procedure's executable guidance by its canonical key, at a snapshot.", ReadOnly: true},
+		{Name: "feedback", Description: "Report a finding that changes what is known about a procedure.", ReadOnly: false},
+	}
 }
 
 // Read returns one procedure's executable guidance at a snapshot (the

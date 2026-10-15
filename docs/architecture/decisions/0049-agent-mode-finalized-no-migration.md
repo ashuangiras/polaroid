@@ -1,6 +1,6 @@
 # 0049. `/mcp/agent` is finalized, not experimental; Milestone E does not migrate the legacy catalog
 
-**Status:** Accepted. Supersedes the "experimental" status given to `/mcp/agent` by [ADR-0043](0043-knowledge-first-agent-mode.md) and kept by [ADR-0048](0048-git-native-agent-interface.md); amends [ADR-0038](0038-stable-releases-and-compatibility.md)'s compatibility policy to include it.
+**Status:** Accepted. Supersedes the "experimental" status given to `/mcp/agent` by [ADR-0043](0043-knowledge-first-agent-mode.md) and kept by [ADR-0048](0048-git-native-agent-interface.md); amends [ADR-0038](0038-stable-releases-and-compatibility.md)'s compatibility policy to include it. Amended by [ADR-0051](0051-agent-mode-discover-kinds.md): `discover`'s `kind` argument and its conditional `task` requirement, under the same v1 guarantee this ADR applies.
 **Date:** 2026-10-13
 
 ## Context

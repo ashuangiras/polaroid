@@ -221,3 +221,93 @@ func TestAgentFeedback(t *testing.T) {
 		t.Fatalf("feedback must refuse a snapshot that never served the key")
 	}
 }
+
+func TestAgentDiscoverStats(t *testing.T) {
+	agent := newKnowledgeHarness(t)
+	shared := &knowledge.Procedure{
+		Key: "go.module.tidy", Goal: "Tidy a Go module's dependencies.", Philosophy: "p", Method: "m",
+		Applicability: knowledge.Applicability{Scope: knowledge.ScopeShared},
+		Contract:      jsontext.Value(`{}`), Instructions: jsontext.Value(`{}`),
+	}
+	local := &knowledge.Procedure{
+		Key: "team.deploy", Goal: "Deploy, the team way.", Philosophy: "p", Method: "m",
+		Applicability: knowledge.Applicability{Scope: knowledge.ScopeLocal, Repository: "github.com/team/app"},
+		Contract:      jsontext.Value(`{}`), Instructions: jsontext.Value(`{}`),
+	}
+	snap := agent.publish(t, shared, local)
+
+	d := decodeJSON(t, agent.ok(t, "discover", `{"kind":"stats"}`))
+	if d["snapshot"] != string(snap) || d["kind"] != "stats" {
+		t.Fatalf("stats = %v", d)
+	}
+	if _, ok := d["generated_at"]; !ok {
+		t.Fatalf("stats must carry generated_at: %v", d)
+	}
+	if _, ok := d["candidates"]; ok {
+		t.Fatalf("stats must not carry candidates: %v", d)
+	}
+	byType, ok := d["by_type"].(map[string]any)
+	if !ok {
+		t.Fatalf("stats must carry by_type: %v", d)
+	}
+	for _, rt := range []string{"Domain", "Concept", "Claim", "Rule", "Procedure", "Evidence", "Exception"} {
+		if byType[rt] != float64(0) {
+			t.Fatalf("by_type[%s] = %v, want 0 (no typed records published)", rt, byType[rt])
+		}
+	}
+	procs, ok := d["procedures"].(map[string]any)
+	if !ok {
+		t.Fatalf("stats must carry procedures: %v", d)
+	}
+	if procs["total"] != float64(2) {
+		t.Fatalf("procedures.total = %v, want 2", procs["total"])
+	}
+	byRepo := procs["by_repository"].(map[string]any)
+	if byRepo["shared"] != float64(1) || byRepo["github.com/team/app"] != float64(1) {
+		t.Fatalf("procedures.by_repository = %v", byRepo)
+	}
+
+	scoped := decodeJSON(t, agent.ok(t, "discover", `{"kind":"stats","repository":"github.com/team/app"}`))
+	if sp := scoped["procedures"].(map[string]any); sp["total"] != float64(2) {
+		t.Fatalf("scoped procedures.total = %v, want 2 (shared + that repository's local)", sp["total"])
+	}
+	elsewhere := decodeJSON(t, agent.ok(t, "discover", `{"kind":"stats","repository":"github.com/other/app"}`))
+	if ep := elsewhere["procedures"].(map[string]any); ep["total"] != float64(1) {
+		t.Fatalf("procedures.total elsewhere = %v, want 1 (shared only, not another repository's local)", ep["total"])
+	}
+}
+
+func TestAgentDiscoverTools(t *testing.T) {
+	agent := newKnowledgeHarness(t)
+	d := decodeJSON(t, agent.ok(t, "discover", `{"kind":"tools"}`))
+	if d["kind"] != "tools" {
+		t.Fatalf("discover(kind=tools) = %v", d)
+	}
+	var names []string
+	for _, tl := range d["tools"].([]any) {
+		names = append(names, tl.(map[string]any)["name"].(string))
+	}
+	slices.Sort(names)
+	if !slices.Equal(names, []string{"discover", "feedback", "read"}) {
+		t.Fatalf("discover(kind=tools) at /mcp/agent = %v, must not list resolve (that is /mcp/agent/v2 only)", names)
+	}
+}
+
+func TestAgentDiscoverKindValidation(t *testing.T) {
+	agent := newKnowledgeHarness(t)
+	if res := agent.call(t, "discover", `{"kind":"bogus"}`); !res.IsError {
+		t.Fatalf("discover with an unknown kind must fail")
+	}
+	if res := agent.call(t, "discover", `{"kind":"stats","limit":5}`); !res.IsError {
+		t.Fatalf("discover(kind=stats) with limit must fail")
+	}
+	if res := agent.call(t, "discover", `{"kind":"tools","limit":5}`); !res.IsError {
+		t.Fatalf("discover(kind=tools) with limit must fail")
+	}
+	if res := agent.call(t, "discover", `{}`); !res.IsError {
+		t.Fatalf("discover(kind=procedures, the default) without task must fail")
+	}
+	if res := agent.call(t, "discover", `{"kind":"stats"}`); res.IsError {
+		t.Fatalf("discover(kind=stats) without task must succeed: %v", res)
+	}
+}
