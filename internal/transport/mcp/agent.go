@@ -18,10 +18,15 @@ import (
 // legacy, versioned path.
 
 const agentInstructions = `Polaroid agent mode: procedural knowledge, proven methods of working, served from living knowledge.
-1. discover a procedure for your task; with repository, only knowledge that applies there. An empty result means nothing has been published yet: try again later or ask an operator.
+1. discover a procedure for your task; with repository, only knowledge that applies there. An empty result means nothing has been published yet: try again later or ask an operator. With kind="stats", discover instead summarizes the corpus (counts by record type, by domain, and of procedures by applicability); with kind="tools", it lists agent mode's own tools.
 2. read it, by its key, for executable guidance: contract, instructions, and each reference's key, condition and mapped inputs. Read a reference's own key for its references: a read resolves only one level. Keep the snapshot token discover or read gave you: reading it again returns exactly the same knowledge however much is published later.
 3. Do the work with your own tools and check the outcome against the contract. Nothing is recorded here, and following a procedure verifies nothing by itself: an audit-grade verification claim needs evidence from your verification system (or the full API at /mcp).
 4. Only when the outcome shows the procedure itself is wrong, incomplete, ambiguous or improvable, send feedback with the key, the snapshot you read it from, and a classification. Product defects, environment problems and transient failures are not procedural knowledge: handle them, do not report them here.`
+
+// discoverDescription is discover's tool description at both endpoints
+// (ADR-0051): wording, not contract, so it may change without affecting
+// the pinned schema.
+const discoverDescription = "Find published knowledge for a task, best match first (lexical: shared words); returns a snapshot token and, for each candidate, its canonical key and goal (kind=\"procedures\", the default). An empty result means nothing is published yet. kind=\"stats\" instead returns corpus counts (by_type, by_domain, procedures); kind=\"tools\" lists this server's own tools. task is required only for kind=\"procedures\"."
 
 // AgentKnowledge is what agent mode needs from the Git-native knowledge
 // path, expressed only in this package's own request and result shapes
@@ -38,14 +43,25 @@ func newAgentServer(agent AgentKnowledge, logger *slog.Logger) *sdk.Server {
 	s := baseServer(agentInstructions, logger)
 	t := &tools{agent: agent, logger: logger}
 	const read, write = true, false
-	add(s, t, "discover", "Find published knowledge for a task, best match first (lexical: shared words). Returns a snapshot token and, for each candidate, its canonical key and goal. An empty result means nothing is published yet.", read, t.agentDiscover)
+	add(s, t, "discover", discoverDescription, read, t.agentDiscover)
 	add(s, t, "read", "Get one procedure's executable guidance by its canonical key, at a snapshot (the active one by default): contract, instructions, and each reference's key, condition and mapped inputs, resolved one level.", read, t.agentRead)
 	add(s, t, "feedback", "Report a finding that changes what is known about the procedure at key, as served by snapshot, with a classification. Not for product defects, environment problems or transient failures.", write, t.agentFeedback)
 	return s
 }
 
 func (t *tools) agentDiscover(ctx context.Context, in wire.KnowledgeDiscoverRequest) (any, error) {
-	return t.agent.Discover(ctx, in)
+	out, err := t.agent.Discover(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	// kind="tools" lists agent mode's common tools; resolve exists only at
+	// /mcp/agent/v2, which this Agent cannot tell apart from v1 (one Agent
+	// backs both), so the transport layer adds it here when it is served.
+	if in.Kind == wire.KindTools && t.resolver != nil {
+		out.Tools = append(out.Tools, wire.KnowledgeToolInfo{Name: "resolve",
+			Description: "Resolve what applies to a record (procedure, concept or claim) in your context, at a snapshot.", ReadOnly: true})
+	}
+	return out, nil
 }
 
 func (t *tools) agentRead(ctx context.Context, in wire.KnowledgeReadRequest) (any, error) {
@@ -72,7 +88,7 @@ func newAgentServerV2(agent AgentKnowledge, resolver AgentResolver, logger *slog
 	s := baseServer(agentInstructionsV2, logger)
 	t := &tools{agent: agent, resolver: resolver, logger: logger}
 	const read, write = true, false
-	add(s, t, "discover", "Find published knowledge for a task, best match first (lexical: shared words). Returns a snapshot token and, for each candidate, its canonical key and goal. An empty result means nothing is published yet.", read, t.agentDiscover)
+	add(s, t, "discover", discoverDescription, read, t.agentDiscover)
 	add(s, t, "read", "Get one procedure's executable guidance by its canonical key, at a snapshot (the active one by default): contract, instructions, and each reference's key, condition and mapped inputs, resolved one level.", read, t.agentRead)
 	add(s, t, "feedback", "Report a finding that changes what is known about the procedure at key, as served by snapshot, with a classification. Not for product defects, environment problems or transient failures.", write, t.agentFeedback)
 	add(s, t, "resolve", "Resolve what applies to a record (procedure, concept or claim) in your context, at a snapshot: obligations with derivation identifiers, specializations, verified and rejected exceptions, derived facts, conflicts, unknowns, whether the result is complete, evidence status, and with then, whether a second procedure can follow it. Deterministic for the same snapshot, context and time.", read, t.agentResolve)

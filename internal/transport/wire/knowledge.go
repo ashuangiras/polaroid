@@ -11,11 +11,25 @@ import (
 // evidence-based selection — only a canonical key and an opaque snapshot
 // token.
 
-// KnowledgeDiscoverRequest is a discover call.
+// discover's "kind" values (ADR-0051), shared by internal/knowledgeops
+// (which implements them) and internal/transport/mcp (which adjusts the
+// "tools" kind's result by endpoint), so neither package need import the
+// other just for these constants.
+const (
+	KindProcedures = "procedures"
+	KindStats      = "stats"
+	KindTools      = "tools"
+)
+
+// KnowledgeDiscoverRequest is a discover call. Task is required only for
+// kind "" or "procedures" (ADR-0051); it is enforced at call time, not by
+// the schema, so that it can be omitted for "stats" and "tools".
 type KnowledgeDiscoverRequest struct {
-	Task       string `json:"task" jsonschema:"the task, in your own words"`
-	Repository string `json:"repository,omitzero" jsonschema:"your repository identifier, for example github.com/owner/repo: only knowledge that applies there"`
-	Limit      int    `json:"limit,omitzero" jsonschema:"at most this many candidates, 1 to 50 (default 5)"`
+	Task       string `json:"task,omitzero" jsonschema:"the task, in your own words; required unless kind is stats or tools"`
+	Repository string `json:"repository,omitzero" jsonschema:"your repository identifier, for example github.com/owner/repo: only knowledge that applies there (kind procedures), or counted separately from shared knowledge (kind stats)"`
+	Limit      int    `json:"limit,omitzero" jsonschema:"at most this many candidates, 1 to 50 (default 5); only for kind procedures"`
+	Kind       string `json:"kind,omitzero" jsonschema:"what to discover: procedures (default), lexical task matching, as today; stats, counts of published knowledge by type, domain and procedure applicability; tools, a self-description of this server's own tools"`
+	Snapshot   string `json:"snapshot,omitzero" jsonschema:"for kind stats: a snapshot token from an earlier discover or read; omit for the active knowledge"`
 }
 
 // KnowledgeCandidate is one ranked discovery result.
@@ -25,14 +39,38 @@ type KnowledgeCandidate struct {
 	Score int    `json:"score"`
 }
 
+// KnowledgeProcedureStats counts the legacy procedure documents discover
+// (kind procedures) and read serve: Total, and ByRepository from each
+// procedure's declared applicability ("shared", "unspecified", or the
+// repository identifier of a locally scoped one).
+type KnowledgeProcedureStats struct {
+	Total        int            `json:"total"`
+	ByRepository map[string]int `json:"by_repository"`
+}
+
+// KnowledgeToolInfo is one tool of a discover(kind="tools") self-description.
+type KnowledgeToolInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	ReadOnly    bool   `json:"read_only"`
+}
+
 // KnowledgeDiscovery is a discover call's result. Empty is true, with no
 // candidates, when no knowledge has been published yet; it is a well-formed
-// result, not an error.
+// result, not an error. Kind, GeneratedAt, ByType, ByDomain, Procedures and
+// Tools are set only for kind "stats" and "tools" (ADR-0051); kind
+// "procedures" (the default) is exactly the shape above, unchanged.
 type KnowledgeDiscovery struct {
-	Snapshot   string               `json:"snapshot,omitzero"`
-	Empty      bool                 `json:"empty,omitzero"`
-	Message    string               `json:"message,omitzero"`
-	Candidates []KnowledgeCandidate `json:"candidates,omitzero"`
+	Snapshot    string                   `json:"snapshot,omitzero"`
+	Kind        string                   `json:"kind,omitzero"`
+	Empty       bool                     `json:"empty,omitzero"`
+	Message     string                   `json:"message,omitzero"`
+	Candidates  []KnowledgeCandidate     `json:"candidates,omitzero"`
+	GeneratedAt time.Time                `json:"generated_at,omitzero"`
+	ByType      map[string]int           `json:"by_type,omitzero"`
+	ByDomain    map[string]int           `json:"by_domain,omitzero"`
+	Procedures  *KnowledgeProcedureStats `json:"procedures,omitzero"`
+	Tools       []KnowledgeToolInfo      `json:"tools,omitzero"`
 }
 
 // KnowledgeReadRequest is a read call.

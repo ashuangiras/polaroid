@@ -1,5 +1,5 @@
 {
-  "discover": {"read_only": true, "required": ["task"], "arguments": {"limit": "integer", "repository": "string", "task": "string"}},
+  "discover": {"read_only": true, "required": [], "arguments": {"kind": "string", "limit": "integer", "repository": "string", "snapshot": "string", "task": "string"}},
   "feedback": {"read_only": false, "required": ["classification", "key", "reporter", "snapshot", "summary"], "arguments": {"classification": "string", "details": "string", "evidence": "object", "key": "string", "reporter": "string", "repository": "string", "snapshot": "string", "summary": "string"}},
   "read": {"read_only": true, "required": ["key"], "arguments": {"full": "boolean", "inputs": "object", "key": "string", "repository": "string", "snapshot": "string"}}
 }
