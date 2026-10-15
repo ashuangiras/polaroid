@@ -16,6 +16,18 @@ type Stats struct {
 	// ByType) is not the same count: every one names a procedure document,
 	// but not every procedure document has a typed record yet.
 	Procedures ProcedureStats
+	// Completeness counts this snapshot's gaps against ADR-0057's
+	// completeness bar (CompletenessGaps), not yet enforced at publish.
+	Completeness CompletenessStats
+}
+
+// CompletenessStats is Stats.Completeness: how many typed records fall
+// short of ADR-0057's completeness bar, a count derived from
+// CompletenessGaps, carrying no per-repository applicability (typed
+// records have none) and so never filtered by Stats' repository argument.
+type CompletenessStats struct {
+	MissingDefinition int
+	MissingObligation int
 }
 
 // ProcedureStats is Stats.Procedures: Total, and ByRepository from each
@@ -65,5 +77,9 @@ func (c *Catalog) Stats(repository string) Stats {
 		}
 		procs.ByRepository[key]++
 	}
-	return Stats{ByType: byType, ByDomain: byDomain, Procedures: procs}
+	return Stats{ByType: byType, ByDomain: byDomain, Procedures: procs, Completeness: completenessStats(c.CompletenessGaps())}
+}
+
+func completenessStats(g CompletenessGaps) CompletenessStats {
+	return CompletenessStats{MissingDefinition: len(g.MissingDefinition), MissingObligation: len(g.MissingObligation)}
 }

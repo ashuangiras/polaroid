@@ -86,6 +86,15 @@ func TestCatalogStats(t *testing.T) {
 			t.Errorf("Procedures.ByRepository[%s] = %d, want %d", r, got, want)
 		}
 	}
+	// Every typed record here lacks a definition (domain, concept,
+	// unclassifiedConcept, typedProc); typedProc also has no obligation
+	// source (no requires/preconditions/postconditions/specializes).
+	if st.Completeness.MissingDefinition != 4 {
+		t.Errorf("Completeness.MissingDefinition = %d, want 4", st.Completeness.MissingDefinition)
+	}
+	if st.Completeness.MissingObligation != 1 {
+		t.Errorf("Completeness.MissingObligation = %d, want 1", st.Completeness.MissingObligation)
+	}
 
 	// Scoped to the local procedure's own repository: shared and
 	// unspecified still apply there, the other repository does not.
