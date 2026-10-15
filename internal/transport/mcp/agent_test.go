@@ -16,8 +16,13 @@ import (
 	"github.com/ashuangiras/polaroid/internal/gitcore"
 	"github.com/ashuangiras/polaroid/internal/knowledge"
 	"github.com/ashuangiras/polaroid/internal/knowledge/gitstore"
+	"github.com/ashuangiras/polaroid/internal/knowledge/knowledgetest"
+	"github.com/ashuangiras/polaroid/internal/knowledge/semantic"
 	"github.com/ashuangiras/polaroid/internal/knowledgeops"
 	"github.com/ashuangiras/polaroid/internal/memory"
+	"github.com/ashuangiras/polaroid/internal/reasoning"
+	"github.com/ashuangiras/polaroid/internal/reasoning/datalog"
+	"github.com/ashuangiras/polaroid/internal/reasoning/policy"
 	"github.com/ashuangiras/polaroid/internal/storage/sqlite"
 	mcptransport "github.com/ashuangiras/polaroid/internal/transport/mcp"
 )
@@ -76,6 +81,59 @@ func (kh *knowledgeHarness) publish(t *testing.T, procs ...*knowledge.Procedure)
 		t.Fatal(err)
 	}
 	return snap
+}
+
+// publishRecords commits procs and typed records atop the active snapshot.
+func (kh *knowledgeHarness) publishRecords(t *testing.T, procs []*knowledge.Procedure, records []*knowledge.Record) (knowledge.Snapshot, error) {
+	t.Helper()
+	ctx := context.Background()
+	base, err := kh.kernel.Active(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes := make([]knowledge.Change, len(procs))
+	for i, p := range procs {
+		changes[i] = knowledge.Change{Key: p.Key, Procedure: p}
+	}
+	recChanges := make([]knowledge.RecordChange, len(records))
+	for i, r := range records {
+		recChanges[i] = knowledge.RecordChange{Key: r.Key, Record: r}
+	}
+	return kh.kernel.Publish(ctx, knowledge.Proposal{
+		Base: base.Snapshot(), Changes: changes, Records: recChanges,
+		Provenance: knowledge.Provenance{Author: "test", Summary: "test publish", Rationale: "test fixture"},
+	})
+}
+
+// newKnowledgeHarnessV2 runs /mcp/agent/v2 (ADR-0050): the same discover,
+// read and feedback as v1, plus resolve, with real semantic and rule
+// validators so typed records (composes, precedes, requires) publish.
+func newKnowledgeHarnessV2(t *testing.T) *knowledgeHarness {
+	t.Helper()
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "polaroid.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	repo, err := gitcore.Open(filepath.Join(t.TempDir(), "knowledge"), gitcore.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sem, err := semantic.New(semantic.DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := datalog.Evaluator{}
+	kernel := knowledge.New(gitstore.New(repo), knowledge.WithRecordValidator(sem), knowledge.WithRecordValidator(reasoning.RuleValidator{Evaluator: ev}))
+	agent := knowledgeops.NewAgent(kernel, memory.NewService(store))
+	resolver := knowledgeops.NewResolver(kernel, ev, policy.Trust{})
+	logs := &syncBuffer{}
+	srv := httptest.NewServer(mcptransport.NewAgentHandlerV2(agent, resolver, slog.New(slog.NewTextHandler(logs, nil))))
+	t.Cleanup(srv.Close)
+	h := &harness{url: srv.URL, store: store, logs: logs}
+	h.session = h.connect(t, "")
+	return &knowledgeHarness{harness: h, kernel: kernel}
 }
 
 func decodeJSON(t *testing.T, text string) map[string]any {
@@ -316,5 +374,83 @@ func TestAgentDiscoverKindValidation(t *testing.T) {
 	}
 	if res := agent.call(t, "discover", `{"kind":"stats"}`); res.IsError {
 		t.Fatalf("discover(kind=stats) without task must succeed: %v", res)
+	}
+}
+
+// planFixture publishes, at /mcp/agent/v2, a parent Procedure record
+// composing three children, x precedes y precedes z, each with a
+// matching legacy procedure document.
+func planFixture(t *testing.T, agent *knowledgeHarness) knowledge.Snapshot {
+	t.Helper()
+	procs := []*knowledge.Procedure{
+		knowledgetest.SharedProc("plan.parent", "Parent"),
+		knowledgetest.SharedProc("plan.x", "x"), knowledgetest.SharedProc("plan.y", "y"), knowledgetest.SharedProc("plan.z", "z"),
+	}
+	records := []*knowledge.Record{
+		{Type: knowledge.TypeProcedure, Key: "plan.parent", Label: "Parent", Definition: "A parent procedure.", Composes: []string{"plan.x", "plan.y", "plan.z"}},
+		{Type: knowledge.TypeProcedure, Key: "plan.x", Label: "x", Definition: "Step x.", Precedes: []string{"plan.y"}},
+		{Type: knowledge.TypeProcedure, Key: "plan.y", Label: "y", Definition: "Step y.", Precedes: []string{"plan.z"}},
+		{Type: knowledge.TypeProcedure, Key: "plan.z", Label: "z", Definition: "Step z."},
+	}
+	s, err := agent.publishRecords(t, procs, records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestResolvePlanOrderedByPrecedes(t *testing.T) {
+	agent := newKnowledgeHarnessV2(t)
+	snap := planFixture(t, agent)
+
+	d := decodeJSON(t, agent.ok(t, "resolve", `{"goal":"plan.parent","snapshot":"`+string(snap)+`","at":"2026-10-15T12:00:00Z"}`))
+	plan, ok := d["plan"].([]any)
+	if !ok || len(plan) != 3 {
+		t.Fatalf("plan = %v, want 3 entries", d["plan"])
+	}
+	first := plan[0].(map[string]any)
+	if first["key"] != "plan.x" || first["status"] != "next" {
+		t.Fatalf("first entry = %v, want plan.x next", first)
+	}
+	for _, e := range plan[1:] {
+		if _, has := e.(map[string]any)["status"]; has {
+			t.Fatalf("entry beyond next must carry no status: %v", e)
+		}
+	}
+
+	// completed=[plan.x]: x is done, y is next.
+	d2 := decodeJSON(t, agent.ok(t, "resolve", `{"goal":"plan.parent","snapshot":"`+string(snap)+`","at":"2026-10-15T12:00:00Z","completed":["plan.x"]}`))
+	plan2 := d2["plan"].([]any)
+	if e := plan2[0].(map[string]any); e["status"] != "done" {
+		t.Fatalf("plan.x = %v, want done", e)
+	}
+	if e := plan2[1].(map[string]any); e["status"] != "next" {
+		t.Fatalf("plan.y = %v, want next", e)
+	}
+}
+
+func TestResolveNoPlanWithoutComposition(t *testing.T) {
+	agent := newKnowledgeHarnessV2(t)
+	leaf := []*knowledge.Procedure{knowledgetest.SharedProc("plan.leaf", "Leaf")}
+	records := []*knowledge.Record{{Type: knowledge.TypeProcedure, Key: "plan.leaf", Label: "Leaf", Definition: "A leaf, nothing composed."}}
+	snap, err := agent.publishRecords(t, leaf, records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := decodeJSON(t, agent.ok(t, "resolve", `{"goal":"plan.leaf","snapshot":"`+string(snap)+`","at":"2026-10-15T12:00:00Z"}`))
+	if _, ok := d["plan"]; ok {
+		t.Fatalf("resolve of a goal with no composed children must carry no plan member: %v", d)
+	}
+}
+
+func TestResolveInvalidCompleted(t *testing.T) {
+	agent := newKnowledgeHarnessV2(t)
+	snap := planFixture(t, agent)
+	res := agent.call(t, "resolve", `{"goal":"plan.parent","snapshot":"`+string(snap)+`","at":"2026-10-15T12:00:00Z","completed":["not-a-child"]}`)
+	if !res.IsError {
+		t.Fatalf("completed naming a key that is not an immediate composed child must fail")
+	}
+	if !strings.Contains(res.Content[0].(*sdk.TextContent).Text, `"invalid_request"`) {
+		t.Fatalf("must be invalid_request: %s", res.Content[0].(*sdk.TextContent).Text)
 	}
 }

@@ -79,12 +79,13 @@ var ErrContextConflict = errors.New("the context contradicts trusted context")
 // exception's scope and conditions are judged on it alone. Then, when set,
 // names a consumer procedure to compose after the goal.
 type Request struct {
-	Goal    string
-	Context map[string]string
-	Trusted map[string]string
-	Then    string
-	At      time.Time
-	Limits  Limits
+	Goal      string
+	Context   map[string]string
+	Trusted   map[string]string
+	Then      string
+	At        time.Time
+	Completed []string
+	Limits    Limits
 }
 
 // Derivation is one independent way an obligation holds.
@@ -182,6 +183,7 @@ type Resolution struct {
 	Evidence        []ClaimStatus      `json:"evidence,omitzero"`
 	Superseded      []string           `json:"superseded,omitzero"`
 	Composition     *CompositionResult `json:"composition,omitzero"`
+	Plan            []PlanEntry        `json:"plan,omitzero"`
 }
 
 // maxAssignments bounds the hypothetical evaluations one resolution runs:
@@ -470,6 +472,9 @@ func Resolve(ctx context.Context, cat *knowledge.Catalog, ev Evaluator, trust po
 		if res.Composition, err = Compose(ctx, cat, ev, goal.Key, req.Then, limits); err != nil {
 			return nil, err
 		}
+	}
+	if res.Plan, err = Plan(cat, goal, req.Completed); err != nil {
+		return nil, err
 	}
 	return res, nil
 }

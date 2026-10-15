@@ -88,6 +88,7 @@ type Record struct {
 	Specializes  []string
 	Uses         []string
 	Composes     []string
+	Precedes     []string
 	Requires     []string
 	Supports     []string
 	Contradicts  []string
@@ -186,6 +187,7 @@ type recordDoc struct {
 	Specializes        []string      `json:"specializes,omitzero"`
 	Uses               []string      `json:"uses,omitzero"`
 	Composes           []string      `json:"composes,omitzero"`
+	Precedes           []string      `json:"precedes,omitzero"`
 	Requires           []string      `json:"requires,omitzero"`
 	Supports           []string      `json:"supports,omitzero"`
 	Contradicts        []string      `json:"contradicts,omitzero"`
@@ -269,6 +271,7 @@ func EncodeRecord(r *Record) ([]byte, error) {
 		Context: ContextIRI, ID: id(n.Key), Type: string(n.Type), Label: n.Label, Definition: n.Definition, Statement: n.Statement,
 		ClassifiedAs: ids(n.ClassifiedAs), Broader: ids(n.Broader), Specializes: ids(n.Specializes), Uses: ids(n.Uses),
 		Composes: ids(n.Composes), Requires: ids(n.Requires), Supports: ids(n.Supports), Contradicts: ids(n.Contradicts),
+		Precedes:   ids(n.Precedes),
 		Supersedes: ids(n.Supersedes), Asserts: n.Asserts, Source: n.Source,
 		Program: n.Program, Revision: n.Revision, Protected: n.Protected, Waivable: n.Waivable,
 		Inputs: ports(n.Inputs), Outputs: ports(n.Outputs), OutputsComplete: n.OutputsComplete,
@@ -296,7 +299,7 @@ func EncodeRecord(r *Record) ([]byte, error) {
 // that the canonical encoding does not depend on the order a caller chose.
 func normalized(r *Record) *Record {
 	n := r.Clone()
-	for _, s := range []*[]string{&n.ClassifiedAs, &n.Broader, &n.Specializes, &n.Uses, &n.Composes, &n.Requires,
+	for _, s := range []*[]string{&n.ClassifiedAs, &n.Broader, &n.Specializes, &n.Uses, &n.Composes, &n.Precedes, &n.Requires,
 		&n.Supports, &n.Contradicts, &n.Supersedes, &n.Preconditions, &n.Postconditions, &n.Invariants,
 		&n.InformalConditions, &n.Excepts, &n.AppliesTo} {
 		slices.Sort(*s)
@@ -316,7 +319,7 @@ func normalized(r *Record) *Record {
 // Clone returns a deep copy of r.
 func (r *Record) Clone() *Record {
 	c := *r
-	for _, s := range []*[]string{&c.ClassifiedAs, &c.Broader, &c.Specializes, &c.Uses, &c.Composes, &c.Requires,
+	for _, s := range []*[]string{&c.ClassifiedAs, &c.Broader, &c.Specializes, &c.Uses, &c.Composes, &c.Precedes, &c.Requires,
 		&c.Supports, &c.Contradicts, &c.Supersedes, &c.Preconditions, &c.Postconditions, &c.Invariants,
 		&c.InformalConditions, &c.Excepts, &c.AppliesTo} {
 		*s = slices.Clone(*s)
@@ -394,6 +397,7 @@ func ParseRecord(b []byte) (*Record, error) {
 		ClassifiedAs: unids("classified_as", d.ClassifiedAs, &p), Broader: unids("broader", d.Broader, &p),
 		Specializes: unids("specializes", d.Specializes, &p), Uses: unids("uses", d.Uses, &p),
 		Composes: unids("composes", d.Composes, &p), Requires: unids("requires", d.Requires, &p),
+		Precedes: unids("precedes", d.Precedes, &p),
 		Supports: unids("supports", d.Supports, &p), Contradicts: unids("contradicts", d.Contradicts, &p),
 		Supersedes: unids("supersedes", d.Supersedes, &p), Asserts: d.Asserts, Source: d.Source,
 		Program: d.Program, Revision: d.Revision, Protected: d.Protected, Waivable: d.Waivable,

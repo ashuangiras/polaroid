@@ -24,6 +24,7 @@
     "specializes": {"@id": "pc:specializes", "@type": "@id", "@container": "@set"},
     "uses": {"@id": "pc:uses", "@type": "@id", "@container": "@set"},
     "composes": {"@id": "pc:composes", "@type": "@id", "@container": "@set"},
+    "precedes": {"@id": "pc:precedes", "@type": "@id", "@container": "@set"},
     "requires": {"@id": "pc:requires", "@type": "@id", "@container": "@set"},
     "supports": {"@id": "pc:supports", "@type": "@id", "@container": "@set"},
     "contradicts": {"@id": "pc:contradicts", "@type": "@id", "@container": "@set"},

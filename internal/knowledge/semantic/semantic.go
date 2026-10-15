@@ -258,6 +258,7 @@ var Predicates = map[string]string{
 	"specializes":    CorpusNS + "specializes",
 	"uses":           CorpusNS + "uses",
 	"composes":       CorpusNS + "composes",
+	"precedes":       CorpusNS + "precedes",
 	"requires":       CorpusNS + "requires",
 	"supports":       CorpusNS + "supports",
 	"contradicts":    CorpusNS + "contradicts",
@@ -292,6 +293,7 @@ func relationships(r *knowledge.Record) map[string][]string {
 	return map[string][]string{
 		"classified_as": r.ClassifiedAs, "broader": r.Broader, "specializes": r.Specializes, "uses": r.Uses,
 		"composes": r.Composes, "requires": r.Requires, "supports": r.Supports, "contradicts": r.Contradicts,
+		"precedes":   r.Precedes,
 		"supersedes": r.Supersedes, "preconditions": r.Preconditions, "postconditions": r.Postconditions,
 		"invariants": r.Invariants, "excepts": r.Excepts, "applies_to": r.AppliesTo,
 		"waives": one(r.Waives), "replacement": one(r.Replacement),

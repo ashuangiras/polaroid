@@ -80,12 +80,14 @@ func (r *Resolver) Resolve(ctx context.Context, in wire.KnowledgeResolveRequest)
 	if err != nil {
 		return wire.KnowledgeResolution{}, invalidField("assertions", err.Error())
 	}
-	res, err := reasoning.Resolve(ctx, cat, r.ev, r.trust, reasoning.Request{Goal: in.Goal, Context: in.Context, Trusted: trusted, Then: in.Then, At: at})
+	res, err := reasoning.Resolve(ctx, cat, r.ev, r.trust, reasoning.Request{Goal: in.Goal, Context: in.Context, Trusted: trusted, Then: in.Then, At: at, Completed: in.Completed})
 	switch {
 	case errors.Is(err, reasoning.ErrUnknownGoal):
 		return wire.KnowledgeResolution{}, wire.NewKnowledgeError(http.StatusNotFound, wire.ErrorDetail{Code: "not_found", Message: err.Error()})
 	case errors.Is(err, reasoning.ErrContextConflict):
 		return wire.KnowledgeResolution{}, invalidField("context", err.Error())
+	case errors.Is(err, reasoning.ErrInvalidCompleted):
+		return wire.KnowledgeResolution{}, invalidField("completed", err.Error())
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, reasoning.ErrBudget):
 		return wire.KnowledgeResolution{}, wire.NewKnowledgeError(http.StatusUnprocessableEntity, wire.ErrorDetail{Code: "budget_exceeded",
 			Message: fmt.Sprintf("resolution exceeded its budget (%s, or a fact limit): %v", ResolveTimeout, err)})
