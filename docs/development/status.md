@@ -2,13 +2,22 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
-**[#158](https://github.com/ashuangiras/polaroid/issues/158) implemented: completeness validation (written, inert) + `discover(kind="stats")` extension, as of 2026-10-15.** A code commit on branch `issue-158-completeness-stats`, not yet merged. Supersedes the "next action" below, which this answers.
+**[#159](https://github.com/ashuangiras/polaroid/issues/159) implemented: `precedes` relation and `resolve`'s stateless `plan` (ADR-0052), as of 2026-10-15.** A code commit on branch `issue-159-precedes-plan`, not yet merged. Supersedes the "next action" below, which this answers.
+
+- **`precedes`** ([internal/knowledge/record.go](../../internal/knowledge/record.go), [recordcheck.go](../../internal/knowledge/recordcheck.go)): a new `Procedure` relation, validated acyclic (reusing the existing generic check) and sibling-scoped (a dedicated `checkPrecedesSiblings`, since "another key in the same parent's `composes` set" isn't expressible in the generic relation table).
+- **A real-validator gap found while testing, not assumed:** `recordcheck.go`'s generic rules were not enough — the actual JSON-LD/SHACL semantic validator (`internal/knowledge/semantic`) had no vocabulary entry for `precedes` at all, silently dropping it during JSON-LD expansion. Found only because this is the first change to add a new `Procedure`-record relation and test it through a real `/mcp/agent/v2` harness (new: `newKnowledgeHarnessV2`) instead of the lighter `acceptAll` test validator; fixed in `context-v1.jsonld`, `shapes-v1.ttl` and `semantic.go` together.
+- **`resolve` gains `plan`/`completed`** ([internal/reasoning/plan.go](../../internal/reasoning/plan.go)): one level, topologically ordered by `precedes` (ties by key), `done`/`next` status, fully stateless (same determinism guarantee, now over one more input). Additive: a caller using neither sees byte-identical behavior.
+- **Verified (`verify-change`, full):** `make check` (lint 0 issues, test, race, deps/docs-check 918 links/records-check/loader-check all PASS), `make vuln` (0 affecting the code), `make demo` (PASS), `make e2e` 313/0, `make e2e-mcp E2E_INTEROP=0` 137/0. `make lifecycle` not run: no installation/service change.
+- **Not done:** the branch is not pushed or opened as a pull request yet.
+
+Next action: push `issue-159-precedes-plan`, open the PR against #159, merge, then start #160 (ADR-0053, M2).
+
+**[#158](https://github.com/ashuangiras/polaroid/issues/158) implemented: completeness validation (written, inert) + `discover(kind="stats")` extension, as of 2026-10-15 (superseded above).** Merged as [PR #166](https://github.com/ashuangiras/polaroid/pull/166).
 
 - **`Catalog.CompletenessGaps`/`CheckCompleteness`** ([internal/knowledge/completeness.go](../../internal/knowledge/completeness.go)): ADR-0057's bar (definition on Domain/Concept/Procedure; at least one of requires/preconditions/postconditions, own or inherited transitively via specializes, on every Procedure), written and unit-tested but **not called from the publish path** — `TestCompletenessIsNotEnforcedYet` asserts a record missing a definition still publishes today.
 - **`discover(kind="stats")` gains `completeness`** (`missing_definition`, `missing_obligation`): additive, no per-repository scoping (typed records have none).
 - **Real evidence against the live corpus (AC3):** this branch's `polaroidd` run over a read-only copy of the live knowledge data (disposable scratch instance; the installed service at 127.0.0.1:7417 untouched) — 24 typed records, **11 missing a definition, 11 missing an obligation**. This is #164's real starting point once #152 clears it.
 - **Verified (`verify-change`, full):** `make check` (lint 0 issues, test, race, deps/docs-check 914 links/records-check/loader-check all PASS), `make vuln` (0 affecting the code), `make demo` (PASS), `make e2e` 313/0, `make e2e-mcp E2E_INTEROP=0` 137/0. `make lifecycle` not run: no installation/service change. The pinned argument-schema fixture is unaffected (response-shape-only change).
-- **Not done:** the branch is not pushed or opened as a pull request yet.
 
 Next action: push `issue-158-completeness-stats`, open the PR against #158, merge, then start #159 (ADR-0052, M1).
 
