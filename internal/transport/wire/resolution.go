@@ -139,10 +139,17 @@ type KnowledgeClaimStatus struct {
 // KnowledgePlanEntry is one entry of a resolve result's plan (ADR-0052):
 // an immediate composed child of the goal, in precedes order. Status is
 // "done" (named in the request's completed), "next" (the first not-done
-// entry), or absent (the rest).
+// entry), or absent (the rest). Path and an "escalate" status are
+// specific to a walkthrough's plan (start/advance, ADR-0053/ADR-0054):
+// resolve's own plan never sets Path and never reports "escalate", since
+// it has no notion of a frozen leaf. When set, Path is the full chain of
+// keys from this entry down to the actual next or frozen leaf — a
+// single-element array, equal to [Key], when this entry is itself a
+// leaf.
 type KnowledgePlanEntry struct {
-	Key    string `json:"key"`
-	Status string `json:"status,omitzero"`
+	Key    string   `json:"key"`
+	Status string   `json:"status,omitzero"`
+	Path   []string `json:"path,omitzero"`
 }
 
 // KnowledgeResolution is what applies to a goal.

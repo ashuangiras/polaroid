@@ -569,8 +569,8 @@ func TestWalkthroughAdvanceFoldsPerKeyAndEscalateFreezesNext(t *testing.T) {
 
 	escalated := decodeJSON(t, agent.ok(t, "advance", `{"token":"`+token+`","outcome":{"key":"plan.x","status":"escalate"}}`))
 	plan := escalated["plan"].([]any)
-	if plan[0].(map[string]any)["status"] != "next" {
-		t.Fatalf("an escalated key must still read next, freezing the plan: %v", plan)
+	if plan[0].(map[string]any)["status"] != "escalate" {
+		t.Fatalf("an escalated leaf must be reported as escalate, freezing the plan there: %v", plan)
 	}
 
 	done := decodeJSON(t, agent.ok(t, "advance", `{"token":"`+token+`","outcome":{"key":"plan.x","status":"done"}}`))
@@ -605,5 +605,77 @@ func TestWalkthroughStartUnknownGoalIsNotFound(t *testing.T) {
 	res := agent.call(t, "start", `{"goal":"nope"}`)
 	if !res.IsError || !strings.Contains(res.Content[0].(*sdk.TextContent).Text, `"not_found"`) {
 		t.Fatalf("an unknown goal must be not_found: %v", res)
+	}
+}
+
+// Multi-level plans, path-addressed leaves (ADR-0054, issue #161),
+// exercised over real HTTP at /mcp/agent/v3.
+
+// deepPlanFixture publishes goal -> a -> b (a leaf), each a typed
+// Procedure record with a matching legacy document.
+func deepPlanFixture(t *testing.T, agent *knowledgeHarness) {
+	t.Helper()
+	procs := []*knowledge.Procedure{
+		knowledgetest.SharedProc("deep.goal", "goal"), knowledgetest.SharedProc("deep.a", "a"), knowledgetest.SharedProc("deep.b", "b"),
+	}
+	records := []*knowledge.Record{
+		{Type: knowledge.TypeProcedure, Key: "deep.goal", Label: "goal", Definition: "d", Composes: []string{"deep.a"}},
+		{Type: knowledge.TypeProcedure, Key: "deep.a", Label: "a", Definition: "d", Composes: []string{"deep.b"}},
+		{Type: knowledge.TypeProcedure, Key: "deep.b", Label: "b", Definition: "d"},
+	}
+	if _, err := agent.publishRecords(t, procs, records); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWalkthroughStartDescendsToDeepLeaf(t *testing.T) {
+	agent := newKnowledgeHarnessV3(t)
+	deepPlanFixture(t, agent)
+	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"deep.goal"}`))
+	plan := start["plan"].([]any)
+	entry := plan[0].(map[string]any)
+	if entry["key"] != "deep.a" || entry["status"] != "next" {
+		t.Fatalf("plan = %v", plan)
+	}
+	path := entry["path"].([]any)
+	if len(path) != 2 || path[0] != "deep.a" || path[1] != "deep.b" {
+		t.Fatalf("path = %v, want [deep.a deep.b]", path)
+	}
+}
+
+func TestWalkthroughAdvanceDeepLeafByPath(t *testing.T) {
+	agent := newKnowledgeHarnessV3(t)
+	deepPlanFixture(t, agent)
+	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"deep.goal"}`))
+	token := start["token"].(string)
+
+	res := decodeJSON(t, agent.ok(t, "advance", `{"token":"`+token+`","outcome":{"path":["deep.a","deep.b"],"status":"done"}}`))
+	plan := res["plan"].([]any)
+	if plan[0].(map[string]any)["status"] != "done" {
+		t.Fatalf("advancing the deep leaf by its full path must complete it: %v", plan)
+	}
+}
+
+func TestWalkthroughAdvanceComposedTargetIsInvalidRequest(t *testing.T) {
+	agent := newKnowledgeHarnessV3(t)
+	deepPlanFixture(t, agent)
+	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"deep.goal"}`))
+	token := start["token"].(string)
+
+	res := agent.call(t, "advance", `{"token":"`+token+`","outcome":{"key":"deep.a","status":"done"}}`)
+	if !res.IsError || !strings.Contains(res.Content[0].(*sdk.TextContent).Text, `"invalid_request"`) {
+		t.Fatalf("a composed key (deep.a is not a leaf) must never be accepted as a target: %v", res)
+	}
+}
+
+func TestWalkthroughAdvanceKeyAndPathBothGivenIsInvalidRequest(t *testing.T) {
+	agent := newKnowledgeHarnessV3(t)
+	deepPlanFixture(t, agent)
+	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"deep.goal"}`))
+	token := start["token"].(string)
+
+	res := agent.call(t, "advance", `{"token":"`+token+`","outcome":{"key":"deep.b","path":["deep.a","deep.b"],"status":"done"}}`)
+	if !res.IsError || !strings.Contains(res.Content[0].(*sdk.TextContent).Text, `"invalid_request"`) {
+		t.Fatalf("key and path must not both be given: %v", res)
 	}
 }
