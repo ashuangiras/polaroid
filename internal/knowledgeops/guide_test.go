@@ -357,3 +357,164 @@ func TestGuideAdvanceDeepEscalateFreezesAncestors(t *testing.T) {
 		t.Fatalf("a (its grandchild c is escalated) = %+v, want escalate at %v", res.Plan[0], want)
 	}
 }
+
+// Walkthrough completion semantics and an explicit close (ADR-0055,
+// issue #162).
+
+// AC1: status is "complete" exactly when plan has no next, "in_progress"
+// otherwise, on both start and advance.
+func TestGuideStatusCompleteAndInProgress(t *testing.T) {
+	g, _ := guideFixture(t, "step.a", "step.b")
+	start, err := g.Start(context.Background(), wire.WalkthroughStartRequest{Goal: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if start.Status != "in_progress" {
+		t.Fatalf("start status = %q, want in_progress (step.a is next)", start.Status)
+	}
+	res, err := g.Advance(context.Background(), wire.WalkthroughAdvanceRequest{
+		Token: start.Token, Outcome: &wire.WalkthroughOutcomeArg{Key: "step.a", Status: "done"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "in_progress" {
+		t.Fatalf("status = %q, want in_progress (step.b is next)", res.Status)
+	}
+	res, err = g.Advance(context.Background(), wire.WalkthroughAdvanceRequest{
+		Token: start.Token, Outcome: &wire.WalkthroughOutcomeArg{Key: "step.b", Status: "done"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "complete" {
+		t.Fatalf("status = %q, want complete (every leaf done)", res.Status)
+	}
+}
+
+func TestGuideStatusTriviallyCompleteWithNoComposedChildren(t *testing.T) {
+	g, _ := guideFixture(t)
+	start, err := g.Start(context.Background(), wire.WalkthroughStartRequest{Goal: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if start.Status != "complete" {
+		t.Fatalf("status = %q, want complete (no composed children, nothing to do)", start.Status)
+	}
+}
+
+func TestGuideStatusEscalateIsInProgress(t *testing.T) {
+	g, _ := guideFixture(t, "step.a")
+	start, err := g.Start(context.Background(), wire.WalkthroughStartRequest{Goal: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := g.Advance(context.Background(), wire.WalkthroughAdvanceRequest{
+		Token: start.Token, Outcome: &wire.WalkthroughOutcomeArg{Key: "step.a", Status: "escalate"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "in_progress" {
+		t.Fatalf("status = %q, want in_progress (an escalated leaf is not done)", res.Status)
+	}
+}
+
+// AC2: a later advance reopening an already-done leaf moves status back
+// to in_progress.
+func TestGuideStatusReopenAfterComplete(t *testing.T) {
+	g, _ := guideFixture(t, "step.a")
+	start, err := g.Start(context.Background(), wire.WalkthroughStartRequest{Goal: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := g.Advance(context.Background(), wire.WalkthroughAdvanceRequest{
+		Token: start.Token, Outcome: &wire.WalkthroughOutcomeArg{Key: "step.a", Status: "done"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "complete" {
+		t.Fatalf("status = %q, want complete", res.Status)
+	}
+	// A later correction reopens it.
+	res, err = g.Advance(context.Background(), wire.WalkthroughAdvanceRequest{
+		Token: start.Token, Outcome: &wire.WalkthroughOutcomeArg{Key: "step.a", Status: "escalate"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "in_progress" {
+		t.Fatalf("status = %q, want in_progress (a later report reopened a done leaf)", res.Status)
+	}
+}
+
+// AC3: advance(token, close=true) ends the walkthrough; a subsequent
+// call with that token is not_found.
+func TestGuideAdvanceCloseEndsWalkthrough(t *testing.T) {
+	g, _ := guideFixture(t, "step.a")
+	start, err := g.Start(context.Background(), wire.WalkthroughStartRequest{Goal: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := g.Advance(context.Background(), wire.WalkthroughAdvanceRequest{Token: start.Token, Close: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Token != start.Token {
+		t.Fatalf("a close call must still return the final state: %+v", res)
+	}
+	_, err = g.Advance(context.Background(), wire.WalkthroughAdvanceRequest{Token: start.Token})
+	var we *wire.KnowledgeError
+	if !errors.As(err, &we) || we.Detail.Code != "not_found" {
+		t.Fatalf("a call after close must be not_found, got %v", err)
+	}
+}
+
+// AC4: close combined with an outcome in the same call applies the
+// outcome, then closes.
+func TestGuideAdvanceCloseWithOutcomeAppliesThenCloses(t *testing.T) {
+	g, _ := guideFixture(t, "step.a", "step.b")
+	start, err := g.Start(context.Background(), wire.WalkthroughStartRequest{Goal: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := g.Advance(context.Background(), wire.WalkthroughAdvanceRequest{
+		Token: start.Token, Outcome: &wire.WalkthroughOutcomeArg{Key: "step.a", Status: "done"}, Close: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Plan[0].Status != "done" || res.Plan[1].Status != "next" || res.Status != "in_progress" {
+		t.Fatalf("the outcome must be reflected in the same, final response: %+v", res)
+	}
+	if _, err := g.Advance(context.Background(), wire.WalkthroughAdvanceRequest{Token: start.Token}); err == nil {
+		t.Fatalf("the walkthrough must be gone after close, even though it was not complete")
+	}
+}
+
+// AC5: close on an already-closed or expired token is not_found.
+func TestGuideAdvanceCloseAlreadyClosedIsNotFound(t *testing.T) {
+	g, _ := guideFixture(t, "step.a")
+	start, err := g.Start(context.Background(), wire.WalkthroughStartRequest{Goal: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.Advance(context.Background(), wire.WalkthroughAdvanceRequest{Token: start.Token, Close: true}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = g.Advance(context.Background(), wire.WalkthroughAdvanceRequest{Token: start.Token, Close: true})
+	var we *wire.KnowledgeError
+	if !errors.As(err, &we) || we.Detail.Code != "not_found" {
+		t.Fatalf("closing an already-closed token must be not_found, got %v", err)
+	}
+}
+
+func TestGuideAdvanceCloseUnknownTokenIsNotFound(t *testing.T) {
+	g, _ := guideFixture(t, "step.a")
+	_, err := g.Advance(context.Background(), wire.WalkthroughAdvanceRequest{Token: "never-started", Close: true})
+	var we *wire.KnowledgeError
+	if !errors.As(err, &we) || we.Detail.Code != "not_found" {
+		t.Fatalf("closing an unknown token must be not_found, got %v", err)
+	}
+}

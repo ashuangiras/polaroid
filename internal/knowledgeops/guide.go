@@ -13,7 +13,8 @@ import (
 )
 
 // Guide answers /mcp/agent/v3's start and advance (ADR-0053, amended by
-// ADR-0054 for multi-level plans): a goal resolved and pinned at a
+// ADR-0054 for multi-level plans and by ADR-0055 for completion
+// semantics and an early close): a goal resolved and pinned at a
 // snapshot, plus persisted, per-agent walkthrough state
 // (internal/memory), folded into a plan by reasoning.PlanTree — not
 // reasoning.Plan (resolve's own one-level function, unaffected by this)
@@ -69,14 +70,17 @@ func (g *Guide) Start(ctx context.Context, in wire.WalkthroughStartRequest) (wir
 }
 
 // Advance reports in.Outcome (nil for a pure peek) and in.Context on
-// in.Token, and returns the updated {token, snapshot, plan}. The plan is
-// resolved from the goal pinned at Start, not the currently active
-// snapshot, so it stays stable across later publications. in.Outcome's
-// key or path (ADR-0054) must resolve to an actual leaf reached from the
-// goal by following composes at every level; anything else — a key or
-// path naming a composed node, or a chain that does not match the
-// goal's own composition — is invalid_request. An expired or unknown
-// token is not_found.
+// in.Token, and returns the updated {token, snapshot, plan, status}. The
+// plan is resolved from the goal pinned at Start, not the currently
+// active snapshot, so it stays stable across later publications.
+// in.Outcome's key or path (ADR-0054) must resolve to an actual leaf
+// reached from the goal by following composes at every level; anything
+// else — a key or path naming a composed node, or a chain that does not
+// match the goal's own composition — is invalid_request. An expired or
+// unknown token is not_found. When in.Close is true (ADR-0055), the
+// walkthrough is ended immediately after in.Outcome (if any) is applied
+// and reflected in the returned result; a later call with the same
+// token is then not_found, the same as an expired one.
 func (g *Guide) Advance(ctx context.Context, in wire.WalkthroughAdvanceRequest) (wire.WalkthroughResult, error) {
 	if in.Token == "" {
 		return wire.WalkthroughResult{}, requiredField("token")
@@ -105,7 +109,13 @@ func (g *Guide) Advance(ctx context.Context, in wire.WalkthroughAdvanceRequest) 
 	if err != nil {
 		return wire.WalkthroughResult{}, classify(err)
 	}
-	return newWalkthroughResult(state, plan), nil
+	result := newWalkthroughResult(state, plan)
+	if in.Close {
+		if err := g.walkthroughs.Close(ctx, in.Token); err != nil {
+			return wire.WalkthroughResult{}, classify(err)
+		}
+	}
+	return result, nil
 }
 
 // pathSeparator joins a multi-level outcome's path into a single string,
@@ -204,10 +214,28 @@ func leafStatusFrom(statuses map[string]memory.WalkthroughOutcomeStatus) func([]
 }
 
 // newWalkthroughResult builds a WalkthroughResult from st and plan.
+// newWalkthroughResult builds a WalkthroughResult from st and plan,
+// deriving status (ADR-0055).
 func newWalkthroughResult(st memory.WalkthroughState, plan []reasoning.PlanEntry) wire.WalkthroughResult {
-	out := wire.WalkthroughResult{Token: st.Token, Snapshot: st.Snapshot}
+	out := wire.WalkthroughResult{Token: st.Token, Snapshot: st.Snapshot, Status: walkthroughStatus(plan)}
 	for _, e := range plan {
 		out.Plan = append(out.Plan, wire.KnowledgePlanEntry{Key: e.Key, Status: e.Status, Path: e.Path})
 	}
 	return out
+}
+
+// walkthroughStatus derives a walkthrough's top-level status (ADR-0055)
+// from plan: "complete" exactly when no entry remains "next" or
+// "escalate" (equivalently, every entry is "done", or plan is empty),
+// "in_progress" otherwise. Non-terminal: since plan's own derivation
+// already folds the latest report per leaf (ADR-0053), a later
+// correction that reopens an already-done leaf naturally moves this
+// back to "in_progress" too — nothing new to compute.
+func walkthroughStatus(plan []reasoning.PlanEntry) string {
+	for _, e := range plan {
+		if e.Status == "next" || e.Status == "escalate" {
+			return "in_progress"
+		}
+	}
+	return "complete"
 }
