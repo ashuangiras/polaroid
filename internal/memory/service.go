@@ -214,11 +214,44 @@ type Store interface {
 // Service implements Polaroid's procedure operations on top of a Store.
 type Service struct {
 	store Store
+	// walkthroughs backs ListWalkthroughs/GetWalkthrough (ADR-0056), the
+	// operator-facing surface for walkthroughs (ADR-0053), which use the
+	// narrower WalkthroughStore, not Store. Set automatically in
+	// NewService when store happens to also implement it (every real
+	// *sqlite.Store does); nil for a Store double that does not, in
+	// which case those two operations report an internal error rather
+	// than panic — a configuration gap this package cannot reach in
+	// production, where cmd/polaroidd always wires a real store.
+	walkthroughs *Walkthroughs
 }
 
 // NewService returns a Service that keeps its records in store.
 func NewService(store Store) *Service {
-	return &Service{store: store}
+	s := &Service{store: store}
+	if ws, ok := store.(WalkthroughStore); ok {
+		s.walkthroughs = NewWalkthroughs(ws)
+	}
+	return s
+}
+
+// ListWalkthroughs returns the walkthroughs f selects, for an operator
+// (ADR-0056); see Walkthroughs.List.
+func (s *Service) ListWalkthroughs(ctx context.Context, f WalkthroughFilter) ([]WalkthroughState, string, error) {
+	if s.walkthroughs == nil {
+		return nil, "", errors.New("walkthrough storage is not available")
+	}
+	return s.walkthroughs.List(ctx, f)
+}
+
+// GetWalkthrough returns one walkthrough's current state, for an
+// operator (ADR-0056); see Walkthroughs.State. This is a read-only peek:
+// it does not reset the walkthrough's own sliding TTL (ADR-0053) —
+// visibility only, never a write.
+func (s *Service) GetWalkthrough(ctx context.Context, token string) (WalkthroughState, error) {
+	if s.walkthroughs == nil {
+		return WalkthroughState{}, errors.New("walkthrough storage is not available")
+	}
+	return s.walkthroughs.State(ctx, token)
 }
 
 // CreateProcedure creates a procedure with a new stable ID and stores in.Definition

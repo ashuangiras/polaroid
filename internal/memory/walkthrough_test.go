@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 )
@@ -76,6 +77,25 @@ func (f *fakeWalkthroughStore) DeleteWalkthrough(_ context.Context, token string
 	delete(f.events, token)
 	f.deleted = append(f.deleted, token)
 	return nil
+}
+
+// AllWalkthroughEvents implements WalkthroughStore, mirroring the real
+// store's "ORDER BY token, id" contract: every token's events contiguous,
+// oldest first within it, tokens in sorted order (deterministic for
+// tests; the real store's order is whatever SQLite's index gives, not
+// necessarily sorted, but List folds per token regardless of order
+// across tokens).
+func (f *fakeWalkthroughStore) AllWalkthroughEvents(_ context.Context) ([]WalkthroughEvent, error) {
+	tokens := make([]string, 0, len(f.events))
+	for t := range f.events {
+		tokens = append(tokens, t)
+	}
+	slices.Sort(tokens)
+	var all []WalkthroughEvent
+	for _, t := range tokens {
+		all = append(all, f.events[t]...)
+	}
+	return all, nil
 }
 
 func TestWalkthroughsStartAndAdvance(t *testing.T) {
@@ -243,5 +263,144 @@ func TestWalkthroughsCloseAlreadyClosedOrExpiredIsNotFound(t *testing.T) {
 	// Never existed.
 	if err := w.Close(ctx, "never-created"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("closing an unknown token must be ErrNotFound, got %v", err)
+	}
+}
+
+// blocked, reason, operator Status and List (ADR-0056, issue #163).
+
+func TestWalkthroughsAdvanceBlockedWithReason(t *testing.T) {
+	store := newFakeWalkthroughStore()
+	w := &Walkthroughs{store: store, now: time.Now, ttl: time.Hour}
+	ctx := context.Background()
+	st, err := w.Start(ctx, "goal.key", "snap1", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err = w.Advance(ctx, st.Token, &WalkthroughOutcome{Key: "step.a", Status: WalkthroughBlocked, Reason: "check.vet's required tool is not installed"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Statuses["step.a"] != WalkthroughBlocked {
+		t.Fatalf("statuses = %v", st.Statuses)
+	}
+	if st.Reasons["step.a"] != "check.vet's required tool is not installed" {
+		t.Fatalf("reasons = %v", st.Reasons)
+	}
+	// A later done clears it, folded exactly like escalate already is.
+	st, err = w.Advance(ctx, st.Token, &WalkthroughOutcome{Key: "step.a", Status: WalkthroughDone}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Statuses["step.a"] != WalkthroughDone {
+		t.Fatalf("a later done must override an earlier blocked: %v", st.Statuses)
+	}
+}
+
+func TestWalkthroughStateOperatorStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		statuses map[string]WalkthroughOutcomeStatus
+		want     string
+	}{
+		{"nothing reported", nil, WalkthroughOperatorActive},
+		{"every leaf done", map[string]WalkthroughOutcomeStatus{"a": WalkthroughDone, "b": WalkthroughSkipped}, WalkthroughOperatorActive},
+		{"one escalated", map[string]WalkthroughOutcomeStatus{"a": WalkthroughDone, "b": WalkthroughEscalate}, WalkthroughOperatorEscalate},
+		{"one blocked", map[string]WalkthroughOutcomeStatus{"a": WalkthroughEscalate, "b": WalkthroughBlocked}, WalkthroughOperatorBlocked},
+	} {
+		st := WalkthroughState{Statuses: tc.statuses}
+		if got := st.Status(); got != tc.want {
+			t.Errorf("%s: Status() = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestWalkthroughsListFiltersAndPaginates(t *testing.T) {
+	store := newFakeWalkthroughStore()
+	now := time.Now()
+	w := &Walkthroughs{store: store, now: func() time.Time { return now }, ttl: time.Hour}
+	ctx := context.Background()
+
+	a, err := w.Start(ctx, "goal.a", "snap1", "github.com/a/b", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	b, err := w.Start(ctx, "goal.b", "snap1", "github.com/other", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	if _, err := w.Advance(ctx, a.Token, &WalkthroughOutcome{Key: "step.a", Status: WalkthroughBlocked}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	all, next, err := w.List(ctx, WalkthroughFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 || next != "" || all[0].Token != a.Token || all[1].Token != b.Token {
+		t.Fatalf("list = %+v (want a, then b, oldest first)", all)
+	}
+
+	byRepo, _, err := w.List(ctx, WalkthroughFilter{Repository: "github.com/other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byRepo) != 1 || byRepo[0].Token != b.Token {
+		t.Fatalf("by repository = %+v", byRepo)
+	}
+
+	byGoal, _, err := w.List(ctx, WalkthroughFilter{Goal: "goal.a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byGoal) != 1 || byGoal[0].Token != a.Token {
+		t.Fatalf("by goal = %+v", byGoal)
+	}
+
+	byStatus, _, err := w.List(ctx, WalkthroughFilter{Status: WalkthroughOperatorBlocked})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byStatus) != 1 || byStatus[0].Token != a.Token {
+		t.Fatalf("by status = %+v", byStatus)
+	}
+
+	page, cursor, err := w.List(ctx, WalkthroughFilter{Page: Page{Limit: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page) != 1 || page[0].Token != a.Token || cursor == "" {
+		t.Fatalf("first page = %+v, cursor %q", page, cursor)
+	}
+	page2, cursor2, err := w.List(ctx, WalkthroughFilter{Page: Page{Limit: 1, After: cursor}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page2) != 1 || page2[0].Token != b.Token || cursor2 != "" {
+		t.Fatalf("second page = %+v, cursor %q", page2, cursor2)
+	}
+}
+
+func TestWalkthroughsListSweepsExpiredOnes(t *testing.T) {
+	store := newFakeWalkthroughStore()
+	now := time.Now()
+	w := &Walkthroughs{store: store, now: func() time.Time { return now }, ttl: time.Minute}
+	ctx := context.Background()
+	st, err := w.Start(ctx, "goal.key", "snap1", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Minute) // past the 1-minute TTL
+
+	list, _, err := w.List(ctx, WalkthroughFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("an expired walkthrough must not be listed: %+v", list)
+	}
+	if len(store.deleted) != 1 || store.deleted[0] != st.Token {
+		t.Fatalf("List must sweep an expired walkthrough it finds: deleted = %v", store.deleted)
 	}
 }

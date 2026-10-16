@@ -762,3 +762,63 @@ func TestWalkthroughAdvanceCloseAlreadyClosedIsNotFound(t *testing.T) {
 		t.Fatalf("closing an already-closed token must be not_found: %v", res)
 	}
 }
+
+// A blocked status, with a reason, and expand (ADR-0056, issue #163),
+// exercised over real HTTP at /mcp/agent/v3.
+
+func TestWalkthroughAdvanceBlockedWithReason(t *testing.T) {
+	agent := newKnowledgeHarnessV3(t)
+	planFixture(t, agent)
+	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"plan.parent"}`))
+	token := start["token"].(string)
+
+	res := decodeJSON(t, agent.ok(t, "advance", `{"token":"`+token+`","outcome":{"key":"plan.x","status":"blocked","reason":"missing required tool"}}`))
+	plan := res["plan"].([]any)
+	if plan[0].(map[string]any)["status"] != "blocked" {
+		t.Fatalf("plan.x must report blocked: %v", plan)
+	}
+	if res["status"] != "in_progress" {
+		t.Fatalf("status = %v, want in_progress (a blocked leaf is not done)", res["status"])
+	}
+}
+
+func TestWalkthroughAdvanceInvalidStatusIsInvalidRequest(t *testing.T) {
+	agent := newKnowledgeHarnessV3(t)
+	planFixture(t, agent)
+	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"plan.parent"}`))
+	token := start["token"].(string)
+
+	res := agent.call(t, "advance", `{"token":"`+token+`","outcome":{"key":"plan.x","status":"pending"}}`)
+	if !res.IsError || !strings.Contains(res.Content[0].(*sdk.TextContent).Text, `"invalid_request"`) {
+		t.Fatalf("an unknown status must be invalid_request: %v", res)
+	}
+}
+
+func TestWalkthroughStartExpandAttachesNestedChildren(t *testing.T) {
+	agent := newKnowledgeHarnessV3(t)
+	deepPlanFixture(t, agent)
+	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"deep.goal","expand":true}`))
+	plan := start["plan"].([]any)
+	entry := plan[0].(map[string]any)
+	if entry["key"] != "deep.a" || entry["status"] != "next" {
+		t.Fatalf("expand's top level must match the non-expand plan: %v", plan)
+	}
+	children := entry["children"].([]any)
+	if len(children) != 1 || children[0].(map[string]any)["key"] != "deep.b" || children[0].(map[string]any)["status"] != "pending" {
+		t.Fatalf("deep.a's children = %v, want deep.b pending", children)
+	}
+}
+
+func TestWalkthroughAdvanceExpandReflectsReportedChild(t *testing.T) {
+	agent := newKnowledgeHarnessV3(t)
+	deepPlanFixture(t, agent)
+	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"deep.goal"}`))
+	token := start["token"].(string)
+
+	res := decodeJSON(t, agent.ok(t, "advance", `{"token":"`+token+`","outcome":{"path":["deep.a","deep.b"],"status":"done"},"expand":true}`))
+	plan := res["plan"].([]any)
+	children := plan[0].(map[string]any)["children"].([]any)
+	if len(children) != 1 || children[0].(map[string]any)["key"] != "deep.b" || children[0].(map[string]any)["status"] != "done" {
+		t.Fatalf("expand must reflect the reported child's own status: %v", children)
+	}
+}

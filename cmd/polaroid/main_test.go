@@ -31,6 +31,16 @@ const reviseJSON = `{"base_version":1,"version":{"philosophy":"p","method":"m",`
 // newServer runs the real API over a real SQLite file and returns its URL.
 func newServer(t *testing.T) string {
 	t.Helper()
+	url, _ := newServerAndStore(t)
+	return url
+}
+
+// newServerAndStore is like newServer, but also returns the backing store,
+// for tests that need to seed data no CLI command creates — a
+// guided-procedure walkthrough is only ever started by /mcp/agent/v3's
+// start (ADR-0053), not this CLI.
+func newServerAndStore(t *testing.T) (string, *sqlite.Store) {
+	t.Helper()
 	store, err := sqlite.Open(context.Background(), filepath.Join(t.TempDir(), "polaroid.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -38,7 +48,7 @@ func newServer(t *testing.T) string {
 	t.Cleanup(func() { _ = store.Close() })
 	srv := httptest.NewServer(httptransport.NewHandler(memory.NewService(store), slog.New(slog.NewTextHandler(io.Discard, nil))))
 	t.Cleanup(srv.Close)
-	return srv.URL
+	return srv.URL, store
 }
 
 type result struct {
@@ -349,6 +359,56 @@ func TestFeedbackCommands(t *testing.T) {
 	}
 	if r := cli("", nil, "-server", server, "resolve-feedback"); r.code != exitUsage {
 		t.Fatalf("resolve-feedback without an ID: exit %d", r.code)
+	}
+}
+
+func TestWalkthroughCommands(t *testing.T) {
+	server, store := newServerAndStore(t)
+	w := memory.NewWalkthroughs(store)
+	active, err := w.Start(context.Background(), "goal.a", "snap-1", "repo-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked, err := w.Start(context.Background(), "goal.b", "snap-1", "repo-2", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Advance(context.Background(), blocked.Token, &memory.WalkthroughOutcome{
+		Key: "step", Status: memory.WalkthroughBlocked, Reason: "missing required tool",
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	got := cli("", nil, "-server", server, "get-walkthrough", blocked.Token)
+	mustSucceed(t, got)
+	if !strings.Contains(got.stdout, `"status":"blocked"`) || !strings.Contains(got.stdout, `"reason":"missing required tool"`) {
+		t.Fatalf("get-walkthrough = %s", got.stdout)
+	}
+
+	all := cli("", nil, "-server", server, "walkthroughs")
+	mustSucceed(t, all)
+	if !strings.Contains(all.stdout, active.Token) || !strings.Contains(all.stdout, blocked.Token) {
+		t.Fatalf("walkthroughs = %s, want both tokens", all.stdout)
+	}
+	byStatus := cli("", nil, "-server", server, "walkthroughs", "status=blocked")
+	mustSucceed(t, byStatus)
+	if !strings.Contains(byStatus.stdout, blocked.Token) || strings.Contains(byStatus.stdout, active.Token) {
+		t.Fatalf("walkthroughs status=blocked = %s, want only the blocked one", byStatus.stdout)
+	}
+	byRepo := cli("", nil, "-server", server, "walkthroughs", "repository=repo-1")
+	mustSucceed(t, byRepo)
+	if !strings.Contains(byRepo.stdout, active.Token) || strings.Contains(byRepo.stdout, blocked.Token) {
+		t.Fatalf("walkthroughs repository=repo-1 = %s, want only repo-1's walkthrough", byRepo.stdout)
+	}
+
+	if r := cli("", nil, "-server", server, "get-walkthrough", "never-started"); r.code != exitFailure || !strings.Contains(r.stderr, "not_found") {
+		t.Fatalf("get-walkthrough of an unknown token: exit %d, %s", r.code, r.stderr)
+	}
+	if r := cli("", nil, "-server", server, "walkthroughs", "status=done"); r.code != exitFailure || !strings.Contains(r.stdout, `"field":"status"`) {
+		t.Fatalf("walkthroughs with an invalid status: exit %d, %s", r.code, r.stdout)
+	}
+	if r := cli("", nil, "-server", server, "get-walkthrough"); r.code != exitUsage {
+		t.Fatalf("get-walkthrough without a token: exit %d", r.code)
 	}
 }
 

@@ -147,11 +147,11 @@ note "The raw request behind \`post server/discover\`:" '```http' \
 
 ########################################################################
 section "Tool catalogue" \
-	"40 tools mirror the HTTP API one-to-one. 25 only read (including \`discover_procedures\` and \`suggest_duplicates\`, which store nothing, \`get_catalog_statistics\`, and \`prepare_execution\`, a compact, dependency-ordered execution plan) and are annotated \`readOnlyHint\`; 15 write (create/revise procedure, record procedure origin, register repository, add repository alias, create/revise binding, record execution, report feedback, resolve feedback, create/revise toil item, invalidate execution, retire/reactivate procedure) and are annotated non-destructive (they only append). Every tool advertises a JSON Schema generated from its argument type: flat arguments named after record fields, optional ones not required." \
+	"42 tools mirror the HTTP API one-to-one. 27 only read (including \`discover_procedures\` and \`suggest_duplicates\`, which store nothing, \`get_catalog_statistics\`, \`prepare_execution\`, a compact, dependency-ordered execution plan, and \`list_walkthroughs\`/\`get_walkthrough\`, an operator's read-only visibility into guided-procedure walkthroughs) and are annotated \`readOnlyHint\`; 15 write (create/revise procedure, record procedure origin, register repository, add repository alias, create/revise binding, record execution, report feedback, resolve feedback, create/revise toil item, invalidate execution, retire/reactivate procedure) and are annotated non-destructive (they only append). Every tool advertises a JSON Schema generated from its argument type: flat arguments named after record fields, optional ones not required." \
 	"An MCP client lists tools automatically. By hand: \`post tools/list \"\" \"\"\`."
 show 'post tools/list "" "" | jq -c "[.result.tools[] | {name, readOnly: .annotations.readOnlyHint, destructive: .annotations.destructiveHint, required: .inputSchema.required}]" | jq -c ".[]"'
-check "40 tools" equal "$(wc -l <<<"$LAST" | tr -d ' ')" 40
-check "25 read-only tools" equal "$(grep -c '"readOnly":true' <<<"$LAST")" 25
+check "42 tools" equal "$(wc -l <<<"$LAST" | tr -d ' ')" 42
+check "27 read-only tools" equal "$(grep -c '"readOnly":true' <<<"$LAST")" 27
 check "the 15 write tools are marked non-destructive" equal "$(grep -c '"readOnly":false,"destructive":false' <<<"$LAST")" 15
 show 'post tools/list "" "" | jq ".result.tools[] | select(.name == \"get_graph\") | .inputSchema"'
 check "get_graph requires procedure_id and version; repository and environment are optional" out_has '"required": ['
@@ -550,10 +550,10 @@ await client.close().catch(() => {});
 EOF
 show '(cd "$TSDIR" && node probe.mjs "$URL/mcp")'
 check "TypeScript SDK 1.32.1 connects at 2025-11-25, without a session" out_has "negotiated: 2025-11-25 session: none"
-check "...lists all 40 tools" out_has "connected; tools: 40"
+check "...lists all 42 tools" out_has "connected; tools: 42"
 check "...and records feedback" out_has "report_feedback: ts.sdk"
 show '(cd "$TSDIR" && npx --no-install mcp-inspector --cli "$URL/mcp" --transport http --method tools/list 2>/dev/null | jq -c "[.tools[].name] | length")'
-check "MCP Inspector 2.10.1 lists the 40 tools" equal "$LAST" 40
+check "MCP Inspector 2.10.1 lists the 42 tools" equal "$LAST" 42
 fi
 VSCODE_GITHUB="/Applications/Visual Studio Code.app/Contents/Resources/app/node_modules.asar.unpacked/@github"
 if [[ "${E2E_INTEROP:-1}" == 0 ]]; then

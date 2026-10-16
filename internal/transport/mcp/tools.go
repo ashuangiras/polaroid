@@ -188,6 +188,17 @@ type (
 		pageArgs
 		snapshotArgs
 	}
+	// listWalkthroughsArgs is an operator's list_walkthroughs (ADR-0056),
+	// on this legacy surface, not /mcp/agent/v3.
+	listWalkthroughsArgs struct {
+		Repository string `json:"repository,omitzero" jsonschema:"only walkthroughs stored with this repository identifier"`
+		Goal       string `json:"goal,omitzero" jsonschema:"only walkthroughs for this goal"`
+		Status     string `json:"status,omitzero" jsonschema:"only walkthroughs with this coarse status: active, escalate or blocked; omitted lists every one. Coarser than /mcp/agent/v3's own in_progress/complete: this surface has no access to the composition tree, so active also covers an already fully done walkthrough"`
+		pageArgs
+	}
+	walkthroughRef struct {
+		Token string `json:"token"`
+	}
 )
 
 func (a pageArgs) page() memory.Page {
@@ -458,6 +469,7 @@ func (t *tools) register(s *sdk.Server) {
 		})
 	t.registerToil(s)
 	t.registerLifecycle(s)
+	t.registerWalkthroughs(s)
 	add(s, t, "get_catalog_statistics", "Read-only statistics of the whole catalog (statistics_version 1): record counts (identities, their revisions and relationship records), "+
 		"procedures by lifecycle and scope, executions by recorded outcome and by evidence status (an outcome is not verification), toil items by latest status, "+
 		"logical byte sizes of the stored JSON payloads (count, total, mean, max), database pages and file sizes, and write_limits: the byte limit of every bounded field of a write and of the whole write. "+
@@ -585,4 +597,25 @@ func flatten(err error, prefix string) error {
 		out.Problems[i].Field = strings.TrimPrefix(out.Problems[i].Field, prefix)
 	}
 	return out
+}
+
+// registerWalkthroughs adds an operator's read-only visibility into
+// guided-procedure walkthroughs (ADR-0056): list_walkthroughs and
+// get_walkthrough, on this legacy surface, not /mcp/agent/v3's own
+// start/advance (registered separately, at v3 only; see agent.go).
+func (t *tools) registerWalkthroughs(s *sdk.Server) {
+	const read = true
+	add(s, t, "list_walkthroughs", "List guided-procedure walkthroughs an agent has started with /mcp/agent/v3's start, oldest first, optionally by repository, goal and status. "+
+		"status is active, escalate or blocked (coarser than start/advance's own in_progress/complete: this surface cannot see the composition tree, so active also covers an already fully done walkthrough). "+
+		"A walkthrough not touched again within its TTL is gone; this never lists one already expired or closed.", read,
+		func(ctx context.Context, in listWalkthroughsArgs) (any, error) {
+			states, next, err := t.svc.ListWalkthroughs(ctx, memory.WalkthroughFilter{Repository: in.Repository, Goal: in.Goal, Status: in.Status, Page: in.page()})
+			return wire.NewWalkthroughList(states, next), err
+		})
+	add(s, t, "get_walkthrough", "Get one guided-procedure walkthrough's current state: which keys have a reported outcome, and (for a blocked one) why, by token. "+
+		"A read-only peek: it does not reset the walkthrough's own TTL the way /mcp/agent/v3's advance does.", read,
+		func(ctx context.Context, in walkthroughRef) (any, error) {
+			st, err := t.svc.GetWalkthrough(ctx, in.Token)
+			return wire.NewWalkthrough(st), err
+		})
 }

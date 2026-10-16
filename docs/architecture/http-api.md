@@ -1,6 +1,6 @@
 # HTTP API (v1)
 
-This page is the contract of the API that `polaroidd` serves. It covers only what is implemented: procedure identity and immutable versions with subprocedure references and applicability, lexical procedure discovery and duplicate suggestions, the repository registry, repository bindings with immutable revisions, execution records, feedback reports, toil items with append-only revisions, the catalog lifecycle: execution-evidence invalidation and procedure retirement, and read-only catalog statistics. Field rules are defined in [records.md](records.md). The same operations are available to MCP clients at `/mcp`; see [mcp.md](mcp.md).
+This page is the contract of the API that `polaroidd` serves. It covers only what is implemented: procedure identity and immutable versions with subprocedure references and applicability, lexical procedure discovery and duplicate suggestions, the repository registry, repository bindings with immutable revisions, execution records, feedback reports, toil items with append-only revisions, the catalog lifecycle: execution-evidence invalidation and procedure retirement, read-only catalog statistics, and an operator's read-only visibility into guided-procedure walkthroughs. Field rules are defined in [records.md](records.md). The same operations are available to MCP clients at `/mcp`; see [mcp.md](mcp.md).
 
 - **Base URL:** `http://127.0.0.1:7417` by default (`polaroidd -addr`).
 - **Bodies:** every request and response body is UTF-8 JSON. Requests with a body must send `Content-Type: application/json` and stay under 1 MiB. Each stored field also has a [size limit](#write-limits).
@@ -54,6 +54,8 @@ This page is the contract of the API that `polaroidd` serves. It covers only wha
 | `GET /v1/toil-items/{id}/revisions/{n}` | `200` toil revision | One revision. |
 | `POST /v1/toil-items/{id}/revisions` | `201` toil revision, with a `Location` header | Append a revision derived from `base_revision`. |
 | `GET /v1/statistics` | `200` statistics | [Catalog statistics](#catalog-statistics): counts, payload sizes and storage. Read-only; takes no parameters. |
+| `GET /v1/walkthroughs[?repository=…][&goal=…][&status=…][&limit=…&after=…]` | `200 {"walkthroughs":[...]}` | [An operator's read-only visibility](#guided-procedure-walkthroughs) into guided-procedure walkthroughs, oldest first. |
+| `GET /v1/walkthroughs/{token}` | `200` walkthrough | One walkthrough's current state. |
 
 `HEAD` is accepted wherever `GET` is.
 
@@ -522,6 +524,28 @@ Content-Type: application/json
 - `GET /v1/toil-items` lists summaries. Its filters apply to each item's latest revision: `status`; `repository`, an identifier, for shared items and items local to the repository it belongs to (aliases included; an unregistered identifier sees shared items only); `procedure_id`, items whose sources cite that procedure at any version (an unknown ID matches nothing). With `limit`, `after` and `snapshot` as [above](#discovery-filters-and-pages). An invalid `status` or `repository` is `400`.
 - An unknown item, key or revision is `404`.
 
+### Guided-procedure walkthroughs
+
+An operator's read-only visibility into guided-procedure walkthroughs ([ADR-0056](decisions/0056-walkthrough-visibility-and-status.md)): agents run through a procedure's composed steps one at a time with `/mcp/agent/v3`'s `start` and `advance`, documented in [mcp.md](mcp.md#agent-mode-v3-mcpagentv3); this is the legacy, non-agent surface's own view of the same stored state, not another way to run one. `internal/archtest` keeps this surface (and its MCP equivalent) free of `internal/knowledge`, so its `status` is deliberately coarser than `start`/`advance`'s own `in_progress`/`complete`, which that composition tree alone can derive:
+
+```http
+GET /v1/walkthroughs/{token}
+```
+
+```json
+{
+  "token": "0192f7e4-…", "goal": "dev.change.verify", "snapshot": "…", "repository": "github.com/ashuangiras/polaroid",
+  "context": {}, "status": "blocked", "created_at": "2026-10-12T13:00:00Z", "expires_at": "2026-10-13T09:00:00Z",
+  "leaves": [{"key": "gate.make-check", "status": "blocked", "reason": "golangci-lint is not installed"}]
+}
+```
+
+- `status` is `active` (nothing currently stuck — which also covers an already fully done walkthrough, indistinguishable at this layer without the tree), `escalate` (a leaf is currently escalated) or `blocked` (a leaf is currently blocked; takes priority over `escalate` when both occur).
+- `leaves` lists every key an outcome has been reported for, sorted by key (the fold keeps no reporting order): `key` is the raw string the walkthrough stores, opaque to this surface — for a multi-level outcome ([ADR-0054](decisions/0054-multi-level-plans.md)) it is the full path joined with `/`, not parsed back into an array; `reason` and `note` are each omitted when never reported for that key.
+- `repository` is omitted when the walkthrough was started without one; `context` is always present, `{}` when none was given.
+- `GET /v1/walkthroughs/{token}` is a read-only peek: unlike `advance`, it never resets the walkthrough's own sliding TTL. An unknown or expired token is `404`, the same as `/mcp/agent/v3`.
+- `GET /v1/walkthroughs` lists every one, oldest first (by when it was started), filtered by `repository`, `goal` and `status`, with `limit` and `after` as [above](#discovery-filters-and-pages) (no `snapshot`: walkthroughs are not kept forever, unlike every paginated list before this one). An invalid `status` or `repository` is `400`.
+
 ### Execution-evidence invalidation
 
 An execution that did not do what its version claims, for example one recorded against the wrong version, is withdrawn as evidence without changing it ([ADR-0035](decisions/0035-evidence-invalidation-and-procedure-retirement.md), [records.md](records.md#execution-evidence-invalidation-implemented)).
@@ -766,6 +790,8 @@ Error codes on this surface (same envelope as [Errors](#errors) above): `401 una
 | `polaroid get-toil-revision ID N` | `GET /v1/toil-items/{id}/revisions/{n}` |
 | `polaroid revise-toil-item ID [FILE]` | `POST /v1/toil-items/{id}/revisions` |
 | `polaroid statistics` | `GET /v1/statistics` |
+| `polaroid walkthroughs [NAME=VALUE...]` | `GET /v1/walkthroughs[?…]` |
+| `polaroid get-walkthrough TOKEN` | `GET /v1/walkthroughs/{token}` |
 | `polaroid knowledge-status` | `GET /v1/knowledge/status` |
 | `polaroid knowledge-publish [FILE]` | `POST /v1/knowledge/publications` |
 | `polaroid knowledge-rollback [FILE]` | `POST /v1/knowledge/rollbacks` |
