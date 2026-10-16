@@ -58,7 +58,7 @@ func (g *Guide) Start(ctx context.Context, in wire.WalkthroughStartRequest) (wir
 	if err != nil {
 		return wire.WalkthroughResult{}, classify(err)
 	}
-	plan, err := reasoning.PlanTree(cat, goal, noOutcomesYet)
+	plan, err := planFor(cat, goal, noOutcomesYet, in.Expand)
 	if err != nil {
 		return wire.WalkthroughResult{}, classify(err)
 	}
@@ -105,7 +105,7 @@ func (g *Guide) Advance(ctx context.Context, in wire.WalkthroughAdvanceRequest) 
 	if err != nil {
 		return wire.WalkthroughResult{}, classify(err)
 	}
-	plan, err := reasoning.PlanTree(cat, goal, leafStatusFrom(state.Statuses))
+	plan, err := planFor(cat, goal, leafStatusFrom(state.Statuses), in.Expand)
 	if err != nil {
 		return wire.WalkthroughResult{}, classify(err)
 	}
@@ -149,11 +149,11 @@ func decodeWalkthroughOutcome(cat *knowledge.Catalog, goal *knowledge.Record, in
 	}
 	status := memory.WalkthroughOutcomeStatus(in.Status)
 	switch status {
-	case memory.WalkthroughDone, memory.WalkthroughSkipped, memory.WalkthroughEscalate:
+	case memory.WalkthroughDone, memory.WalkthroughSkipped, memory.WalkthroughEscalate, memory.WalkthroughBlocked:
 	default:
-		return nil, invalidField("outcome.status", "must be done, skipped or escalate")
+		return nil, invalidField("outcome.status", "must be done, skipped, escalate or blocked")
 	}
-	return &memory.WalkthroughOutcome{Key: encodePath(path), Status: status, Note: in.Note}, nil
+	return &memory.WalkthroughOutcome{Key: encodePath(path), Status: status, Note: in.Note, Reason: in.Reason}, nil
 }
 
 // outcomePath normalizes in's key/path shorthand (ADR-0054) into one
@@ -199,7 +199,8 @@ func checkLeafPath(cat *knowledge.Catalog, goal *knowledge.Record, path []string
 func noOutcomesYet([]string) reasoning.LeafStatus { return reasoning.LeafStatus{} }
 
 // leafStatusFrom adapts a walkthrough's flat, path-keyed fold (ADR-0053,
-// ADR-0054) into reasoning.PlanTree's leaf-status lookup.
+// ADR-0054, ADR-0056) into reasoning.PlanTree's/ExpandTree's leaf-status
+// lookup.
 func leafStatusFrom(statuses map[string]memory.WalkthroughOutcomeStatus) func([]string) reasoning.LeafStatus {
 	return func(path []string) reasoning.LeafStatus {
 		switch statuses[encodePath(path)] {
@@ -207,21 +208,40 @@ func leafStatusFrom(statuses map[string]memory.WalkthroughOutcomeStatus) func([]
 			return reasoning.LeafStatus{Done: true}
 		case memory.WalkthroughEscalate:
 			return reasoning.LeafStatus{Escalate: true}
+		case memory.WalkthroughBlocked:
+			return reasoning.LeafStatus{Blocked: true}
 		default:
 			return reasoning.LeafStatus{}
 		}
 	}
 }
 
-// newWalkthroughResult builds a WalkthroughResult from st and plan.
 // newWalkthroughResult builds a WalkthroughResult from st and plan,
 // deriving status (ADR-0055).
 func newWalkthroughResult(st memory.WalkthroughState, plan []reasoning.PlanEntry) wire.WalkthroughResult {
 	out := wire.WalkthroughResult{Token: st.Token, Snapshot: st.Snapshot, Status: walkthroughStatus(plan)}
-	for _, e := range plan {
-		out.Plan = append(out.Plan, wire.KnowledgePlanEntry{Key: e.Key, Status: e.Status, Path: e.Path})
+	out.Plan = newPlanEntries(plan)
+	return out
+}
+
+// newPlanEntries converts a plan, recursively (ADR-0056's expand).
+func newPlanEntries(plan []reasoning.PlanEntry) []wire.KnowledgePlanEntry {
+	if plan == nil {
+		return nil
+	}
+	out := make([]wire.KnowledgePlanEntry, len(plan))
+	for i, e := range plan {
+		out[i] = wire.KnowledgePlanEntry{Key: e.Key, Status: e.Status, Path: e.Path, Children: newPlanEntries(e.Children)}
 	}
 	return out
+}
+
+// planFor resolves goal's plan, expanded (ADR-0056) when expand is true.
+func planFor(cat *knowledge.Catalog, goal *knowledge.Record, leafStatus func([]string) reasoning.LeafStatus, expand bool) ([]reasoning.PlanEntry, error) {
+	if expand {
+		return reasoning.ExpandTree(cat, goal, leafStatus)
+	}
+	return reasoning.PlanTree(cat, goal, leafStatus)
 }
 
 // walkthroughStatus derives a walkthrough's top-level status (ADR-0055)
@@ -233,7 +253,7 @@ func newWalkthroughResult(st memory.WalkthroughState, plan []reasoning.PlanEntry
 // back to "in_progress" too — nothing new to compute.
 func walkthroughStatus(plan []reasoning.PlanEntry) string {
 	for _, e := range plan {
-		if e.Status == "next" || e.Status == "escalate" {
+		if e.Status == "next" || e.Status == "escalate" || e.Status == "blocked" {
 			return "in_progress"
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 	"uuid"
 )
@@ -16,25 +17,38 @@ const (
 	WalkthroughDone     WalkthroughOutcomeStatus = "done"
 	WalkthroughSkipped  WalkthroughOutcomeStatus = "skipped"
 	WalkthroughEscalate WalkthroughOutcomeStatus = "escalate"
+	// WalkthroughBlocked is agent-reported testimony that an external,
+	// technical precondition is not met (ADR-0056) — never something
+	// Polaroid itself derives: the reasoning kernel is open-world and
+	// never infers a fact is false merely because it was not asserted
+	// (internal/reasoning/datalog). Kept distinct from WalkthroughEscalate
+	// so a reader can tell "waiting on a person's judgment" apart from
+	// "waiting on an external, technical precondition." Freezes next the
+	// same way escalate does.
+	WalkthroughBlocked WalkthroughOutcomeStatus = "blocked"
 )
 
 func validWalkthroughStatus(s WalkthroughOutcomeStatus) bool {
 	switch s {
-	case WalkthroughDone, WalkthroughSkipped, WalkthroughEscalate:
+	case WalkthroughDone, WalkthroughSkipped, WalkthroughEscalate, WalkthroughBlocked:
 		return true
 	}
 	return false
 }
 
 // ErrInvalidOutcome reports an outcome whose key is empty or whose status
-// is not one of done, skipped or escalate.
+// is not one of done, skipped, escalate or blocked.
 var ErrInvalidOutcome = errors.New("invalid outcome")
 
 // WalkthroughOutcome is one leaf's reported outcome, given to Advance.
+// Reason is free text specific to a blocked report (ADR-0056, for example
+// "precondition check.vet's required tool is not installed"), though
+// nothing refuses it alongside another status.
 type WalkthroughOutcome struct {
 	Key    string
 	Status WalkthroughOutcomeStatus
 	Note   string
+	Reason string
 }
 
 // WalkthroughEvent is one row of a walkthrough's append-only event log:
@@ -55,22 +69,69 @@ type WalkthroughEvent struct {
 // Snapshot and Repository from its creating event; Statuses from the
 // outcome last reported per key (a later report for the same key
 // overrides an earlier one: a fold, not a union, and not "latest row
-// wins" the way other append-only tables in this package work); Context
-// folded the same way, by name; ExpiresAt is the latest event's time plus
-// the TTL.
+// wins" the way other append-only tables in this package work); Reasons
+// and Notes folded the same way, by key (ADR-0056); Context folded the
+// same way, by name; CreatedAt is the creating event's own time, used to
+// order an operator's list_walkthroughs; ExpiresAt is the latest event's
+// time plus the TTL.
 type WalkthroughState struct {
 	Token      string
 	Goal       string
 	Snapshot   string
 	Repository string
 	Statuses   map[string]WalkthroughOutcomeStatus
+	Reasons    map[string]string
+	Notes      map[string]string
 	Context    map[string]string
+	CreatedAt  time.Time
 	ExpiresAt  time.Time
+}
+
+// WalkthroughActive, WalkthroughBlockedList and WalkthroughEscalated are
+// an operator's coarse view of a walkthrough's status (ADR-0056), derived
+// purely from its own per-leaf fold: "blocked" if any leaf is currently
+// blocked, "escalate" if any leaf is currently escalate (and none
+// blocked), "active" otherwise. Deliberately coarser than
+// /mcp/agent/v3's own in_progress/complete status (ADR-0055): that one is
+// derived from the full composition tree (reasoning.PlanTree), which
+// this legacy, operator-facing surface has no access to and must not —
+// internal/archtest already keeps internal/memory, internal/transport/http
+// and internal/transport/mcp free of internal/knowledge and
+// internal/knowledgeops, the same boundary every other milestone of this
+// initiative kept on the agent-mode side alone. "active" therefore covers
+// both a walkthrough with nothing currently stuck and one that may
+// already be entirely done — this surface cannot tell those apart
+// without the tree; an operator wanting that distinction reads
+// /mcp/agent/v3 with the agent's own token.
+const (
+	WalkthroughOperatorActive   = "active"
+	WalkthroughOperatorEscalate = "escalate"
+	WalkthroughOperatorBlocked  = "blocked"
+)
+
+// Status is this state's coarse, operator-facing status (ADR-0056); see
+// WalkthroughOperatorActive's doc comment for what it deliberately does
+// not, and cannot, mean.
+func (st WalkthroughState) Status() string {
+	escalated := false
+	for _, s := range st.Statuses {
+		switch s {
+		case WalkthroughBlocked:
+			return WalkthroughOperatorBlocked
+		case WalkthroughEscalate:
+			escalated = true
+		}
+	}
+	if escalated {
+		return WalkthroughOperatorEscalate
+	}
+	return WalkthroughOperatorActive
 }
 
 // WalkthroughStore is guided-procedure walkthroughs' storage contract
 // (ADR-0053), narrower than Store: append one event, read a token's
-// events oldest first, and delete every trace of a token. Only
+// events oldest first, read every token's events (for an operator's
+// list_walkthroughs, ADR-0056), and delete every trace of a token. Only
 // *sqlite.Store implements it; Walkthroughs is its only caller.
 type WalkthroughStore interface {
 	// AppendWalkthroughEvent stores ev.
@@ -78,6 +139,14 @@ type WalkthroughStore interface {
 	// WalkthroughEvents returns every event for token, oldest first, or
 	// ErrNotFound if none exists (never created, or already deleted).
 	WalkthroughEvents(ctx context.Context, token string) ([]WalkthroughEvent, error)
+	// AllWalkthroughEvents returns every event of every token, oldest
+	// first within each token, grouped by token (every event of one
+	// token is contiguous): the raw material for an operator's
+	// list_walkthroughs (ADR-0056), folded and filtered in this package,
+	// not in the store, since the expected scale (a handful of
+	// concurrent, ephemeral walkthroughs) does not justify pushing the
+	// fold into SQL.
+	AllWalkthroughEvents(ctx context.Context) ([]WalkthroughEvent, error)
 	// DeleteWalkthrough removes every event for token: no trace is kept
 	// (ADR-0053), unlike every other record in this package.
 	DeleteWalkthrough(ctx context.Context, token string) error
@@ -187,13 +256,16 @@ func (w *Walkthroughs) loadState(ctx context.Context, token string) ([]Walkthrou
 // event, Statuses and Context folded per key (the latest event naming a
 // key decides its current value), ExpiresAt from the latest event's time.
 func foldWalkthrough(events []WalkthroughEvent, ttl time.Duration) WalkthroughState {
-	st := WalkthroughState{Statuses: map[string]WalkthroughOutcomeStatus{}, Context: map[string]string{}}
+	st := WalkthroughState{Statuses: map[string]WalkthroughOutcomeStatus{}, Reasons: map[string]string{}, Notes: map[string]string{}, Context: map[string]string{}}
 	for _, ev := range events {
 		if ev.Goal != "" {
 			st.Token, st.Goal, st.Snapshot, st.Repository = ev.Token, ev.Goal, ev.Snapshot, ev.Repository
+			st.CreatedAt = ev.CreatedAt
 		}
 		if ev.Outcome != nil {
 			st.Statuses[ev.Outcome.Key] = ev.Outcome.Status
+			st.Reasons[ev.Outcome.Key] = ev.Outcome.Reason
+			st.Notes[ev.Outcome.Key] = ev.Outcome.Note
 		}
 		for k, v := range ev.Context {
 			st.Context[k] = v
@@ -201,4 +273,74 @@ func foldWalkthrough(events []WalkthroughEvent, ttl time.Duration) WalkthroughSt
 		st.ExpiresAt = ev.CreatedAt.Add(ttl)
 	}
 	return st
+}
+
+// WalkthroughFilter selects walkthroughs for an operator to list
+// (ADR-0056). Status is one of WalkthroughOperatorActive,
+// WalkthroughOperatorEscalate or WalkthroughOperatorBlocked; "" lists
+// every one.
+type WalkthroughFilter struct {
+	Repository string
+	Goal       string
+	Status     string
+	Page       Page
+}
+
+// List returns the walkthroughs f selects, oldest first (by when each was
+// started), and the cursor of the next page if there is one (ADR-0056).
+// An expired walkthrough found along the way is deleted outright, the
+// same as any other operation that happens to touch one, narrowing (but
+// not closing: one never listed or otherwise touched still lingers until
+// its own next access) the gap ADR-0053 already accepted of no background
+// sweep.
+func (w *Walkthroughs) List(ctx context.Context, f WalkthroughFilter) ([]WalkthroughState, string, error) {
+	var p problems
+	switch f.Status {
+	case "", WalkthroughOperatorActive, WalkthroughOperatorEscalate, WalkthroughOperatorBlocked:
+	default:
+		p.add("status", `must be "active", "escalate" or "blocked"`)
+	}
+	if f.Repository != "" {
+		checkRepository(&p, "repository", f.Repository)
+	}
+	g := newPager("walkthroughs", true, f.Page, f.Repository, f.Goal, f.Status)
+	after := g.start(&p)
+	if err := p.err(); err != nil {
+		return nil, "", err
+	}
+	events, err := w.store.AllWalkthroughEvents(ctx)
+	if err != nil {
+		return nil, "", fmt.Errorf("list walkthroughs: %w", err)
+	}
+	now := w.now()
+	var states []WalkthroughState
+	for i := 0; i < len(events); {
+		j := i + 1
+		for j < len(events) && events[j].Token == events[i].Token {
+			j++
+		}
+		st := foldWalkthrough(events[i:j], w.ttl)
+		if !st.ExpiresAt.After(now) {
+			_ = w.store.DeleteWalkthrough(ctx, st.Token)
+		} else if (f.Repository == "" || st.Repository == f.Repository) &&
+			(f.Goal == "" || st.Goal == f.Goal) &&
+			(f.Status == "" || st.Status() == f.Status) {
+			states = append(states, st)
+		}
+		i = j
+	}
+	slices.SortFunc(states, func(a, b WalkthroughState) int { return a.CreatedAt.Compare(b.CreatedAt) })
+	if after != nil {
+		i := 0
+		for i < len(states) {
+			c := states[i].CreatedAt.Compare(after.At)
+			if c > 0 || (c == 0 && states[i].Token > after.ID) {
+				break
+			}
+			i++
+		}
+		states = states[i:]
+	}
+	states, next := trim(f.Page, states, func(st WalkthroughState) string { return g.next("", st.CreatedAt, st.Token) })
+	return states, next, nil
 }

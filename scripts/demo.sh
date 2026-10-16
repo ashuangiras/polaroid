@@ -878,7 +878,7 @@ echo "4. reactivated: the history keeps both events, MCP returns the same docume
 
 step "27. Catalog statistics: one read-only summary of everything above (#96, ADR-0036; scripted regression evidence)"
 stats96="$(bin/polaroid statistics)"
-jq -e '.statistics_version == 1 and .storage.schema_version == 12 and (.procedures.by_lifecycle | add) == .records.procedures
+jq -e '.statistics_version == 1 and .storage.schema_version == 13 and (.procedures.by_lifecycle | add) == .records.procedures
 	and (.executions.by_outcome | add) == .records.executions and .executions.by_evidence_status.invalidated == .records.execution_invalidations
 	and .records.execution_invalidations >= 1 and .executions.valid_with_invalidated_child >= 1 and (.toil_items.by_status | add) == .records.toil_items
 	and .records.procedure_versions > .records.procedures and ([.. | strings | select(contains("/"))] == [])' <<<"$stats96" >/dev/null ||
@@ -969,7 +969,7 @@ jq -e --arg r "$legacy_repo" '.repository == "example.com/legacy/service" and .r
 jq -e --arg r "$legacy_repo" '.verified and .combination.repository == "example.com/legacy/service-renamed" and .combination.repository_id == $r' <<<"$(bin/polaroid verification legacy-e)" >/dev/null ||
 	fail "the legacy combination is not under the renamed repository's identity (ADR-0022)"
 legacy_run="$(bin/polaroid get-execution legacy-e)"
-jq -e '.storage.schema_version == 12 and .records.procedures == 1 and .records.executions == 1 and .records.feedback == 1
+jq -e '.storage.schema_version == 13 and .records.procedures == 1 and .records.executions == 1 and .records.feedback == 1
 	and .payloads.execution_evidence == {count: 1, total_bytes: 10, mean_bytes: 10, max_bytes: 10}' <<<"$(bin/polaroid statistics)" >/dev/null ||
 	fail "unexpected statistics of the upgraded database: $(bin/polaroid statistics)"
 stop_daemon
@@ -979,7 +979,7 @@ stop_daemon
 db=$demo_db
 echo "a schema-6 store upgraded: its procedure, execution, verification and report read back; registering a new identifier with the old one as alias lists the binding and moves its combination to the new identity, without rewriting the execution"
 
-step "32. Upgrade a database written at schema version 10 to the latest (12) (#127 PR #128 review): a feedback report predating feedback_resolutions (added at 11) reads back unchanged, accepts one resolution, and the resolution survives a restart"
+step "32. Upgrade a database written at schema version 10 to the latest (13) (#127 PR #128 review): a feedback report predating feedback_resolutions (added at 11) reads back unchanged, accepts one resolution, and the resolution survives a restart"
 schema10="$work/schema-10.db"
 for f in internal/storage/sqlite/migrations/000[1-9]_*.sql internal/storage/sqlite/migrations/0010_*.sql; do sqlite3 "$schema10" <"$f"; done
 sqlite3 "$schema10" <<'SQL'
@@ -993,7 +993,7 @@ start_daemon
 s10_report="$(bin/polaroid get-feedback s10-f)"
 jq -e '.status == "open" and (.resolution // null) == null and .summary == "Written before feedback_resolutions existed"' <<<"$s10_report" >/dev/null ||
 	fail "the schema-10 report changed across the upgrade: $s10_report"
-jq -e '.storage.schema_version == 12' <<<"$(bin/polaroid statistics)" >/dev/null || fail "the schema-10 database did not upgrade to schema 12: $(bin/polaroid statistics)"
+jq -e '.storage.schema_version == 13' <<<"$(bin/polaroid statistics)" >/dev/null || fail "the schema-10 database did not upgrade to schema 13: $(bin/polaroid statistics)"
 s10_resolution="$(jq -n '{outcome: "addressed", reason: "Resolved after the schema-10 to 11 upgrade (#127).", actor: "scripts.demo"}' | bin/polaroid resolve-feedback s10-f)"
 jq -e '.outcome == "addressed" and .actor == "scripts.demo"' <<<"$s10_resolution" >/dev/null || fail "resolving the migrated report failed: $s10_resolution"
 s10_record="$(bin/polaroid get-feedback s10-f)"
@@ -1003,6 +1003,6 @@ start_daemon
 [[ "$(bin/polaroid get-feedback s10-f)" == "$s10_record" ]] || fail "the migrated report's resolution did not survive a restart"
 stop_daemon
 db=$demo_db
-echo "a schema-10 store upgraded to 12: its feedback report is unchanged, accepts exactly one resolution, and the resolution is byte-for-byte identical after restart"
+echo "a schema-10 store upgraded to 13: its feedback report is unchanged, accepts exactly one resolution, and the resolution is byte-for-byte identical after restart"
 
 printf '\ndemo: PASS\n'

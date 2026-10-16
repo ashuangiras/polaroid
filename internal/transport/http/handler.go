@@ -83,6 +83,8 @@ func NewHandler(svc *memory.Service, logger *slog.Logger) http.Handler {
 	a.mux.HandleFunc("POST /v1/toil-items/{id}/revisions", a.reviseToilItem)
 	a.mux.HandleFunc("GET /v1/toil-items/{id}/revisions/{revision}", a.getToilRevision)
 	a.mux.HandleFunc("GET /v1/statistics", a.getStatistics)
+	a.mux.HandleFunc("GET /v1/walkthroughs", a.listWalkthroughs)
+	a.mux.HandleFunc("GET /v1/walkthroughs/{token}", a.getWalkthrough)
 
 	csrf := http.NewCrossOriginProtection()
 	csrf.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

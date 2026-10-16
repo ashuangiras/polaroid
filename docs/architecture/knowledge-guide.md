@@ -13,7 +13,7 @@ Polaroid runs two separate procedural-knowledge stores side by side, on the same
 | Storage | SQLite | A bare Git repository (`internal/gitcore`), by default `~/.polaroid/data/knowledge` |
 | Identity | Procedure ID + version number | Canonical key, read at an opaque snapshot token |
 | Selection | Bindings, version policies, evidence-based resolution from recorded executions | None: one definition per key per snapshot |
-| Endpoint | `/mcp` (40 tools), `/v1/procedures/*` | `/mcp/agent` (3 tools), `/mcp/agent/v2` (+1 tool), `/mcp/agent/v3` (+2 tools), `/v1/knowledge/*` |
+| Endpoint | `/mcp` (42 tools), `/v1/procedures/*` | `/mcp/agent` (3 tools), `/mcp/agent/v2` (+1 tool), `/mcp/agent/v3` (+2 tools), `/v1/knowledge/*` |
 | Records it serves | Procedures, bindings, executions, feedback, toil items | Procedures (guidance only) and, with Corpus Logic ([ADR-0050](decisions/0050-corpus-logic.md)), typed records: domains, concepts, claims, rules, procedure semantics, evidence, exceptions |
 | Who writes | Any MCP client with `create_procedure` / `revise_procedure` | Only the explicit operator surface, `/v1/knowledge/*` or `polaroid knowledge-*`; never agent mode |
 

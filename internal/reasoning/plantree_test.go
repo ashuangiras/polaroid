@@ -51,7 +51,7 @@ func noneReported([]string) reasoning.LeafStatus { return reasoning.LeafStatus{}
 // statusOf builds a leafStatus from an explicit map keyed by the "/"-
 // joined path, mirroring how internal/knowledgeops encodes a walkthrough
 // outcome's path for internal/memory's flat, per-key fold.
-func statusOf(done, escalate [][]string) func([]string) reasoning.LeafStatus {
+func statusOf(done, escalate, blocked [][]string) func([]string) reasoning.LeafStatus {
 	doneSet := map[string]bool{}
 	for _, p := range done {
 		doneSet[fmt.Sprint(p)] = true
@@ -60,8 +60,12 @@ func statusOf(done, escalate [][]string) func([]string) reasoning.LeafStatus {
 	for _, p := range escalate {
 		escalateSet[fmt.Sprint(p)] = true
 	}
+	blockedSet := map[string]bool{}
+	for _, p := range blocked {
+		blockedSet[fmt.Sprint(p)] = true
+	}
 	return func(path []string) reasoning.LeafStatus {
-		return reasoning.LeafStatus{Done: doneSet[fmt.Sprint(path)], Escalate: escalateSet[fmt.Sprint(path)]}
+		return reasoning.LeafStatus{Done: doneSet[fmt.Sprint(path)], Escalate: escalateSet[fmt.Sprint(path)], Blocked: blockedSet[fmt.Sprint(path)]}
 	}
 }
 
@@ -143,7 +147,7 @@ func TestPlanTreeSameLeafReusedInTwoBranches(t *testing.T) {
 	}
 	// branch1's own occurrence of "shared" (path branch1/shared) is
 	// done; branch2's own occurrence (path branch2/shared) is not.
-	status := statusOf([][]string{{"branch1", "shared"}}, nil)
+	status := statusOf([][]string{{"branch1", "shared"}}, nil, nil)
 	plan, err := reasoning.PlanTree(cat, goal, status)
 	if err != nil {
 		t.Fatal(err)
@@ -178,7 +182,7 @@ func TestPlanTreeComposedStatusIsPurelyStructural(t *testing.T) {
 	// Only "a" (one of parent's two leaves) is done; "parent" itself is
 	// never reported (it is not a leaf, so advance could never target
 	// it) — its status must still reflect that "b" is outstanding.
-	status := statusOf([][]string{{"parent", "a"}}, nil)
+	status := statusOf([][]string{{"parent", "a"}}, nil, nil)
 	plan, err := reasoning.PlanTree(cat, goal, status)
 	if err != nil {
 		t.Fatal(err)
@@ -203,7 +207,7 @@ func TestPlanTreeEscalatedDeepLeafFreezesAncestors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	status := statusOf(nil, [][]string{{"a", "b"}})
+	status := statusOf(nil, [][]string{{"a", "b"}}, nil)
 	plan, err := reasoning.PlanTree(cat, goal, status)
 	if err != nil {
 		t.Fatal(err)
@@ -219,7 +223,7 @@ func TestPlanTreeEscalatedDeepLeafFreezesAncestors(t *testing.T) {
 	// A later done for b overrides the escalate; a's next outstanding
 	// leaf, c (which b precedes), becomes the new target — a is not yet
 	// fully done, so z stays frozen behind it.
-	status2 := statusOf([][]string{{"a", "b"}}, nil)
+	status2 := statusOf([][]string{{"a", "b"}}, nil, nil)
 	plan2, err := reasoning.PlanTree(cat, goal, status2)
 	if err != nil {
 		t.Fatal(err)
@@ -230,7 +234,7 @@ func TestPlanTreeEscalatedDeepLeafFreezesAncestors(t *testing.T) {
 	}
 
 	// Only once c is also done does a become fully done, unfreezing z.
-	status3 := statusOf([][]string{{"a", "b"}, {"a", "c"}}, nil)
+	status3 := statusOf([][]string{{"a", "b"}, {"a", "c"}}, nil, nil)
 	plan3, err := reasoning.PlanTree(cat, goal, status3)
 	if err != nil {
 		t.Fatal(err)
@@ -259,5 +263,149 @@ func TestPlanTreeTooDeepIsDefended(t *testing.T) {
 	}
 	if _, err := reasoning.PlanTree(cat, goal, noneReported); !errors.Is(err, reasoning.ErrPlanTooDeep) {
 		t.Fatalf("a %d-level chain must be refused as too deep, got %v", depth, err)
+	}
+}
+
+// blocked, kept distinct from escalate (ADR-0056, issue #163).
+
+func TestPlanTreeBlockedFreezesNext(t *testing.T) {
+	cat := publishTree(t, []treeSpec{
+		{Key: "goal", Composes: []string{"a", "z"}},
+		{Key: "a", Precedes: []string{"z"}},
+		{Key: "z"},
+	})
+	goal, err := cat.Record("goal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := statusOf(nil, nil, [][]string{{"a"}})
+	plan, err := reasoning.PlanTree(cat, goal, status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan[0].Status != "blocked" || plan[1].Status != "" {
+		t.Fatalf("a blocked leaf must freeze next, reported as blocked, distinct from escalate: %+v", plan)
+	}
+}
+
+func TestPlanTreeBlockedPropagatesToAncestors(t *testing.T) {
+	cat := publishTree(t, []treeSpec{
+		{Key: "goal", Composes: []string{"a"}},
+		{Key: "a", Composes: []string{"b"}},
+		{Key: "b"},
+	})
+	goal, err := cat.Record("goal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := statusOf(nil, nil, [][]string{{"a", "b"}})
+	plan, err := reasoning.PlanTree(cat, goal, status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"a", "b"}
+	if plan[0].Status != "blocked" || fmt.Sprint(plan[0].Path) != fmt.Sprint(want) {
+		t.Fatalf("a (its leaf b is blocked) = %+v, want blocked at %v", plan[0], want)
+	}
+}
+
+// ExpandTree (ADR-0056's expand), issue #163.
+
+func TestExpandTreeMatchesPlanTreeAtTopLevel(t *testing.T) {
+	cat := publishTree(t, []treeSpec{
+		{Key: "goal", Composes: []string{"x", "y"}},
+		{Key: "x", Precedes: []string{"y"}},
+		{Key: "y"},
+	})
+	goal, err := cat.Record("goal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := reasoning.PlanTree(cat, goal, noneReported)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expanded, err := reasoning.ExpandTree(cat, goal, noneReported)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range plan {
+		if plan[i].Key != expanded[i].Key || plan[i].Status != expanded[i].Status || fmt.Sprint(plan[i].Path) != fmt.Sprint(expanded[i].Path) {
+			t.Fatalf("expand must keep the top level identical to PlanTree: %+v vs %+v", plan, expanded)
+		}
+	}
+}
+
+func TestExpandTreeAttachesNestedChildren(t *testing.T) {
+	cat := publishTree(t, []treeSpec{
+		{Key: "goal", Composes: []string{"a"}},
+		{Key: "a", Composes: []string{"b", "c"}, Precedes: nil},
+		{Key: "b"},
+		{Key: "c"},
+	})
+	goal, err := cat.Record("goal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := statusOf([][]string{{"a", "b"}}, nil, [][]string{{"a", "c"}})
+	plan, err := reasoning.ExpandTree(cat, goal, status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan) != 1 || plan[0].Key != "a" {
+		t.Fatalf("plan = %+v", plan)
+	}
+	children := plan[0].Children
+	if len(children) != 2 || children[0].Key != "b" || children[0].Status != "done" || children[1].Key != "c" || children[1].Status != "blocked" {
+		t.Fatalf("children = %+v, want b done and c blocked (both visible, not gated by order)", children)
+	}
+	// a's own rollup status reflects blocked, even though b is done first.
+	if plan[0].Status != "blocked" {
+		t.Fatalf("a's own status = %q, want blocked", plan[0].Status)
+	}
+}
+
+func TestExpandTreeUnreportedLeafIsPending(t *testing.T) {
+	cat := publishTree(t, []treeSpec{
+		{Key: "goal", Composes: []string{"a"}},
+		{Key: "a", Composes: []string{"b"}},
+		{Key: "b"},
+	})
+	goal, err := cat.Record("goal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := reasoning.ExpandTree(cat, goal, noneReported)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan[0].Children) != 1 || plan[0].Children[0].Status != "pending" {
+		t.Fatalf("an unreported leaf in an expanded tree must read pending, not blank: %+v", plan[0].Children)
+	}
+}
+
+func TestExpandTreeRecursesToAnyDepth(t *testing.T) {
+	cat := publishTree(t, []treeSpec{
+		{Key: "goal", Composes: []string{"a"}},
+		{Key: "a", Composes: []string{"b"}},
+		{Key: "b", Composes: []string{"c"}},
+		{Key: "c"},
+	})
+	goal, err := cat.Record("goal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := statusOf(nil, nil, [][]string{{"a", "b", "c"}})
+	plan, err := reasoning.ExpandTree(cat, goal, status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := plan[0].Children
+	if len(b) != 1 || b[0].Key != "b" || b[0].Status != "blocked" {
+		t.Fatalf("b = %+v", b)
+	}
+	c := b[0].Children
+	if len(c) != 1 || c[0].Key != "c" || c[0].Status != "blocked" {
+		t.Fatalf("c = %+v", c)
 	}
 }

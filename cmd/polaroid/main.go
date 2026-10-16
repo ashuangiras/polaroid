@@ -41,7 +41,7 @@ type command struct {
 // queryCommands take trailing NAME=VALUE query parameters, such as filters,
 // limit and after (ADR-0021); run receives them in client.query, and min
 // and max count only the other arguments.
-var queryCommands = map[string]bool{"list": true, "discover": true, "bindings": true, "executions": true, "feedbacks": true, "repositories": true, "toil-items": true, "knowledge-activations": true}
+var queryCommands = map[string]bool{"list": true, "discover": true, "bindings": true, "executions": true, "feedbacks": true, "repositories": true, "toil-items": true, "knowledge-activations": true, "walkthroughs": true}
 
 var commands = []command{
 	{"health", "", "check that the daemon and its storage are available", 0, 0,
@@ -233,6 +233,15 @@ var commands = []command{
 	{"revise-toil-item", "ID [FILE]", "append a toil item revision from request JSON in FILE or stdin", 1, 2,
 		func(c *client, args []string) error {
 			return c.send(http.MethodPost, toilPath(args[0])+"/revisions", args[1:])
+		}},
+	// walkthroughs and get-walkthrough are an operator's read-only
+	// visibility into guided-procedure walkthroughs (ADR-0056): agents run
+	// through them with /mcp/agent/v3's start and advance, not this CLI.
+	{"walkthroughs", "[NAME=VALUE...]", "list guided-procedure walkthroughs; NAME is repository, goal, status (active, escalate or blocked), limit or after", 0, 0,
+		func(c *client, _ []string) error { return c.do(http.MethodGet, c.path("/v1/walkthroughs", nil), nil) }},
+	{"get-walkthrough", "TOKEN", "show one guided-procedure walkthrough's current state", 1, 1,
+		func(c *client, args []string) error {
+			return c.do(http.MethodGet, "/v1/walkthroughs/"+url.PathEscape(args[0]), nil)
 		}},
 	// The knowledge-* commands are the operator surface of Git-native living
 	// knowledge (ADR-0048): explicit status, publish, fetch, validate,

@@ -15,18 +15,22 @@ var ErrInvalidCompleted = errors.New("completed names a key that is not one of t
 // PlanEntry is one entry of a Plan (ADR-0052) or PlanTree (ADR-0054): an
 // immediate composed child of a goal, in precedes order. Status is
 // "done" (named in completed, or every leaf beneath it done), "next"
-// (the first not-done entry), "escalate" (PlanTree only: a leaf beneath
-// it is frozen there), or unmarked (the rest, omitted from the JSON
-// member entirely). Path is set only by PlanTree, only on the "next" or
-// "escalate" entry: the chain of keys from this entry down to the actual
-// leaf — a single-element array, equal to [Key], when this entry is
-// itself a leaf (Plan's entries are always leaves in this sense, but
-// never set Path, since resolve has no notion of a frozen leaf or of
-// recursing).
+// (the first not-done entry), "escalate" or "blocked" (PlanTree only: a
+// leaf beneath it is frozen there — ADR-0056 distinguishes the two, see
+// LeafStatus), or unmarked (the rest, omitted from the JSON member
+// entirely). Path is set only by PlanTree, only on the "next",
+// "escalate" or "blocked" entry: the chain of keys from this entry down
+// to the actual leaf — a single-element array, equal to [Key], when
+// this entry is itself a leaf (Plan's entries are always leaves in this
+// sense, but never set Path, since resolve has no notion of a frozen
+// leaf or of recursing). Children is set only by ExpandTree (ADR-0056's
+// expand): this entry's own nested entries, when it is itself composed,
+// to any depth; nil otherwise.
 type PlanEntry struct {
-	Key    string   `json:"key"`
-	Status string   `json:"status,omitzero"`
-	Path   []string `json:"path,omitzero"`
+	Key      string      `json:"key"`
+	Status   string      `json:"status,omitzero"`
+	Path     []string    `json:"path,omitzero"`
+	Children []PlanEntry `json:"children,omitzero"`
 }
 
 // Plan resolves ADR-0052's ordered sibling plan for goal: its immediate
@@ -137,6 +141,12 @@ func topoSortByPrecedes(records map[string]*knowledge.Record, keys []string) []s
 type LeafStatus struct {
 	Done     bool
 	Escalate bool
+	// Blocked is agent-reported testimony that an external, technical
+	// precondition is not met (ADR-0056), kept distinct from Escalate so
+	// a reader can tell the two apart; Polaroid itself never derives
+	// this (internal/reasoning/datalog is open-world: it never infers a
+	// fact is false merely because it was not asserted).
+	Blocked bool
 }
 
 // maxPlanDepth defends PlanTree's recursion against a composes chain
@@ -192,7 +202,7 @@ func PlanTree(cat *knowledge.Catalog, goal *knowledge.Record, leafStatus func(pa
 			out[i] = PlanEntry{Key: k}
 			continue
 		}
-		done, escalate, below, err := planSubtree(cat, []string{k}, records[k], leafStatus, 1)
+		done, frozen, below, err := planSubtree(cat, []string{k}, records[k], leafStatus, 1)
 		if err != nil {
 			return nil, err
 		}
@@ -202,8 +212,8 @@ func PlanTree(cat *knowledge.Catalog, goal *knowledge.Record, leafStatus func(pa
 		}
 		active = true
 		status := "next"
-		if escalate {
-			status = "escalate"
+		if frozen != "" {
+			status = frozen
 		}
 		out[i] = PlanEntry{Key: k, Status: status, Path: append([]string{k}, below...)}
 	}
@@ -211,32 +221,152 @@ func PlanTree(cat *knowledge.Catalog, goal *knowledge.Record, leafStatus func(pa
 }
 
 // planSubtree reports whether every leaf under rec (reached at path from
-// goal) is done, whether an escalated leaf freezes it, and, when not
+// goal) is done, whether an escalated or blocked leaf freezes it
+// ("escalate" or "blocked"; "" if nothing freezes it), and, when not
 // done, the chain of keys strictly below rec down to that leaf (nil for
 // a leaf itself, which has nothing below it).
-func planSubtree(cat *knowledge.Catalog, path []string, rec *knowledge.Record, leafStatus func([]string) LeafStatus, depth int) (done, escalate bool, below []string, err error) {
+func planSubtree(cat *knowledge.Catalog, path []string, rec *knowledge.Record, leafStatus func([]string) LeafStatus, depth int) (done bool, frozen string, below []string, err error) {
 	if depth > maxPlanDepth {
-		return false, false, nil, ErrPlanTooDeep
+		return false, "", nil, ErrPlanTooDeep
 	}
 	if len(rec.Composes) == 0 {
 		st := leafStatus(path)
-		return st.Done, st.Escalate, nil, nil
+		switch {
+		case st.Done:
+			return true, "", nil, nil
+		case st.Escalate:
+			return false, "escalate", nil, nil
+		case st.Blocked:
+			return false, "blocked", nil, nil
+		default:
+			return false, "", nil, nil
+		}
 	}
 	children, err := recordsByKey(cat, rec.Composes)
 	if err != nil {
-		return false, false, nil, err
+		return false, "", nil, err
 	}
 	for _, k := range topoSortByPrecedes(children, rec.Composes) {
-		cdone, cescalate, cbelow, err := planSubtree(cat, slices.Concat(path, []string{k}), children[k], leafStatus, depth+1)
+		cdone, cfrozen, cbelow, err := planSubtree(cat, slices.Concat(path, []string{k}), children[k], leafStatus, depth+1)
 		if err != nil {
-			return false, false, nil, err
+			return false, "", nil, err
 		}
 		if cdone {
 			continue
 		}
-		return false, cescalate, append([]string{k}, cbelow...), nil
+		return false, cfrozen, append([]string{k}, cbelow...), nil
 	}
-	return true, false, nil, nil
+	return true, "", nil, nil
+}
+
+// ExpandTree resolves goal's full, nested plan tree (ADR-0056's expand):
+// the same top-level next/path/escalate/blocked PlanTree already gives
+// (identical values, since PlanTree is called directly for them), but
+// every composed entry additionally carries its own Children — its own
+// nested entries, recursively, to any depth, safe without a new bound
+// for the same reason PlanTree's own recursion already is (the composes
+// graph is finite; maxPlanDepth defends against the residual gap noted
+// on that constant). A nested entry's own status uses a fourth value,
+// "pending" (nothing reported for it or any of its descendants),
+// instead of being omitted: unlike the top level, a nested entry's
+// status is not gated by its siblings' order — expand's whole purpose is
+// seeing the real state of everything at once, not discovering it one
+// leaf at a time — so, unlike the top level, more than one nested
+// leaf's escalate or blocked can be visible at once, in any position.
+func ExpandTree(cat *knowledge.Catalog, goal *knowledge.Record, leafStatus func(path []string) LeafStatus) ([]PlanEntry, error) {
+	plan, err := PlanTree(cat, goal, leafStatus)
+	if err != nil || plan == nil {
+		return plan, err
+	}
+	for i := range plan {
+		rec, err := cat.Record(plan[i].Key)
+		if err != nil {
+			return nil, err
+		}
+		if len(rec.Composes) == 0 {
+			continue
+		}
+		children, err := buildChildren(cat, []string{plan[i].Key}, rec.Composes, leafStatus, 2)
+		if err != nil {
+			return nil, err
+		}
+		plan[i].Children = children
+	}
+	return plan, nil
+}
+
+// buildChildren resolves composes's own entries (ADR-0056's expand),
+// each with its true status — "done", "escalate", "blocked" or
+// "pending" — independent of its siblings' position (unlike PlanTree's
+// own "only the first not-done one is revealed" rule), and Children
+// attached recursively when an entry is itself composed.
+func buildChildren(cat *knowledge.Catalog, path []string, composes []string, leafStatus func([]string) LeafStatus, depth int) ([]PlanEntry, error) {
+	if depth > maxPlanDepth {
+		return nil, ErrPlanTooDeep
+	}
+	records, err := recordsByKey(cat, composes)
+	if err != nil {
+		return nil, err
+	}
+	order := topoSortByPrecedes(records, composes)
+	out := make([]PlanEntry, len(order))
+	for i, k := range order {
+		childPath := slices.Concat(path, []string{k})
+		rec := records[k]
+		entry := PlanEntry{Key: k}
+		if len(rec.Composes) == 0 {
+			st := leafStatus(childPath)
+			switch {
+			case st.Done:
+				entry.Status = "done"
+			case st.Escalate:
+				entry.Status = "escalate"
+			case st.Blocked:
+				entry.Status = "blocked"
+			default:
+				entry.Status = "pending"
+			}
+		} else {
+			children, err := buildChildren(cat, childPath, rec.Composes, leafStatus, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			entry.Children = children
+			entry.Status = summarizeChildren(children)
+		}
+		out[i] = entry
+	}
+	return out, nil
+}
+
+// summarizeChildren derives a composed entry's own status from its
+// already-built children (ADR-0056's expand): "done" iff every one is
+// done; else "escalate" if any one is (prioritized, since it means a
+// person's judgment is needed); else "blocked" if any one is; else
+// "pending". Unlike planSubtree's own rollup, this is not limited to the
+// first not-done child: expand means showing the real state of
+// everything beneath, not only what strict precedes order has reached.
+func summarizeChildren(children []PlanEntry) string {
+	allDone, anyBlocked := true, false
+	for _, c := range children {
+		if c.Status != "done" {
+			allDone = false
+		}
+		switch c.Status {
+		case "escalate":
+			return "escalate"
+		case "blocked":
+			anyBlocked = true
+		}
+	}
+	switch {
+	case allDone:
+		return "done"
+	case anyBlocked:
+		return "blocked"
+	default:
+		return "pending"
+	}
 }
 
 // recordsByKey fetches each of keys as a typed record, by key.

@@ -518,3 +518,141 @@ func TestGuideAdvanceCloseUnknownTokenIsNotFound(t *testing.T) {
 		t.Fatalf("closing an unknown token must be not_found, got %v", err)
 	}
 }
+
+// Blocked status, visibility and expand (ADR-0056, issue #163).
+
+// A blocked outcome (with a reason) freezes plan's next there, reported
+// as "blocked" (not masked as "escalate"): a technical precondition the
+// agent testifies is unmet, not a person's judgment call. status reads
+// in_progress, the same as escalate.
+func TestGuideAdvanceBlockedWithReasonFreezesNext(t *testing.T) {
+	g, _ := guideFixture(t, "step.a", "step.b")
+	start, err := g.Start(context.Background(), wire.WalkthroughStartRequest{Goal: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := g.Advance(context.Background(), wire.WalkthroughAdvanceRequest{
+		Token:   start.Token,
+		Outcome: &wire.WalkthroughOutcomeArg{Key: "step.a", Status: "blocked", Reason: "missing required tool"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Plan[0].Status != "blocked" || res.Plan[1].Status != "" {
+		t.Fatalf("a blocked key must freeze the plan there, reported as blocked: %+v", res.Plan)
+	}
+	if res.Status != "in_progress" {
+		t.Fatalf("status = %q, want in_progress (a blocked leaf is not done)", res.Status)
+	}
+	// A later done for the same key overrides the blocked and unfreezes next.
+	res, err = g.Advance(context.Background(), wire.WalkthroughAdvanceRequest{
+		Token: start.Token, Outcome: &wire.WalkthroughOutcomeArg{Key: "step.a", Status: "done"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Plan[0].Status != "done" || res.Plan[1].Status != "next" {
+		t.Fatalf("done must override the earlier blocked and unfreeze next: %+v", res.Plan)
+	}
+}
+
+// A deep blocked leaf propagates to every composed ancestor above it,
+// the same way escalate does (ADR-0054's propagation rule, extended to
+// the new status).
+func TestGuideAdvanceDeepBlockedFreezesAncestors(t *testing.T) {
+	g := nestedGuideFixture(t,
+		nestedSpec{Key: "goal", Composes: []string{"a"}},
+		nestedSpec{Key: "a", Composes: []string{"b"}},
+		nestedSpec{Key: "b", Composes: []string{"c"}},
+		nestedSpec{Key: "c"},
+	)
+	start, err := g.Start(context.Background(), wire.WalkthroughStartRequest{Goal: "goal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := g.Advance(context.Background(), wire.WalkthroughAdvanceRequest{
+		Token: start.Token, Outcome: &wire.WalkthroughOutcomeArg{Path: []string{"a", "b", "c"}, Status: "blocked"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"a", "b", "c"}
+	if res.Plan[0].Key != "a" || res.Plan[0].Status != "blocked" || fmt.Sprint(res.Plan[0].Path) != fmt.Sprint(want) {
+		t.Fatalf("a (its grandchild c is blocked) = %+v, want blocked at %v", res.Plan[0], want)
+	}
+}
+
+// outcome.status rejects anything but done, skipped, escalate or blocked.
+func TestGuideAdvanceInvalidStatusIsInvalidRequest(t *testing.T) {
+	g, _ := guideFixture(t, "step.a")
+	start, err := g.Start(context.Background(), wire.WalkthroughStartRequest{Goal: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = g.Advance(context.Background(), wire.WalkthroughAdvanceRequest{
+		Token: start.Token, Outcome: &wire.WalkthroughOutcomeArg{Key: "step.a", Status: "pending"},
+	})
+	var we *wire.KnowledgeError
+	if !errors.As(err, &we) || we.Detail.Code != "invalid_request" {
+		t.Fatalf("err = %v, want invalid_request", err)
+	}
+}
+
+// expand on start returns the top level exactly as without expand, plus
+// nested Children for a composed entry, with an unreported nested leaf
+// read as "pending" (ADR-0056).
+func TestGuideStartExpandAttachesNestedChildren(t *testing.T) {
+	g := nestedGuideFixture(t,
+		nestedSpec{Key: "goal", Composes: []string{"a", "z"}},
+		nestedSpec{Key: "a", Composes: []string{"b", "c"}},
+		nestedSpec{Key: "b"},
+		nestedSpec{Key: "c"},
+		nestedSpec{Key: "z"},
+	)
+	plain, err := g.Start(context.Background(), wire.WalkthroughStartRequest{Goal: "goal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expanded, err := g.Start(context.Background(), wire.WalkthroughStartRequest{Goal: "goal", Expand: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Top level unaffected by expand.
+	if len(expanded.Plan) != len(plain.Plan) || expanded.Plan[0].Key != plain.Plan[0].Key || expanded.Plan[0].Status != plain.Plan[0].Status {
+		t.Fatalf("expand's top level = %+v, want it to match plain %+v", expanded.Plan, plain.Plan)
+	}
+	if len(expanded.Plan[0].Children) != 2 || expanded.Plan[0].Children[0].Key != "b" || expanded.Plan[0].Children[0].Status != "pending" {
+		t.Fatalf("a's children = %+v, want b and c both pending", expanded.Plan[0].Children)
+	}
+	if len(expanded.Plan[1].Children) != 0 {
+		t.Fatalf("z is a leaf: must have no children, got %+v", expanded.Plan[1].Children)
+	}
+}
+
+// expand's nested children are not gated by sibling order the way the
+// top level's next is: reporting the second child blocked must still
+// show it as blocked, regardless of the first child's own status.
+func TestGuideAdvanceExpandChildrenNotGatedBySiblingOrder(t *testing.T) {
+	g := nestedGuideFixture(t,
+		nestedSpec{Key: "goal", Composes: []string{"a"}},
+		nestedSpec{Key: "a", Composes: []string{"b", "c"}},
+		nestedSpec{Key: "b"},
+		nestedSpec{Key: "c"},
+	)
+	start, err := g.Start(context.Background(), wire.WalkthroughStartRequest{Goal: "goal", Expand: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := g.Advance(context.Background(), wire.WalkthroughAdvanceRequest{
+		Token:   start.Token,
+		Outcome: &wire.WalkthroughOutcomeArg{Path: []string{"a", "c"}, Status: "blocked"},
+		Expand:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	children := res.Plan[0].Children
+	if len(children) != 2 || children[0].Status != "pending" || children[1].Status != "blocked" {
+		t.Fatalf("children = %+v, want b pending and c blocked regardless of order", children)
+	}
+}

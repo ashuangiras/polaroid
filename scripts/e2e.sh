@@ -591,7 +591,7 @@ check "graph context needs both parameters; resolution needs an environment" equ
 
 ########################################################################
 section "Use Polaroid from an agent over MCP" \
-	"\`polaroidd\` serves MCP at \`/mcp\` (ADR-0014): stateless streamable HTTP, protocols 2026-07-28 and 2025-11-25 (ADR-0016), behind the same loopback and cross-origin checks. 40 tools mirror the HTTP API with flat arguments named after record fields; results are the API's record shapes, errors are tool errors with the API's codes, and three read-only resource templates serve procedures, versions and bindings. Below, raw JSON-RPC over curl shows exactly what an MCP client sends." \
+	"\`polaroidd\` serves MCP at \`/mcp\` (ADR-0014): stateless streamable HTTP, protocols 2026-07-28 and 2025-11-25 (ADR-0016), behind the same loopback and cross-origin checks. 42 tools mirror the HTTP API with flat arguments named after record fields; results are the API's record shapes, errors are tool errors with the API's codes, and three read-only resource templates serve procedures, versions and bindings. Below, raw JSON-RPC over curl shows exactly what an MCP client sends." \
 	"Point an MCP client at \`http://127.0.0.1:7417/mcp\`, e.g. VS Code \`.vscode/mcp.json\`: \`{\"servers\": {\"polaroid\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:7417/mcp\"}}}\`."
 MCP_META='{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/clientInfo":{"name":"manual-test","version":"1"}}'
 rpc() { # rpc METHOD NAME PARAMS [PROTOCOL]: one JSON-RPC request; NAME may be empty
@@ -606,7 +606,7 @@ tool() { rpc tools/call "$1" "$(jq -cn --arg n "$1" --argjson a "$2" '{name: $n,
 show 'rpc server/discover "" "{}" | jq -c "{versions: .result.supportedVersions, capabilities: (.result.capabilities | keys), server: .result._meta[\"io.modelcontextprotocol/serverInfo\"].name}"'
 check "server/discover: protocols 2026-07-28 and 2025-11-25, tools and resources" json_has '.versions == ["2026-07-28","2025-11-25"] and .capabilities == ["resources","tools"] and .server == "polaroid"'
 show 'rpc tools/list "" "{}" | jq -c "{tools: (.result.tools | length), read_only: [.result.tools[] | select(.annotations.readOnlyHint) | .name] | length, names: [.result.tools[].name] | sort}"'
-check "40 tools, 25 of them read-only" json_has '.tools == 40 and .read_only == 25'
+check "42 tools, 27 of them read-only" json_has '.tools == 42 and .read_only == 27'
 show 'tool get_procedure "{\"canonical_key\": \"go.dependency.add\"}" | jq -S .result.structuredContent | shasum -a 256 | cut -c1-16; get /v1/procedures/by-key/go.dependency.add | jq -S . | shasum -a 256 | cut -c1-16'
 check "get_procedure over MCP returns the same document as GET /v1/procedures/by-key" equal "$(sed -n 1p <<<"$LAST")" "$(sed -n 2p <<<"$LAST")"
 show 'tool create_procedure "{\"canonical_key\": \"mcp.created\", \"philosophy\": \"p\", \"method\": \"m\", \"contract\": {\"z\": 1, \"a\": 2}, \"instructions\": {}, \"revision_reason\": \"Created by an agent over MCP.\"}" | jq -r ".result.content[0].text" | jq -c "{id, canonical_key, contract: .versions[0].contract}"'
@@ -864,7 +864,7 @@ section "Catalog statistics, read-only" \
 	"One request summarizes the whole catalog (ADR-0036): record counts (identities apart from their revisions and relationship records), procedures by lifecycle and scope, executions by recorded outcome and by evidence status, toil items by latest status, logical payload bytes (UTF-8 bytes of the stored JSON text: count, total, mean, max), and database pages and file sizes. Counts and payloads are one snapshot; file sizes are read just after it. It takes no parameters, writes nothing and names no path." \
 	"\`bin/polaroid statistics\`, or \`curl http://127.0.0.1:7417/v1/statistics\`; MCP \`get_catalog_statistics\`."
 show 'bin/polaroid statistics | jq -c "{statistics_version, records: (.records | {procedures, procedure_versions, executions, execution_invalidations}), executions: .executions | {by_outcome, by_evidence_status}, storage: .storage | {schema_version, files: (.files | map_values(.present))}}"'
-check "version 1, schema 12, with the database, WAL and shared-memory files present" json_has '.statistics_version == 1 and .storage.schema_version == 12 and .storage.files == {database: true, wal: true, shm: true}'
+check "version 1, schema 13, with the database, WAL and shared-memory files present" json_has '.statistics_version == 1 and .storage.schema_version == 13 and .storage.files == {database: true, wal: true, shm: true}'
 STATS="$(bin/polaroid statistics)"
 check "executions and invalidations match the execution lists" equal "$(jq -c '[.records.executions, .executions.by_evidence_status.invalidated]' <<<"$STATS")" "$(jq -sc '[(.[0].executions | length), (.[1].executions | length)]' <(bin/polaroid executions) <(bin/polaroid executions evidence_status=invalidated))"
 LAST="$STATS"
@@ -895,11 +895,11 @@ check "the refused writes stored nothing" equal "$(bin/polaroid executions | jq 
 
 ########################################################################
 section "The database enforces immutability itself" \
-	"Even a client that bypasses polaroidd cannot rewrite history: schema triggers reject UPDATE/DELETE of procedures, versions, bindings, binding revisions, references, executions and execution links and decisions, feedback reports, repositories, repository identifiers and procedure origins, gaps in numbering, and pins to missing versions. toil items, revisions and their links, execution invalidations, procedure lifecycle events and feedback resolutions, \`PRAGMA user_version\` records the schema version (12 migrations)." \
+	"Even a client that bypasses polaroidd cannot rewrite history: schema triggers reject UPDATE/DELETE of procedures, versions, bindings, binding revisions, references, executions and execution links and decisions, feedback reports, repositories, repository identifiers and procedure origins, gaps in numbering, and pins to missing versions. toil items, revisions and their links, execution invalidations, procedure lifecycle events and feedback resolutions, \`PRAGMA user_version\` records the schema version (13 migrations)." \
 	"Open the database with \`sqlite3 polaroid.db\` and try the statements below."
 SNAP_BEFORE="$(digest "/v1/procedures/$ID")$(digest "/v1/bindings/$BA")$(digest "/v1/bindings/$BB")$(digest "/v1/toil-items/$TOIL")"
 show 'sqlite3 "$DB" "PRAGMA user_version; SELECT name FROM sqlite_master WHERE type = '"'"'table'"'"' ORDER BY name;"'
-check "schema version is 12 with procedure, binding, reference, execution, execution-link, decision, feedback, repository, toil and lifecycle tables" equal "$(head -n1 <<<"$LAST")" 12
+check "schema version is 13 with procedure, binding, reference, execution, execution-link, decision, feedback, repository, toil and lifecycle tables" equal "$(head -n1 <<<"$LAST")" 13
 check "the procedure_lifecycle_events table exists" out_has "procedure_lifecycle_events"
 check "the execution_invalidations table exists" out_has "execution_invalidations"
 check "the toil_revisions table exists" out_has "toil_revisions"
@@ -981,7 +981,7 @@ show 'bin/polaroid bind <<<"$(bind_req scratch "{\"pin\": 1}" legacy old-1)" | j
 check "bindings work on the upgraded database" json_has '.procedure_id == "old-1"'
 stop_daemon
 show 'sqlite3 "$WORK/v1.db" "PRAGMA user_version"'
-check "schema version is now 12" equal "$LAST" 12
+check "schema version is now 13" equal "$LAST" 13
 show 'cp "$DB" "$WORK/newer.db" && sqlite3 "$WORK/newer.db" "PRAGMA user_version = 99" && HOME="$WORK/home" bin/polaroidd -addr 127.0.0.1:0 -db "$WORK/newer.db"'
 check "newer schema refused with exit 1" rc_is 1
 check "error says the schema is newer than this build supports" out_has "newer than this build supports"
