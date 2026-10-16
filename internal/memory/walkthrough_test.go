@@ -186,3 +186,62 @@ func TestWalkthroughsUnknownTokenIsNotFound(t *testing.T) {
 		t.Fatalf("an unknown token must be ErrNotFound, got %v", err)
 	}
 }
+
+// Walkthrough completion semantics and an explicit close (ADR-0055).
+
+func TestWalkthroughsCloseEndsItImmediately(t *testing.T) {
+	store := newFakeWalkthroughStore()
+	w := &Walkthroughs{store: store, now: time.Now, ttl: time.Hour}
+	ctx := context.Background()
+	st, err := w.Start(ctx, "goal.key", "snap1", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(ctx, st.Token); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.events[st.Token]; ok {
+		t.Fatalf("Close must leave no trace: events = %v", store.events[st.Token])
+	}
+	if len(store.deleted) != 1 || store.deleted[0] != st.Token {
+		t.Fatalf("Close must delete the token's events: deleted = %v", store.deleted)
+	}
+	// A closed token behaves exactly like an expired one from then on.
+	if _, err := w.State(ctx, st.Token); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a closed token must be ErrNotFound on any later call, got %v", err)
+	}
+}
+
+func TestWalkthroughsCloseAlreadyClosedOrExpiredIsNotFound(t *testing.T) {
+	store := newFakeWalkthroughStore()
+	now := time.Now()
+	w := &Walkthroughs{store: store, now: func() time.Time { return now }, ttl: time.Minute}
+	ctx := context.Background()
+
+	// Already closed.
+	closed, err := w.Start(ctx, "goal.key", "snap1", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(ctx, closed.Token); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(ctx, closed.Token); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("closing an already-closed token must be ErrNotFound, got %v", err)
+	}
+
+	// Already expired.
+	expired, err := w.Start(ctx, "goal.key", "snap1", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Minute) // past the 1-minute TTL
+	if err := w.Close(ctx, expired.Token); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("closing an expired token must be ErrNotFound, got %v", err)
+	}
+
+	// Never existed.
+	if err := w.Close(ctx, "never-created"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("closing an unknown token must be ErrNotFound, got %v", err)
+	}
+}

@@ -152,6 +152,19 @@ func (w *Walkthroughs) Advance(ctx context.Context, token string, outcome *Walkt
 	return foldWalkthrough(append(events, ev), w.ttl), nil
 }
 
+// Close ends token immediately (ADR-0055): whether or not every leaf is
+// done, no trace is kept from this point on, exactly as if it had
+// expired — an explicit abandon, not only a completion shortcut. An
+// already-closed or already-expired token is ErrNotFound,
+// indistinguishable from one that never existed, the same as every
+// other operation on one.
+func (w *Walkthroughs) Close(ctx context.Context, token string) error {
+	if _, _, err := w.loadState(ctx, token); err != nil {
+		return err
+	}
+	return w.store.DeleteWalkthrough(ctx, token)
+}
+
 // loadState reads token's events, folds them, and applies expiry: an
 // expired token is deleted and reported as ErrNotFound, indistinguishable
 // from one that never existed. It returns the raw events too, so Advance

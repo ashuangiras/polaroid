@@ -1,9 +1,10 @@
 package wire
 
 // Guided-procedure walkthroughs (ADR-0053, amended by ADR-0054 for
-// multi-level plans): /mcp/agent/v3's start and advance tools. Plan
-// reuses KnowledgePlanEntry, resolve's own plan shape (ADR-0052), for
-// shape consistency between the two endpoints; unlike resolve's, a
+// multi-level plans and by ADR-0055 for completion semantics and an
+// early close): /mcp/agent/v3's start and advance tools. Plan reuses
+// KnowledgePlanEntry, resolve's own plan shape (ADR-0052), for shape
+// consistency between the two endpoints; unlike resolve's, a
 // walkthrough's plan entries may carry Path and the "escalate" status.
 
 // WalkthroughStartRequest starts a new walkthrough for goal, resolved and
@@ -31,20 +32,28 @@ type WalkthroughOutcomeArg struct {
 
 // WalkthroughAdvanceRequest reports an outcome on token, or peeks its
 // current plan unchanged when outcome is omitted. Either way, this
-// resets token's sliding expiry.
+// resets token's sliding expiry. Close ends the walkthrough immediately
+// (ADR-0055), after applying outcome (if given) in the same call;
+// whether or not every leaf is done.
 type WalkthroughAdvanceRequest struct {
 	Token   string                 `json:"token" jsonschema:"the token start or an earlier advance returned"`
 	Outcome *WalkthroughOutcomeArg `json:"outcome,omitzero" jsonschema:"omit to peek the current plan unchanged"`
 	Context map[string]string      `json:"context,omitzero" jsonschema:"facts to add to what this walkthrough has reported so far"`
+	Close   bool                   `json:"close,omitzero" jsonschema:"end the walkthrough immediately, whether or not every leaf is done; outcome may still be given in the same call to report a final leaf and close in one round trip. A later call with this token is then not_found, the same as an expired one"`
 }
 
 // WalkthroughResult is start's and advance's result: token, the snapshot
-// goal was pinned at, and plan — resolve's plan shape (ADR-0052),
-// generalized to multiple levels (ADR-0054): done/next/escalate derived
-// from every outcome reported for this token so far, not a completed
-// list the caller resends.
+// goal was pinned at, plan — resolve's plan shape (ADR-0052), generalized
+// to multiple levels (ADR-0054): done/next/escalate derived from every
+// outcome reported for this token so far, not a completed list the
+// caller resends — and status (ADR-0055): "complete" exactly when plan
+// has no next (or escalate) entry left, "in_progress" otherwise. status
+// is not terminal: since plan folds the latest report per leaf, a later
+// advance reopening an already-done leaf moves status back to
+// "in_progress".
 type WalkthroughResult struct {
 	Token    string               `json:"token"`
 	Snapshot string               `json:"snapshot"`
 	Plan     []KnowledgePlanEntry `json:"plan,omitzero"`
+	Status   string               `json:"status"`
 }

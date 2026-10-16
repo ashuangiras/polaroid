@@ -679,3 +679,86 @@ func TestWalkthroughAdvanceKeyAndPathBothGivenIsInvalidRequest(t *testing.T) {
 		t.Fatalf("key and path must not both be given: %v", res)
 	}
 }
+
+// Walkthrough completion semantics and an explicit close (ADR-0055,
+// issue #162), exercised over real HTTP at /mcp/agent/v3.
+
+func TestWalkthroughStatusCompleteAndInProgress(t *testing.T) {
+	agent := newKnowledgeHarnessV3(t)
+	planFixture(t, agent)
+	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"plan.parent"}`))
+	if start["status"] != "in_progress" {
+		t.Fatalf("start status = %v, want in_progress", start["status"])
+	}
+	token := start["token"].(string)
+	for _, key := range []string{"plan.x", "plan.y", "plan.z"} {
+		res := decodeJSON(t, agent.ok(t, "advance", `{"token":"`+token+`","outcome":{"key":"`+key+`","status":"done"}}`))
+		if key != "plan.z" && res["status"] != "in_progress" {
+			t.Fatalf("after %s: status = %v, want in_progress", key, res["status"])
+		}
+		if key == "plan.z" && res["status"] != "complete" {
+			t.Fatalf("after every leaf done: status = %v, want complete", res["status"])
+		}
+	}
+}
+
+func TestWalkthroughStatusReopenAfterComplete(t *testing.T) {
+	agent := newKnowledgeHarnessV3(t)
+	deepPlanFixture(t, agent)
+	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"deep.goal"}`))
+	token := start["token"].(string)
+
+	done := decodeJSON(t, agent.ok(t, "advance", `{"token":"`+token+`","outcome":{"path":["deep.a","deep.b"],"status":"done"}}`))
+	if done["status"] != "complete" {
+		t.Fatalf("status = %v, want complete", done["status"])
+	}
+	reopened := decodeJSON(t, agent.ok(t, "advance", `{"token":"`+token+`","outcome":{"path":["deep.a","deep.b"],"status":"escalate"}}`))
+	if reopened["status"] != "in_progress" {
+		t.Fatalf("a later escalate on an already-done leaf must reopen status: %v", reopened["status"])
+	}
+}
+
+func TestWalkthroughAdvanceCloseEndsItImmediately(t *testing.T) {
+	agent := newKnowledgeHarnessV3(t)
+	planFixture(t, agent)
+	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"plan.parent"}`))
+	token := start["token"].(string)
+
+	closed := decodeJSON(t, agent.ok(t, "advance", `{"token":"`+token+`","close":true}`))
+	if closed["token"] != token {
+		t.Fatalf("a close call must still return the final state: %v", closed)
+	}
+	res := agent.call(t, "advance", `{"token":"`+token+`"}`)
+	if !res.IsError || !strings.Contains(res.Content[0].(*sdk.TextContent).Text, `"not_found"`) {
+		t.Fatalf("a call after close must be not_found: %v", res)
+	}
+}
+
+func TestWalkthroughAdvanceCloseWithOutcomeAppliesThenCloses(t *testing.T) {
+	agent := newKnowledgeHarnessV3(t)
+	planFixture(t, agent)
+	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"plan.parent"}`))
+	token := start["token"].(string)
+
+	res := decodeJSON(t, agent.ok(t, "advance", `{"token":"`+token+`","outcome":{"key":"plan.x","status":"done"},"close":true}`))
+	plan := res["plan"].([]any)
+	if plan[0].(map[string]any)["status"] != "done" {
+		t.Fatalf("the outcome must be reflected in the close call's own response: %v", res)
+	}
+	if res2 := agent.call(t, "advance", `{"token":"`+token+`"}`); !res2.IsError {
+		t.Fatalf("the walkthrough must be gone after close")
+	}
+}
+
+func TestWalkthroughAdvanceCloseAlreadyClosedIsNotFound(t *testing.T) {
+	agent := newKnowledgeHarnessV3(t)
+	planFixture(t, agent)
+	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"plan.parent"}`))
+	token := start["token"].(string)
+	agent.ok(t, "advance", `{"token":"`+token+`","close":true}`)
+
+	res := agent.call(t, "advance", `{"token":"`+token+`","close":true}`)
+	if !res.IsError || !strings.Contains(res.Content[0].(*sdk.TextContent).Text, `"not_found"`) {
+		t.Fatalf("closing an already-closed token must be not_found: %v", res)
+	}
+}

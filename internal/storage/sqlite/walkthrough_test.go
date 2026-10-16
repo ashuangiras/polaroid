@@ -130,4 +130,15 @@ func TestWalkthroughsAgainstRealStore(t *testing.T) {
 	if st.Statuses["step.a"] != memory.WalkthroughDone {
 		t.Fatalf("statuses = %v", st.Statuses)
 	}
+
+	// Close (ADR-0055): leaves no trace in the real table.
+	if err := w.Close(ctx, st.Token); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.WalkthroughEvents(ctx, st.Token); !errors.Is(err, memory.ErrNotFound) {
+		t.Fatalf("Close must leave no trace in storage, got %v", err)
+	}
+	if _, err := w.State(ctx, st.Token); !errors.Is(err, memory.ErrNotFound) {
+		t.Fatalf("a closed token must be ErrNotFound on any later call, got %v", err)
+	}
 }
