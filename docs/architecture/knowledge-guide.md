@@ -13,7 +13,7 @@ Polaroid runs two separate procedural-knowledge stores side by side, on the same
 | Storage | SQLite | A bare Git repository (`internal/gitcore`), by default `~/.polaroid/data/knowledge` |
 | Identity | Procedure ID + version number | Canonical key, read at an opaque snapshot token |
 | Selection | Bindings, version policies, evidence-based resolution from recorded executions | None: one definition per key per snapshot |
-| Endpoint | `/mcp` (40 tools), `/v1/procedures/*` | `/mcp/agent` (3 tools), `/mcp/agent/v2` (+1 tool), `/v1/knowledge/*` |
+| Endpoint | `/mcp` (40 tools), `/v1/procedures/*` | `/mcp/agent` (3 tools), `/mcp/agent/v2` (+1 tool), `/mcp/agent/v3` (+2 tools), `/v1/knowledge/*` |
 | Records it serves | Procedures, bindings, executions, feedback, toil items | Procedures (guidance only) and, with Corpus Logic ([ADR-0050](decisions/0050-corpus-logic.md)), typed records: domains, concepts, claims, rules, procedure semantics, evidence, exceptions |
 | Who writes | Any MCP client with `create_procedure` / `revise_procedure` | Only the explicit operator surface, `/v1/knowledge/*` or `polaroid knowledge-*`; never agent mode |
 
@@ -23,8 +23,9 @@ Within Git-native knowledge, two agent-facing MCP endpoints exist, both under th
 
 - **`/mcp/agent`**: `discover`, `read`, `feedback`. Works with Procedure documents alone (format 1), and still works unchanged once typed records exist (format 2).
 - **`/mcp/agent/v2`**: the same three tools, plus `resolve`, which reasons over typed records: obligations, specialization, exceptions, composition. Use it once the Corpus holds domains, concepts and rules worth reasoning over, not just procedures to read verbatim.
+- **`/mcp/agent/v3`** ([ADR-0053](decisions/0053-guided-walkthroughs.md)): the same four tools, plus `start` and `advance`: a token-identified, expiring walkthrough of a procedure's ordered composed steps, remembered across turns and sessions without resending a `completed` list. Not yet finalized. Reach for it only when a procedure is long enough, and your work on it spans enough separate turns or sessions, that resuming matters; `discover`/`read`/`resolve` alone are enough for everyday, single-session task guidance.
 
-**Connect to `/mcp/agent/v2` and use only that**, since it is a strict superset of `/mcp/agent` (the same three tools plus `resolve`); there is no reason for a new agent to pin to the smaller v1 surface instead. Reach for `resolve` specifically when you need to know what a goal obligates, whether an exception applies, or whether one procedure's output satisfies another's precondition; use `discover`/`read` alone for everyday task guidance.
+**Connect to `/mcp/agent/v2` and use only that**, since it is a strict superset of `/mcp/agent` (the same three tools plus `resolve`); there is no reason for a new agent to pin to the smaller v1 surface instead. Reach for `resolve` specifically when you need to know what a goal obligates, whether an exception applies, or whether one procedure's output satisfies another's precondition; use `discover`/`read` alone for everyday task guidance. Connect to `/mcp/agent/v3` instead only when you specifically need `start`/`advance`'s stateful walkthrough.
 
 ## Set up for a repository
 
@@ -179,7 +180,7 @@ Every typed record shares `{"@context": "urn:polaroid:context:v1", "id": "k:<key
 
 ## Storing knowledge
 
-**Storing is an explicit, token-guarded operator action, never something agent mode can do.** `/mcp/agent` and `/mcp/agent/v2` have no write tool at all beside `feedback` — there is no MCP tool for publishing, by design, because storing knowledge is an owner-approved operator decision, not something any MCP client should be able to trigger. Use the **`polaroid` CLI** for it: `polaroid knowledge-*`, authenticated by `$POLAROID_KNOWLEDGE_TOKEN` (the token at `<knowledge-dir>-operator-token`). It is a thin client over `/v1/knowledge/*`; reach for the raw HTTP endpoints directly only if you are scripting something the CLI does not cover. **An agent must not run these commands on its own initiative.** Draft the change, but publish it only when acting explicitly as the operator with the owner's approval for that exact change — the same rule [AGENTS.md](../../AGENTS.md) states for this project's own development procedures applies to any repository's Corpus.
+**Storing knowledge is an explicit, token-guarded operator action, never something agent mode can do.** `/mcp/agent`, `/mcp/agent/v2` and `/mcp/agent/v3` have no tool that stores knowledge content beside `feedback` — there is no MCP tool for publishing, by design, because storing knowledge is an owner-approved operator decision, not something any MCP client should be able to trigger. (`/mcp/agent/v3`'s `start`/`advance` are write tools too, but they only remember one agent's own runtime progress through a procedure ([ADR-0053](decisions/0053-guided-walkthroughs.md)); they never store or publish knowledge content, and an expired walkthrough leaves no trace.) Use the **`polaroid` CLI** for it: `polaroid knowledge-*`, authenticated by `$POLAROID_KNOWLEDGE_TOKEN` (the token at `<knowledge-dir>-operator-token`). It is a thin client over `/v1/knowledge/*`; reach for the raw HTTP endpoints directly only if you are scripting something the CLI does not cover. **An agent must not run these commands on its own initiative.** Draft the change, but publish it only when acting explicitly as the operator with the owner's approval for that exact change — the same rule [AGENTS.md](../../AGENTS.md) states for this project's own development procedures applies to any repository's Corpus.
 
 ### Publish
 

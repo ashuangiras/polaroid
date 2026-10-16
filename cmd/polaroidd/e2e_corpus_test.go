@@ -142,8 +142,8 @@ func TestCorpusLogicAcceptance(t *testing.T) {
 		}
 		return out
 	}
-	v1, v2 := connect("/mcp/agent"), connect("/mcp/agent/v2")
-	t1, t2 := tools(v1), tools(v2)
+	v1, v2, v3 := connect("/mcp/agent"), connect("/mcp/agent/v2"), connect("/mcp/agent/v3")
+	t1, t2, t3 := tools(v1), tools(v2), tools(v3)
 	if names := slices.Sorted(func(yield func(string) bool) {
 		for k := range t1 {
 			if !yield(k) {
@@ -157,9 +157,18 @@ func TestCorpusLogicAcceptance(t *testing.T) {
 		if t2[name] != schema {
 			t.Fatalf("v2 changed %s's arguments:\n%s\n%s", name, schema, t2[name])
 		}
+		if t3[name] != schema {
+			t.Fatalf("v3 changed %s's arguments:\n%s\n%s", name, schema, t3[name])
+		}
 	}
 	if len(t2) != 4 || t2["resolve"] == "" {
 		t.Fatalf("v2 tools %v", t2)
+	}
+	if t3["resolve"] != t2["resolve"] {
+		t.Fatalf("v3 changed resolve's arguments:\n%s\n%s", t2["resolve"], t3["resolve"])
+	}
+	if len(t3) != 6 || t3["start"] == "" || t3["advance"] == "" {
+		t.Fatalf("v3 tools %v", t3)
 	}
 
 	call := func(s *sdk.ClientSession, name string, args map[string]any) string {
@@ -188,6 +197,10 @@ func TestCorpusLogicAcceptance(t *testing.T) {
 	v2Tools := call(v2, "discover", map[string]any{"kind": "tools"})
 	if !strings.Contains(v2Tools, `"resolve"`) {
 		t.Fatalf("discover(kind=tools) at v2 must list resolve: %s", v2Tools)
+	}
+	v3Tools := call(v3, "discover", map[string]any{"kind": "tools"})
+	if !strings.Contains(v3Tools, `"resolve"`) || !strings.Contains(v3Tools, `"start"`) || !strings.Contains(v3Tools, `"advance"`) {
+		t.Fatalf("discover(kind=tools) at v3 must list resolve, start and advance: %s", v3Tools)
 	}
 	args := map[string]any{"goal": "go.verify.concurrent", "context": map[string]any{"repository": repo, "concurrency": "true"}, "at": "2026-10-14T12:00:00Z"}
 	first := call(v2, "resolve", args)

@@ -136,6 +136,38 @@ func newKnowledgeHarnessV2(t *testing.T) *knowledgeHarness {
 	return &knowledgeHarness{harness: h, kernel: kernel}
 }
 
+// newKnowledgeHarnessV3 runs /mcp/agent/v3 (ADR-0053): the same discover,
+// read, feedback and resolve as v2, plus start and advance, backed by
+// walkthrough storage in the same SQLite file as feedback.
+func newKnowledgeHarnessV3(t *testing.T) *knowledgeHarness {
+	t.Helper()
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "polaroid.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	repo, err := gitcore.Open(filepath.Join(t.TempDir(), "knowledge"), gitcore.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sem, err := semantic.New(semantic.DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := datalog.Evaluator{}
+	kernel := knowledge.New(gitstore.New(repo), knowledge.WithRecordValidator(sem), knowledge.WithRecordValidator(reasoning.RuleValidator{Evaluator: ev}))
+	agent := knowledgeops.NewAgent(kernel, memory.NewService(store))
+	resolver := knowledgeops.NewResolver(kernel, ev, policy.Trust{})
+	guide := knowledgeops.NewGuide(kernel, memory.NewWalkthroughs(store))
+	logs := &syncBuffer{}
+	srv := httptest.NewServer(mcptransport.NewAgentHandlerV3(agent, resolver, guide, slog.New(slog.NewTextHandler(logs, nil))))
+	t.Cleanup(srv.Close)
+	h := &harness{url: srv.URL, store: store, logs: logs}
+	h.session = h.connect(t, "")
+	return &knowledgeHarness{harness: h, kernel: kernel}
+}
+
 func decodeJSON(t *testing.T, text string) map[string]any {
 	t.Helper()
 	var m map[string]any
@@ -452,5 +484,126 @@ func TestResolveInvalidCompleted(t *testing.T) {
 	}
 	if !strings.Contains(res.Content[0].(*sdk.TextContent).Text, `"invalid_request"`) {
 		t.Fatalf("must be invalid_request: %s", res.Content[0].(*sdk.TextContent).Text)
+	}
+}
+
+// Agent mode v3 (ADR-0053): the v2 tools, unchanged, plus start and
+// advance. TestAgentV2AndV3SchemasMatch extends the invariant
+// cmd/polaroidd/e2e_corpus_test.go already checks between v1 and v2.
+
+func TestAgentV2AndV3SchemasMatch(t *testing.T) {
+	v2, v3 := newKnowledgeHarnessV2(t), newKnowledgeHarnessV3(t)
+	schemas := func(h *knowledgeHarness) map[string]string {
+		t.Helper()
+		out := map[string]string{}
+		for tool, err := range h.session.Tools(context.Background(), nil) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := json.Marshal(tool.InputSchema)
+			out[tool.Name] = string(b)
+		}
+		return out
+	}
+	s2, s3 := schemas(v2), schemas(v3)
+	for _, name := range []string{"discover", "read", "feedback", "resolve"} {
+		if s2[name] == "" || s2[name] != s3[name] {
+			t.Fatalf("%s schema differs between v2 and v3:\nv2: %s\nv3: %s", name, s2[name], s3[name])
+		}
+	}
+	if len(s3) != 6 || s3["start"] == "" || s3["advance"] == "" {
+		t.Fatalf("v3 tools = %v, want discover/read/feedback/resolve/start/advance", s3)
+	}
+	v3Tools := v3.ok(t, "discover", `{"kind":"tools"}`)
+	if !strings.Contains(v3Tools, `"start"`) || !strings.Contains(v3Tools, `"advance"`) {
+		t.Fatalf("discover(kind=tools) at v3 must list start and advance: %s", v3Tools)
+	}
+}
+
+func TestWalkthroughStartPinsSnapshotAndReturnsPlan(t *testing.T) {
+	agent := newKnowledgeHarnessV3(t)
+	snap := planFixture(t, agent)
+
+	res := decodeJSON(t, agent.ok(t, "start", `{"goal":"plan.parent"}`))
+	if res["snapshot"] != string(snap) || res["token"] == "" {
+		t.Fatalf("start = %v, want snapshot %s", res, snap)
+	}
+	plan := res["plan"].([]any)
+	if len(plan) != 3 || plan[0].(map[string]any)["key"] != "plan.x" || plan[0].(map[string]any)["status"] != "next" {
+		t.Fatalf("start plan = %v", plan)
+	}
+
+	// Publishing again does not change an already started walkthrough's
+	// plan: it stays pinned at the snapshot start resolved.
+	later := []*knowledge.Procedure{knowledgetest.SharedProc("plan.later", "later")}
+	laterRecords := []*knowledge.Record{{Type: knowledge.TypeProcedure, Key: "plan.later", Label: "later", Definition: "d"}}
+	if _, err := agent.publishRecords(t, later, laterRecords); err != nil {
+		t.Fatal(err)
+	}
+	token := res["token"].(string)
+	peek := decodeJSON(t, agent.ok(t, "advance", `{"token":"`+token+`"}`))
+	if peek["snapshot"] != string(snap) {
+		t.Fatalf("advance after a later publish must keep the pinned snapshot: %v, want %s", peek["snapshot"], snap)
+	}
+}
+
+func TestWalkthroughAdvancePeekIsUnchanged(t *testing.T) {
+	agent := newKnowledgeHarnessV3(t)
+	planFixture(t, agent)
+	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"plan.parent"}`))
+	token := start["token"].(string)
+
+	peek := decodeJSON(t, agent.ok(t, "advance", `{"token":"`+token+`"}`))
+	peekPlan, _ := json.Marshal(peek["plan"])
+	startPlan, _ := json.Marshal(start["plan"])
+	if string(peekPlan) != string(startPlan) {
+		t.Fatalf("a peek must leave the plan unchanged: %s, want %s", peekPlan, startPlan)
+	}
+}
+
+func TestWalkthroughAdvanceFoldsPerKeyAndEscalateFreezesNext(t *testing.T) {
+	agent := newKnowledgeHarnessV3(t)
+	planFixture(t, agent)
+	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"plan.parent"}`))
+	token := start["token"].(string)
+
+	escalated := decodeJSON(t, agent.ok(t, "advance", `{"token":"`+token+`","outcome":{"key":"plan.x","status":"escalate"}}`))
+	plan := escalated["plan"].([]any)
+	if plan[0].(map[string]any)["status"] != "next" {
+		t.Fatalf("an escalated key must still read next, freezing the plan: %v", plan)
+	}
+
+	done := decodeJSON(t, agent.ok(t, "advance", `{"token":"`+token+`","outcome":{"key":"plan.x","status":"done"}}`))
+	plan2 := done["plan"].([]any)
+	if plan2[0].(map[string]any)["status"] != "done" || plan2[1].(map[string]any)["status"] != "next" {
+		t.Fatalf("a later done must override the earlier escalate and unfreeze next: %v", plan2)
+	}
+}
+
+func TestWalkthroughAdvanceInvalidOutcomeKey(t *testing.T) {
+	agent := newKnowledgeHarnessV3(t)
+	planFixture(t, agent)
+	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"plan.parent"}`))
+	token := start["token"].(string)
+
+	res := agent.call(t, "advance", `{"token":"`+token+`","outcome":{"key":"not-a-child","status":"done"}}`)
+	if !res.IsError || !strings.Contains(res.Content[0].(*sdk.TextContent).Text, `"invalid_request"`) {
+		t.Fatalf("outcome.key outside the goal's composed children must be invalid_request: %v", res)
+	}
+}
+
+func TestWalkthroughAdvanceUnknownTokenIsNotFound(t *testing.T) {
+	agent := newKnowledgeHarnessV3(t)
+	res := agent.call(t, "advance", `{"token":"never-started"}`)
+	if !res.IsError || !strings.Contains(res.Content[0].(*sdk.TextContent).Text, `"not_found"`) {
+		t.Fatalf("an unknown token must be not_found: %v", res)
+	}
+}
+
+func TestWalkthroughStartUnknownGoalIsNotFound(t *testing.T) {
+	agent := newKnowledgeHarnessV3(t)
+	res := agent.call(t, "start", `{"goal":"nope"}`)
+	if !res.IsError || !strings.Contains(res.Content[0].(*sdk.TextContent).Text, `"not_found"`) {
+		t.Fatalf("an unknown goal must be not_found: %v", res)
 	}
 }

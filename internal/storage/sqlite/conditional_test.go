@@ -14,7 +14,7 @@ import (
 )
 
 // latestSchema is the number of migrations this build applies.
-const latestSchema = 11
+const latestSchema = 12
 
 func conditionalOf(r memory.Reference, condition string) memory.Reference {
 	r.Condition = &condition

@@ -29,7 +29,7 @@ func TestStatisticsOfAnEmptyCatalog(t *testing.T) {
 		t.Fatalf("empty catalog: %+v", st)
 	}
 	s := st.Storage
-	if s.SchemaVersion != 11 || s.PageSize <= 0 || s.PageCount <= 0 || s.FreelistCount < 0 || s.DatabaseBytes() != s.PageSize*s.PageCount {
+	if s.SchemaVersion != latestSchema || s.PageSize <= 0 || s.PageCount <= 0 || s.FreelistCount < 0 || s.DatabaseBytes() != s.PageSize*s.PageCount {
 		t.Fatalf("storage = %+v", s)
 	}
 	if !s.Files.Database.Present || s.Files.Database.Bytes <= 0 || !s.Files.WAL.Present || !s.Files.SharedMemory.Present {
