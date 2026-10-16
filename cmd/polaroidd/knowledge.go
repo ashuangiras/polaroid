@@ -114,6 +114,7 @@ func readOperatorToken(path string) (string, error) {
 type knowledgeComponents struct {
 	agent    *knowledgeops.Agent
 	resolver *knowledgeops.Resolver
+	guide    *knowledgeops.Guide
 	operator *knowledgeops.Operator
 	token    string
 }
@@ -135,10 +136,12 @@ func loadTrust(path string) (policy.Trust, error) {
 // missing), loads the trust policy at sourcesPath (empty if the file does
 // not exist: no source is contacted), the exception trust material at
 // authoritiesPath (empty if missing), and loads or creates the operator
-// token at tokenPath. A Git catalog that starts empty is not a failure
-// here (ADR-0048's explicit migration boundary): only a storage or policy
+// token at tokenPath. walkthroughs backs /mcp/agent/v3's stateful start
+// and advance (ADR-0053): new, per-agent storage, not Git-native
+// knowledge. A Git catalog that starts empty is not a failure here
+// (ADR-0048's explicit migration boundary): only a storage or policy
 // problem is.
-func setupKnowledge(dir, sourcesPath, authoritiesPath, tokenPath string, fb *memory.Service) (*knowledgeComponents, error) {
+func setupKnowledge(dir, sourcesPath, authoritiesPath, tokenPath string, fb *memory.Service, walkthroughs memory.WalkthroughStore) (*knowledgeComponents, error) {
 	if err := prepareKnowledgeParents(dir); err != nil {
 		return nil, err
 	}
@@ -171,6 +174,7 @@ func setupKnowledge(dir, sourcesPath, authoritiesPath, tokenPath string, fb *mem
 	return &knowledgeComponents{
 		agent:    knowledgeops.NewAgent(syncer.Kernel(), fb),
 		resolver: knowledgeops.NewResolver(syncer.Kernel(), ev, trust),
+		guide:    knowledgeops.NewGuide(syncer.Kernel(), memory.NewWalkthroughs(walkthroughs)),
 		operator: knowledgeops.NewOperator(syncer, policy, fb),
 		token:    token,
 	}, nil

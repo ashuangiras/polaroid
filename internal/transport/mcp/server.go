@@ -64,6 +64,14 @@ func NewAgentHandlerV2(agent AgentKnowledge, resolver AgentResolver, logger *slo
 	return handler(newAgentServerV2(agent, resolver, logger), logger)
 }
 
+// NewAgentHandlerV3 returns agent mode v3 (ADR-0053): the v2 tools, with
+// the same contracts, plus start and advance, Polaroid's first stateful
+// agent-mode tools: a token-identified, expiring walkthrough of a
+// procedure's composed steps.
+func NewAgentHandlerV3(agent AgentKnowledge, resolver AgentResolver, guide AgentGuide, logger *slog.Logger) http.Handler {
+	return handler(newAgentServerV3(agent, resolver, guide, logger), logger)
+}
+
 func handler(server *sdk.Server, logger *slog.Logger) http.Handler {
 	h := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, &sdk.StreamableHTTPOptions{
 		Stateless:           true,
@@ -98,9 +106,11 @@ type tools struct {
 	svc *memory.Service
 	// agent is set only for the agent-mode server; full mode never reads it.
 	agent AgentKnowledge
-	// resolver is set only for agent mode v2.
+	// resolver is set only for agent mode v2 and v3.
 	resolver AgentResolver
-	logger   *slog.Logger
+	// guide is set only for agent mode v3 (ADR-0053).
+	guide  AgentGuide
+	logger *slog.Logger
 }
 
 // Free-form JSON objects are advertised as objects; everything else is

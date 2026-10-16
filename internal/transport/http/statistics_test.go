@@ -144,7 +144,7 @@ func TestStatisticsOfAnEmptyCatalog(t *testing.T) {
 		t.Fatalf("payloads = %+v", st.Payloads)
 	}
 	g := st.Storage
-	if g.SchemaVersion != 11 || g.PageSize <= 0 || g.PageCount <= 0 || g.DatabaseBytes != g.PageSize*g.PageCount || len(g.Files) != 3 {
+	if g.SchemaVersion != 12 || g.PageSize <= 0 || g.PageCount <= 0 || g.DatabaseBytes != g.PageSize*g.PageCount || len(g.Files) != 3 {
 		t.Fatalf("storage = %+v", g)
 	}
 	for _, name := range []string{"database", "wal", "shm"} {

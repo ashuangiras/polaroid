@@ -135,6 +135,26 @@ Requests can fail with these codes:
 
 Exceptions and assertions are verified against the operator-held trust material at `<knowledge-dir>-authorities.json` ([http-api.md](http-api.md#git-native-knowledge-operator-api)).
 
+## Agent mode v3 (`/mcp/agent/v3`)
+
+**Implemented by [ADR-0053](decisions/0053-guided-walkthroughs.md) (Guided Procedures, Milestone 2).** This is a separate, versioned endpoint; `/mcp/agent` and `/mcp/agent/v2` above are unchanged. Not yet finalized: the same "experimental until explicitly finalized" path `/mcp/agent` itself took before [ADR-0049](decisions/0049-agent-mode-finalized-no-migration.md).
+
+It serves the same `discover`, `read`, `feedback` and `resolve` tools, with input schemas identical to v2's (a test compares them), plus two new, non-destructive write tools: Polaroid's first stateful agent-mode capability.
+
+| Tool | Read-only | Arguments | Result |
+| --- | --- | --- | --- |
+| `start` | no | `goal` (a record key: a procedure, concept or claim); `repository` and `context` (an object of string name and value pairs), optional, stored with the walkthrough but not checked against anything | `{token, snapshot, plan}`: a new walkthrough, with an empty `completed` (nothing reported yet) |
+| `advance` | no | `token`; `outcome` (`{key, status: "done"\|"skipped"\|"escalate", note}`), optional — without it, a pure peek; `context` (an object), optional, added to what this walkthrough has reported so far | `{token, snapshot, plan}`: the updated walkthrough |
+
+- **`start` resolves `goal` at the active snapshot and pins it** for the new walkthrough's lifetime, the same guarantee `discover`'s and `read`'s snapshot tokens already give: later publications or activations never change an existing walkthrough's `plan`. `plan` is exactly `resolve`'s `plan` member ([ADR-0052](decisions/0052-ordered-sibling-steps.md)), derived here from every outcome reported for this token so far, not a `completed` list the caller resends. A `goal` without composed children is not an error: it starts with an empty, trivially complete `plan`. A `goal` that is not a record of the active snapshot is `not_found`; unlike `read`'s legacy procedure documents, a typed record has no applicability to check, so there is no `not_applicable` case here.
+- **`advance` folds per key, not "latest wins".** For each composed child, its current status is whichever outcome was *last* reported for that specific key: a later `done` overrides an earlier `escalate` for the same key; reporting the same status again is harmless. Keys never reported stay pending. `outcome.key` must be one of `goal`'s immediate composed children; any key is accepted, not only the current `next`, but a key outside them is `invalid_request`.
+- **`escalate` freezes `plan`'s `next` on that key.** `next` is the first composed child, in `precedes` order, not `done` or `skipped`; a child currently `escalate` counts as not-done, so `next` stops there until a later `advance` reports `done` or `skipped` for the same key. Nothing else ever clears it; there is no time-out or auto-resolution, TTL expiry aside.
+- **Expiry is real and sliding.** Every event, including a no-`outcome` peek, resets the token's expiry to now plus a fixed TTL (an implementation detail, not a governed policy). `advance` on an expired or unknown token is `not_found`, indistinguishable from each other: an expired walkthrough is deleted outright as part of answering, and no trace of it is kept. Walkthroughs are the first record in Polaroid that is not kept forever; they are runtime state, not catalog content, and are never counted by `discover(kind="stats")`.
+- **Identity.** A token is an opaque UUIDv7, independent of any other walkthrough: there is no lookup by `(repository, goal)` and no uniqueness constraint, so two agents, or two attempts, can work the same procedure concurrently without colliding. Resuming depends entirely on the caller keeping its token; Polaroid offers no other way to find one.
+- **No operator-facing visibility in this milestone.** Unlike every other record type, a walkthrough has no `list`/`get` surface; it is bounded by its own TTL without operator intervention.
+
+Requests can fail with these codes: `not_found` (an unknown `goal`, or an expired or unknown `token`), `invalid_request` (a missing `goal`/`token`, or an `outcome.key` outside `goal`'s immediate composed children).
+
 ## Resources
 
 All resources are read-only and returned as `application/json`, with the same body as the matching tool.

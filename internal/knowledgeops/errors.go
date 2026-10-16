@@ -14,6 +14,7 @@ import (
 	"github.com/ashuangiras/polaroid/internal/gitcore"
 	"github.com/ashuangiras/polaroid/internal/knowledge"
 	"github.com/ashuangiras/polaroid/internal/knowledgesync"
+	"github.com/ashuangiras/polaroid/internal/memory"
 	"github.com/ashuangiras/polaroid/internal/transport/wire"
 )
 
@@ -38,8 +39,10 @@ func classify(err error) error {
 		return wire.NewKnowledgeError(http.StatusBadRequest, wire.ErrorDetail{Code: "invalid_request", Message: err.Error()})
 	case errors.Is(err, knowledge.ErrNotApplicable):
 		return wire.NewKnowledgeError(http.StatusNotFound, wire.ErrorDetail{Code: "not_applicable", Message: err.Error()})
-	case errors.Is(err, knowledge.ErrNotFound), errors.Is(err, gitcore.ErrNotFound):
+	case errors.Is(err, knowledge.ErrNotFound), errors.Is(err, gitcore.ErrNotFound), errors.Is(err, memory.ErrNotFound):
 		return wire.NewKnowledgeError(http.StatusNotFound, wire.ErrorDetail{Code: "not_found", Message: err.Error()})
+	case errors.Is(err, memory.ErrInvalidOutcome):
+		return wire.NewKnowledgeError(http.StatusBadRequest, wire.ErrorDetail{Code: "invalid_request", Message: err.Error()})
 	case errors.Is(err, knowledge.ErrStale):
 		return wire.NewKnowledgeError(http.StatusConflict, wire.ErrorDetail{Code: "stale_snapshot", Message: err.Error()})
 	case errors.Is(err, knowledge.ErrDiverged), errors.Is(err, gitcore.ErrDiverged):

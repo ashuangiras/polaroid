@@ -54,12 +54,18 @@ func (t *tools) agentDiscover(ctx context.Context, in wire.KnowledgeDiscoverRequ
 	if err != nil {
 		return nil, err
 	}
-	// kind="tools" lists agent mode's common tools; resolve exists only at
-	// /mcp/agent/v2, which this Agent cannot tell apart from v1 (one Agent
-	// backs both), so the transport layer adds it here when it is served.
+	// kind="tools" lists agent mode's common tools; resolve and
+	// start/advance exist only at /mcp/agent/v2 and /mcp/agent/v3
+	// respectively, which this Agent cannot tell apart from v1 (one Agent
+	// backs all three), so the transport layer adds them here when served.
 	if in.Kind == wire.KindTools && t.resolver != nil {
 		out.Tools = append(out.Tools, wire.KnowledgeToolInfo{Name: "resolve",
 			Description: "Resolve what applies to a record (procedure, concept or claim) in your context, at a snapshot.", ReadOnly: true})
+	}
+	if in.Kind == wire.KindTools && t.guide != nil {
+		out.Tools = append(out.Tools,
+			wire.KnowledgeToolInfo{Name: "start", Description: "Start a stateful walkthrough of a procedure's composed steps, pinned at the active snapshot."},
+			wire.KnowledgeToolInfo{Name: "advance", Description: "Report an outcome for one of a walkthrough's composed steps, or peek its current plan unchanged."})
 	}
 	return out, nil
 }
@@ -97,4 +103,40 @@ func newAgentServerV2(agent AgentKnowledge, resolver AgentResolver, logger *slog
 
 func (t *tools) agentResolve(ctx context.Context, in wire.KnowledgeResolveRequest) (any, error) {
 	return t.resolver.Resolve(ctx, in)
+}
+
+// Agent mode v3 (ADR-0053): the v2 tools, unchanged, plus start and
+// advance: a token-identified, expiring walkthrough of a procedure's
+// composed steps, remembered across sessions without the caller resending
+// a completed list. v1 and v2 stay exactly as finalized.
+
+const agentInstructionsV3 = agentInstructionsV2 + `
+6. For a multi-step procedure you expect to work through across several turns or sessions, start it once to get a token and its plan (ADR-0052's ordered composed steps); keep the token. Call advance with the token to report an outcome ({key, status: "done"|"skipped"|"escalate", note?}) for one step, or with no outcome to peek the current plan unchanged. advance always returns the updated plan: "next" names the first step not yet done or skipped; escalate freezes next on that step until a later advance reports done or skipped for it. A token expires after a period of inactivity (any call, including a peek, resets it); an expired or unknown token is not_found, indistinguishable from each other.`
+
+// AgentGuide is what agent mode v3 adds: stateful walkthroughs, expressed
+// only in wire shapes. internal/knowledgeops.Guide satisfies it.
+type AgentGuide interface {
+	Start(ctx context.Context, in wire.WalkthroughStartRequest) (wire.WalkthroughResult, error)
+	Advance(ctx context.Context, in wire.WalkthroughAdvanceRequest) (wire.WalkthroughResult, error)
+}
+
+func newAgentServerV3(agent AgentKnowledge, resolver AgentResolver, guide AgentGuide, logger *slog.Logger) *sdk.Server {
+	s := baseServer(agentInstructionsV3, logger)
+	t := &tools{agent: agent, resolver: resolver, guide: guide, logger: logger}
+	const read, write = true, false
+	add(s, t, "discover", discoverDescription, read, t.agentDiscover)
+	add(s, t, "read", "Get one procedure's executable guidance by its canonical key, at a snapshot (the active one by default): contract, instructions, and each reference's key, condition and mapped inputs, resolved one level.", read, t.agentRead)
+	add(s, t, "feedback", "Report a finding that changes what is known about the procedure at key, as served by snapshot, with a classification. Not for product defects, environment problems or transient failures.", write, t.agentFeedback)
+	add(s, t, "resolve", "Resolve what applies to a record (procedure, concept or claim) in your context, at a snapshot: obligations with derivation identifiers, specializations, verified and rejected exceptions, derived facts, conflicts, unknowns, whether the result is complete, evidence status, and with then, whether a second procedure can follow it. Deterministic for the same snapshot, context and time.", read, t.agentResolve)
+	add(s, t, "start", "Start a stateful walkthrough of goal's composed steps, pinned at the active snapshot. Returns {token, snapshot, plan}: keep the token to call advance across later turns or sessions.", write, t.agentStart)
+	add(s, t, "advance", "Report an outcome for one of a walkthrough's composed steps, or peek its current plan unchanged when outcome is omitted. Returns the updated {token, snapshot, plan}.", write, t.agentAdvance)
+	return s
+}
+
+func (t *tools) agentStart(ctx context.Context, in wire.WalkthroughStartRequest) (any, error) {
+	return t.guide.Start(ctx, in)
+}
+
+func (t *tools) agentAdvance(ctx context.Context, in wire.WalkthroughAdvanceRequest) (any, error) {
+	return t.guide.Advance(ctx, in)
 }
