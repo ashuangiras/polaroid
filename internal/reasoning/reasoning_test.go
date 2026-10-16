@@ -749,9 +749,9 @@ func TestConflictingExceptions(t *testing.T) {
 
 func TestComposition(t *testing.T) {
 	w := newWorld(t)
-	prod := &knowledge.Record{Type: knowledge.TypeProcedure, Key: "artifact.build", Label: "artifact.build", ClassifiedAs: []string{"domain.software"},
+	prod := &knowledge.Record{Type: knowledge.TypeProcedure, Key: "artifact.build", Label: "artifact.build", Definition: "Build a release binary.", ClassifiedAs: []string{"domain.software"},
 		Outputs: []knowledge.Port{{Name: "binary", Concept: "artifact.binary"}}, OutputsComplete: true, Postconditions: []string{"state.built", "network.forbidden"}}
-	cons := &knowledge.Record{Type: knowledge.TypeProcedure, Key: "artifact.smoke", Label: "artifact.smoke", ClassifiedAs: []string{"domain.software"},
+	cons := &knowledge.Record{Type: knowledge.TypeProcedure, Key: "artifact.smoke", Label: "artifact.smoke", Definition: "Smoke-test a release binary.", ClassifiedAs: []string{"domain.software"},
 		Inputs: []knowledge.Port{{Name: "binary", Concept: "artifact.binary"}}, Preconditions: []string{"state.built"}, Postconditions: []string{"state.smoked"}}
 	compose := func(p, q string) *reasoning.CompositionResult {
 		t.Helper()

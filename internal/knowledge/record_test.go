@@ -101,8 +101,8 @@ func TestSpecializationApplicability(t *testing.T) {
 	child := knowledgetest.SharedProc("team.verify.strict", "Verify strictly.")
 	ctx := context.Background()
 	recs := []knowledge.RecordChange{
-		{Key: "team.verify", Record: &knowledge.Record{Type: knowledge.TypeProcedure, Key: "team.verify", Label: "t"}},
-		{Key: "team.verify.strict", Record: &knowledge.Record{Type: knowledge.TypeProcedure, Key: "team.verify.strict", Label: "t", Specializes: []string{"team.verify"}}},
+		{Key: "team.verify", Record: &knowledge.Record{Type: knowledge.TypeProcedure, Key: "team.verify", Label: "t", Definition: "d", Requires: []string{"check.build"}}},
+		{Key: "team.verify.strict", Record: &knowledge.Record{Type: knowledge.TypeProcedure, Key: "team.verify.strict", Label: "t", Definition: "d", Specializes: []string{"team.verify"}}},
 	}
 	_, err := k.Publish(ctx, knowledge.Proposal{Base: s, Changes: []knowledge.Change{put(local), put(child)}, Records: recs, Provenance: prov()})
 	if !errors.Is(err, knowledge.ErrInvalid) || !strings.Contains(err.Error(), "team.verify.strict applies where its parent team.verify does not") {

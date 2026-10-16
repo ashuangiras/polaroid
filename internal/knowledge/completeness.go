@@ -1,10 +1,10 @@
 package knowledge
 
 // CompletenessGaps is Catalog.CompletenessGaps' result: typed records that
-// do not yet meet ADR-0057's completeness bar. Written ahead of that
-// ADR's activation (its validation rule is not wired into Publish): used
-// today only by discover(kind="stats")'s completeness counts and by
-// CheckCompleteness's own, as yet unused, validation problems.
+// do not meet ADR-0057's completeness bar. Used by discover(kind="stats")'s
+// completeness counts, and by CheckCompleteness, which Kernel.publish calls
+// against every new publish candidate (ADR-0057, activated by #164) — never
+// against an already-committed snapshot: see publish's own comment for why.
 type CompletenessGaps struct {
 	// MissingDefinition lists every Domain, Concept or Procedure record
 	// with an empty Definition, sorted by key.
@@ -58,10 +58,10 @@ func (c *Catalog) hasObligationSource(key string, seen map[string]bool) bool {
 }
 
 // CheckCompleteness turns CompletenessGaps into validation Problems, in
-// ADR-0057's shape: naming every offending record and field. Written and
-// unit-tested ahead of ADR-0057's activation; nothing in the publish path
-// (loadCatalog, checkCatalog, Kernel.Publish) calls this yet, so a record
-// failing this check still publishes successfully today, by design.
+// ADR-0057's shape: naming every offending record and field. Kernel.publish
+// calls this against the publish candidate only (#164): never against an
+// already-committed snapshot, so existing history stays readable exactly
+// as before activation, whatever its own completeness.
 func (c *Catalog) CheckCompleteness() []Problem {
 	var problems []Problem
 	gaps := c.CompletenessGaps()

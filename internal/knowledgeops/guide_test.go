@@ -22,14 +22,18 @@ func guideFixture(t *testing.T, children ...string) (*knowledgeops.Guide, string
 	t.Helper()
 	k := knowledge.New(knowledgetest.NewMemoryStore(), knowledge.WithRecordValidator(reasoning.RuleValidator{Evaluator: datalog.Evaluator{}}))
 	var changes []knowledge.Change
-	var records []knowledge.RecordChange
+	// test.obligation satisfies ADR-0057's completeness bar (#164) for
+	// every Procedure record below: this fixture is about walkthrough
+	// mechanics, not obligation reasoning, so one shared, trivial Concept
+	// is enough.
+	records := []knowledge.RecordChange{{Key: "test.obligation", Record: &knowledge.Record{Type: knowledge.TypeConcept, Key: "test.obligation", Label: "done", Definition: "d"}}}
 	changes = append(changes, knowledge.Change{Key: "parent", Procedure: knowledgetest.SharedProc("parent", "parent")})
 	records = append(records, knowledge.RecordChange{Key: "parent", Record: &knowledge.Record{
-		Type: knowledge.TypeProcedure, Key: "parent", Label: "parent", Definition: "d", Composes: children,
+		Type: knowledge.TypeProcedure, Key: "parent", Label: "parent", Definition: "d", Composes: children, Requires: []string{"test.obligation"},
 	}})
 	for _, c := range children {
 		changes = append(changes, knowledge.Change{Key: c, Procedure: knowledgetest.SharedProc(c, c)})
-		records = append(records, knowledge.RecordChange{Key: c, Record: &knowledge.Record{Type: knowledge.TypeProcedure, Key: c, Label: c, Definition: "d"}})
+		records = append(records, knowledge.RecordChange{Key: c, Record: &knowledge.Record{Type: knowledge.TypeProcedure, Key: c, Label: c, Definition: "d", Requires: []string{"test.obligation"}}})
 	}
 	s, err := k.Publish(context.Background(), knowledge.Proposal{Changes: changes, Records: records,
 		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "s", Rationale: "r"}})
@@ -190,11 +194,11 @@ func nestedGuideFixture(t *testing.T, specs ...nestedSpec) *knowledgeops.Guide {
 	t.Helper()
 	k := knowledge.New(knowledgetest.NewMemoryStore(), knowledge.WithRecordValidator(reasoning.RuleValidator{Evaluator: datalog.Evaluator{}}))
 	var changes []knowledge.Change
-	var records []knowledge.RecordChange
+	records := []knowledge.RecordChange{{Key: "test.obligation", Record: &knowledge.Record{Type: knowledge.TypeConcept, Key: "test.obligation", Label: "done", Definition: "d"}}}
 	for _, s := range specs {
 		changes = append(changes, knowledge.Change{Key: s.Key, Procedure: knowledgetest.SharedProc(s.Key, s.Key)})
 		records = append(records, knowledge.RecordChange{Key: s.Key, Record: &knowledge.Record{
-			Type: knowledge.TypeProcedure, Key: s.Key, Label: s.Key, Definition: "d", Composes: s.Composes,
+			Type: knowledge.TypeProcedure, Key: s.Key, Label: s.Key, Definition: "d", Composes: s.Composes, Requires: []string{"test.obligation"},
 		}})
 	}
 	if _, err := k.Publish(context.Background(), knowledge.Proposal{Changes: changes, Records: records,

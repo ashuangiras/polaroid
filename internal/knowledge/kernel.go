@@ -267,8 +267,30 @@ func (k *Kernel) publish(ctx context.Context, prop Proposal, extra []Trailer) (S
 	if err := checkCatalog(procs, records); err != nil {
 		return "", err
 	}
-	if err := CheckTransition(base, newCatalog("", procs, records)); err != nil {
+	candidate := newCatalog("", procs, records)
+	if err := CheckTransition(base, candidate); err != nil {
 		return "", err
+	}
+	// ADR-0057, activated (#164): every Domain, Concept and Procedure
+	// record of the resulting catalog needs a real definition, and every
+	// Procedure needs an obligation source of its own or inherited via
+	// specializes. Deliberately not done by widening checkCatalog's own
+	// scalars table (the ADR's own sketch): that table is shared with
+	// loadCatalog, which Kernel.At/Active/Check and Load all use to read
+	// an *already-committed* snapshot — including history recorded
+	// before this activation, which the corpus genuinely still has
+	// (found while implementing, not assumed: the catalog's very first
+	// typed records, seeded before #152/#158 existed, have no
+	// definition). Enforcing scalars there would make those old,
+	// already-accepted snapshots unreadable the moment this activates, a
+	// severe and unintended regression ADR-0057's own "nothing stored is
+	// ever re-checked" guarantee rules out. CheckCompleteness, written by
+	// #158 specifically so it could be wired in later without touching
+	// the shared path, is called only here, against the publish
+	// candidate: a new publish is held to the bar, reading history never
+	// is.
+	if problems := candidate.CheckCompleteness(); len(problems) > 0 {
+		return "", &ValidationError{Problems: problems}
 	}
 	if err := validateRecords(ctx, k.validators, records); err != nil {
 		return "", err

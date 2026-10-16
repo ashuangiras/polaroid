@@ -419,10 +419,13 @@ func planFixture(t *testing.T, agent *knowledgeHarness) knowledge.Snapshot {
 		knowledgetest.SharedProc("plan.x", "x"), knowledgetest.SharedProc("plan.y", "y"), knowledgetest.SharedProc("plan.z", "z"),
 	}
 	records := []*knowledge.Record{
-		{Type: knowledge.TypeProcedure, Key: "plan.parent", Label: "Parent", Definition: "A parent procedure.", Composes: []string{"plan.x", "plan.y", "plan.z"}},
-		{Type: knowledge.TypeProcedure, Key: "plan.x", Label: "x", Definition: "Step x.", Precedes: []string{"plan.y"}},
-		{Type: knowledge.TypeProcedure, Key: "plan.y", Label: "y", Definition: "Step y.", Precedes: []string{"plan.z"}},
-		{Type: knowledge.TypeProcedure, Key: "plan.z", Label: "z", Definition: "Step z."},
+		// test.obligation satisfies ADR-0057's completeness bar (#164):
+		// this fixture is about plan ordering, not obligation reasoning.
+		{Type: knowledge.TypeConcept, Key: "test.obligation", Label: "done", Definition: "d"},
+		{Type: knowledge.TypeProcedure, Key: "plan.parent", Label: "Parent", Definition: "A parent procedure.", Composes: []string{"plan.x", "plan.y", "plan.z"}, Requires: []string{"test.obligation"}},
+		{Type: knowledge.TypeProcedure, Key: "plan.x", Label: "x", Definition: "Step x.", Precedes: []string{"plan.y"}, Requires: []string{"test.obligation"}},
+		{Type: knowledge.TypeProcedure, Key: "plan.y", Label: "y", Definition: "Step y.", Precedes: []string{"plan.z"}, Requires: []string{"test.obligation"}},
+		{Type: knowledge.TypeProcedure, Key: "plan.z", Label: "z", Definition: "Step z.", Requires: []string{"test.obligation"}},
 	}
 	s, err := agent.publishRecords(t, procs, records)
 	if err != nil {
@@ -464,7 +467,10 @@ func TestResolvePlanOrderedByPrecedes(t *testing.T) {
 func TestResolveNoPlanWithoutComposition(t *testing.T) {
 	agent := newKnowledgeHarnessV2(t)
 	leaf := []*knowledge.Procedure{knowledgetest.SharedProc("plan.leaf", "Leaf")}
-	records := []*knowledge.Record{{Type: knowledge.TypeProcedure, Key: "plan.leaf", Label: "Leaf", Definition: "A leaf, nothing composed."}}
+	records := []*knowledge.Record{
+		{Type: knowledge.TypeConcept, Key: "test.obligation", Label: "done", Definition: "d"},
+		{Type: knowledge.TypeProcedure, Key: "plan.leaf", Label: "Leaf", Definition: "A leaf, nothing composed.", Requires: []string{"test.obligation"}},
+	}
 	snap, err := agent.publishRecords(t, leaf, records)
 	if err != nil {
 		t.Fatal(err)
@@ -536,7 +542,7 @@ func TestWalkthroughStartPinsSnapshotAndReturnsPlan(t *testing.T) {
 	// Publishing again does not change an already started walkthrough's
 	// plan: it stays pinned at the snapshot start resolved.
 	later := []*knowledge.Procedure{knowledgetest.SharedProc("plan.later", "later")}
-	laterRecords := []*knowledge.Record{{Type: knowledge.TypeProcedure, Key: "plan.later", Label: "later", Definition: "d"}}
+	laterRecords := []*knowledge.Record{{Type: knowledge.TypeProcedure, Key: "plan.later", Label: "later", Definition: "d", Requires: []string{"test.obligation"}}}
 	if _, err := agent.publishRecords(t, later, laterRecords); err != nil {
 		t.Fatal(err)
 	}
@@ -619,9 +625,13 @@ func deepPlanFixture(t *testing.T, agent *knowledgeHarness) {
 		knowledgetest.SharedProc("deep.goal", "goal"), knowledgetest.SharedProc("deep.a", "a"), knowledgetest.SharedProc("deep.b", "b"),
 	}
 	records := []*knowledge.Record{
-		{Type: knowledge.TypeProcedure, Key: "deep.goal", Label: "goal", Definition: "d", Composes: []string{"deep.a"}},
-		{Type: knowledge.TypeProcedure, Key: "deep.a", Label: "a", Definition: "d", Composes: []string{"deep.b"}},
-		{Type: knowledge.TypeProcedure, Key: "deep.b", Label: "b", Definition: "d"},
+		// test.obligation satisfies ADR-0057's completeness bar (#164):
+		// this fixture is about multi-level plans, not obligation
+		// reasoning.
+		{Type: knowledge.TypeConcept, Key: "test.obligation", Label: "done", Definition: "d"},
+		{Type: knowledge.TypeProcedure, Key: "deep.goal", Label: "goal", Definition: "d", Composes: []string{"deep.a"}, Requires: []string{"test.obligation"}},
+		{Type: knowledge.TypeProcedure, Key: "deep.a", Label: "a", Definition: "d", Composes: []string{"deep.b"}, Requires: []string{"test.obligation"}},
+		{Type: knowledge.TypeProcedure, Key: "deep.b", Label: "b", Definition: "d", Requires: []string{"test.obligation"}},
 	}
 	if _, err := agent.publishRecords(t, procs, records); err != nil {
 		t.Fatal(err)

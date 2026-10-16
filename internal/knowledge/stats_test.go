@@ -29,7 +29,8 @@ func TestCatalogStatsEmpty(t *testing.T) {
 }
 
 func TestCatalogStats(t *testing.T) {
-	k := knowledge.New(knowledgetest.NewMemoryStore(), knowledge.WithRecordValidator(&acceptAll{}))
+	store := knowledgetest.NewMemoryStore()
+	k := knowledge.New(store, knowledge.WithRecordValidator(&acceptAll{}))
 
 	shared := knowledgetest.SharedProc("go.verify", "Verify a Go change.")
 	local := knowledgetest.SharedProc("team.deploy", "Deploy, the team way.")
@@ -37,20 +38,18 @@ func TestCatalogStats(t *testing.T) {
 	unspecified := knowledgetest.SharedProc("undeclared.task", "A task with no declared scope.")
 	unspecified.Applicability = knowledge.Applicability{}
 
+	// Deliberately incomplete (ADR-0057): no record here has a
+	// definition, and typedProc has no obligation source either, to
+	// exercise Stats' completeness counting below. Kernel.Publish now
+	// refuses exactly this (#164), so this seeds it directly, as if
+	// already committed before that activation (the same technique
+	// completeness_test.go's rawSnapshot uses, and for the same reason).
 	domain := &knowledge.Record{Type: knowledge.TypeDomain, Key: "domain.software", Label: "Software"}
 	concept := &knowledge.Record{Type: knowledge.TypeConcept, Key: "check.build", Label: "Builds", ClassifiedAs: []string{"domain.software"}}
 	unclassifiedConcept := &knowledge.Record{Type: knowledge.TypeConcept, Key: "check.orphan", Label: "Orphan"}
 	typedProc := &knowledge.Record{Type: knowledge.TypeProcedure, Key: "go.verify", Label: "go.verify", ClassifiedAs: []string{"domain.software"}}
 
-	s, err := k.Publish(context.Background(), knowledge.Proposal{
-		Changes: []knowledge.Change{put(shared), put(local), put(unspecified)},
-		Records: []knowledge.RecordChange{{Key: domain.Key, Record: domain}, {Key: concept.Key, Record: concept},
-			{Key: unclassifiedConcept.Key, Record: unclassifiedConcept}, {Key: typedProc.Key, Record: typedProc}},
-		Provenance: prov(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := rawSnapshot(t, store, []*knowledge.Procedure{shared, local, unspecified}, []*knowledge.Record{domain, concept, unclassifiedConcept, typedProc})
 	cat, err := k.At(context.Background(), s)
 	if err != nil {
 		t.Fatal(err)
