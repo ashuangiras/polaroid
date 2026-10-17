@@ -24,8 +24,8 @@ func corpusKernel(t *testing.T) (*knowledge.Kernel, *knowledgetest.MemoryStore, 
 	t.Helper()
 	store := knowledgetest.NewMemoryStore()
 	k := knowledge.New(store, knowledge.WithRecordValidator(&acceptAll{}))
-	s, err := k.Publish(context.Background(), knowledge.Proposal{
-		Changes: knowledgetest.CorpusProcedures(), Records: knowledgetest.CorpusRecordChanges(), Provenance: prov()})
+	s, err := k.Publish(context.Background(), knowledgetest.WithFullReview(knowledge.Proposal{
+		Changes: knowledgetest.CorpusProcedures(), Records: knowledgetest.CorpusRecordChanges(), Provenance: prov()}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestRecordCatalogChecks(t *testing.T) {
 			Authority: &knowledge.Authority{Level: knowledge.AuthorityCorpus, Path: []string{"domain.software"}}}, "authority.path: is admitted only for domain authority"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := k.Publish(context.Background(), knowledge.Proposal{Base: s, Records: []knowledge.RecordChange{{Key: tc.r.Key, Record: tc.r}}, Provenance: prov()})
+			_, err := k.Publish(context.Background(), knowledgetest.WithFullReview(knowledge.Proposal{Base: s, Records: []knowledge.RecordChange{{Key: tc.r.Key, Record: tc.r}}, Provenance: prov()}))
 			if !errors.Is(err, knowledge.ErrInvalid) || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want %q", err, tc.want)
 			}
@@ -104,12 +104,12 @@ func TestSpecializationApplicability(t *testing.T) {
 		{Key: "team.verify", Record: &knowledge.Record{Type: knowledge.TypeProcedure, Key: "team.verify", Label: "t", Definition: "d", Requires: []string{"check.build"}}},
 		{Key: "team.verify.strict", Record: &knowledge.Record{Type: knowledge.TypeProcedure, Key: "team.verify.strict", Label: "t", Definition: "d", Specializes: []string{"team.verify"}}},
 	}
-	_, err := k.Publish(ctx, knowledge.Proposal{Base: s, Changes: []knowledge.Change{put(local), put(child)}, Records: recs, Provenance: prov()})
+	_, err := k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Base: s, Changes: []knowledge.Change{put(local), put(child)}, Records: recs, Provenance: prov()}))
 	if !errors.Is(err, knowledge.ErrInvalid) || !strings.Contains(err.Error(), "team.verify.strict applies where its parent team.verify does not") {
 		t.Fatalf("shared child of a local parent: %v", err)
 	}
 	child.Applicability = local.Applicability
-	if _, err := k.Publish(ctx, knowledge.Proposal{Base: s, Changes: []knowledge.Change{put(local), put(child)}, Records: recs, Provenance: prov()}); err != nil {
+	if _, err := k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Base: s, Changes: []knowledge.Change{put(local), put(child)}, Records: recs, Provenance: prov()})); err != nil {
 		t.Fatalf("local child of a local parent: %v", err)
 	}
 }
@@ -164,7 +164,7 @@ func TestRecordHistoryAndRollback(t *testing.T) {
 	cat, _ := k.At(ctx, s1)
 	r, _ := cat.Record("check.race")
 	r.Label = "The race detector reports nothing"
-	s2, err := k.Publish(ctx, knowledge.Proposal{Base: s1, Records: []knowledge.RecordChange{{Key: r.Key, Record: r}, {Key: "check.review"}}, Provenance: prov()})
+	s2, err := k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Base: s1, Records: []knowledge.RecordChange{{Key: r.Key, Record: r}, {Key: "check.review"}}, Provenance: prov()}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestRecordHistoryAndRollback(t *testing.T) {
 		got[1] != (knowledge.KeyChange{Key: "check.review", Action: "removed", Record: true}) {
 		t.Fatalf("changed %+v", got)
 	}
-	s3, err := k.Rollback(ctx, s2, s1, prov())
+	s3, err := k.Rollback(ctx, s2, s1, prov(), knowledgetest.ReviewCatalog(cat))
 	if err != nil {
 		t.Fatal(err)
 	}

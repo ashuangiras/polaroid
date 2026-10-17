@@ -105,8 +105,15 @@ func TestOperatorStatusAndPublish(t *testing.T) {
 			"contract": map[string]any{}, "instructions": map[string]any{},
 		}},
 		"author": "operator", "summary": "add tidy", "rationale": "requested",
+		"review": procedureReview("go.module.tidy", "Tidy a module", "p", "m"),
 	}
-	status, body = do(t, http.MethodPost, url+"/v1/knowledge/publications", token, publishBody)
+	status, body = do(t, http.MethodPost, url+"/v1/knowledge/publications", token, map[string]any{
+		"base": "", "changes": publishBody["changes"], "author": "operator", "summary": "add tidy", "rationale": "requested",
+	})
+	if status != http.StatusBadRequest || body["error"] == nil {
+		t.Fatalf("legacy v1 publish = %d %v, want migration error", status, body)
+	}
+	status, body = do(t, http.MethodPost, url+"/v2/knowledge/publications", token, publishBody)
 	if status != http.StatusCreated || body["snapshot"] == "" {
 		t.Fatalf("publish = %d %v", status, body)
 	}
@@ -136,10 +143,11 @@ func TestOperatorRollback(t *testing.T) {
 	url := newServer(t)
 	publish := func(base, goal string) string {
 		t.Helper()
-		status, body := do(t, http.MethodPost, url+"/v1/knowledge/publications", token, map[string]any{
+		status, body := do(t, http.MethodPost, url+"/v2/knowledge/publications", token, map[string]any{
 			"base": base, "changes": []map[string]any{{"key": "go.module.tidy", "goal": goal, "philosophy": "p", "method": "m",
 				"contract": map[string]any{}, "instructions": map[string]any{}}},
-			"author": "operator", "summary": goal, "rationale": "requested"})
+			"author": "operator", "summary": goal, "rationale": "requested",
+			"review": procedureReview("go.module.tidy", goal, "p", "m")})
 		if status != http.StatusCreated {
 			t.Fatalf("publish = %d %v", status, body)
 		}
@@ -148,8 +156,9 @@ func TestOperatorRollback(t *testing.T) {
 	s1 := publish("", "Tidy a module")
 	s2 := publish(s1, "Tidy a module, twice")
 	rollback := func(base, to string) (int, map[string]any) {
-		return do(t, http.MethodPost, url+"/v1/knowledge/rollbacks", token, map[string]any{
-			"base": base, "to": to, "author": "operator", "summary": "undo", "rationale": "the second tidy was wrong"})
+		return do(t, http.MethodPost, url+"/v2/knowledge/rollbacks", token, map[string]any{
+			"base": base, "to": to, "author": "operator", "summary": "undo", "rationale": "the second tidy was wrong",
+			"review": procedureReview("go.module.tidy", "Tidy a module", "p", "m")})
 	}
 	if status, body := rollback(s1, s2); status != http.StatusConflict {
 		t.Fatalf("rollback on a stale base = %d %v", status, body)
@@ -163,5 +172,26 @@ func TestOperatorRollback(t *testing.T) {
 	}
 	if status, _ := do(t, http.MethodPost, url+"/v1/knowledge/rollbacks", "", map[string]any{"base": s2, "to": s1}); status != http.StatusUnauthorized {
 		t.Fatalf("rollback without a token = %d", status)
+	}
+}
+
+func procedureReview(key, goal, philosophy, method string) map[string]any {
+	citation := func(text string) []map[string]string {
+		return []map[string]string{{"source": key, "quote": text}}
+	}
+	return map[string]any{
+		"version": 1,
+		"entities": []map[string]any{{
+			"kind": "procedure", "key": key,
+			"fields": []map[string]any{
+				{"field": "goal", "operation": "replace", "citations": citation(goal)},
+				{"field": "philosophy", "operation": "replace", "citations": citation(philosophy)},
+				{"field": "method", "operation": "replace", "citations": citation(method)},
+				{"field": "applicability", "operation": "clear"},
+				{"field": "contract", "operation": "replace"},
+				{"field": "instructions", "operation": "replace"},
+				{"field": "references", "operation": "clear"},
+			},
+		}},
 	}
 }

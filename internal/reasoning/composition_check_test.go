@@ -25,8 +25,8 @@ func publishProcedures(t *testing.T, w *world, records ...*knowledge.Record) {
 		}
 		recordChanges = append(recordChanges, knowledge.RecordChange{Key: r.Key, Record: r})
 	}
-	s, err := w.kernel.Publish(context.Background(), knowledge.Proposal{Base: w.snap, Changes: changes, Records: recordChanges,
-		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "composition fixture", Rationale: "test"}})
+	s, err := w.kernel.Publish(context.Background(), knowledgetest.WithFullReview(knowledge.Proposal{Base: w.snap, Changes: changes, Records: recordChanges,
+		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "composition fixture", Rationale: "test"}}))
 	if err != nil {
 		t.Fatal(err)
 	}

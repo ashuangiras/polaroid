@@ -115,8 +115,9 @@ func TestCorpusLogicSyncBetweenDaemons(t *testing.T) {
 		doc, _ := knowledge.EncodeRecord(r)
 		records = append(records, map[string]any{"key": r.Key, "document": json.RawMessage(doc)})
 	}
-	if status, pub := op(a, http.MethodPost, "/v1/knowledge/publications", map[string]any{"base": "", "changes": changes, "records": records,
-		"author": "alice", "summary": "Corpus Logic fixtures", "rationale": "shared cross-domain knowledge"}); status != http.StatusCreated {
+	if status, pub := op(a, http.MethodPost, "/v2/knowledge/publications", map[string]any{"base": "", "changes": changes, "records": records,
+		"author": "alice", "summary": "Corpus Logic fixtures", "rationale": "shared cross-domain knowledge",
+		"review": fullFieldReviewForPayload(t, changes, records)}); status != http.StatusCreated {
 		t.Fatalf("A publish = %d %v", status, pub)
 	}
 	sync := func() {
@@ -155,9 +156,11 @@ func TestCorpusLogicSyncBetweenDaemons(t *testing.T) {
 	}
 	vet.Program, vet.Revision = `obligation(P, "check.vet") :- record(P, "Procedure").`, 2
 	doc, _ := knowledge.EncodeRecord(vet)
-	status, pub := op(a, http.MethodPost, "/v1/knowledge/publications", map[string]any{"base": snapA, "changes": []any{},
-		"records": []map[string]any{{"key": vet.Key, "document": json.RawMessage(doc)}},
-		"author":  "alice", "summary": "require vet everywhere", "rationale": "trial"})
+	vetChanges := []map[string]any{{"key": vet.Key, "document": json.RawMessage(doc)}}
+	status, pub := op(a, http.MethodPost, "/v2/knowledge/publications", map[string]any{"base": snapA, "changes": []any{},
+		"records": vetChanges,
+		"author":  "alice", "summary": "require vet everywhere", "rationale": "trial",
+		"review": fullFieldReviewForPayload(t, []any{}, vetChanges)})
 	if status != http.StatusCreated {
 		t.Fatalf("A publish B = %d %v", status, pub)
 	}
@@ -166,8 +169,9 @@ func TestCorpusLogicSyncBetweenDaemons(t *testing.T) {
 	if atB := resolve(b, ""); !strings.Contains(atB, `"requirement":"check.vet"`) {
 		t.Fatalf("B did not take effect: %s", atB)
 	}
-	status, rolled := op(a, http.MethodPost, "/v1/knowledge/rollbacks", map[string]any{"base": snapB, "to": snapA,
-		"author": "alice", "summary": "undo the vet trial", "rationale": "the trial is over"})
+	rollbackReview := fullFieldReviewForPayload(t, changes, records)
+	status, rolled := op(a, http.MethodPost, "/v2/knowledge/rollbacks", map[string]any{"base": snapB, "to": snapA,
+		"author": "alice", "summary": "undo the vet trial", "rationale": "the trial is over", "review": rollbackReview})
 	if status != http.StatusCreated {
 		t.Fatalf("A rollback = %d %v", status, rolled)
 	}
@@ -179,8 +183,8 @@ func TestCorpusLogicSyncBetweenDaemons(t *testing.T) {
 	if again := resolve(b, snapA); again != atA {
 		t.Fatalf("historical snapshot A resolves differently:\n%s\n%s", atA, again)
 	}
-	if status, res := op(a, http.MethodPost, "/v1/knowledge/rollbacks", map[string]any{"base": rolled["snapshot"], "to": snapA,
-		"author": "alice", "summary": "again", "rationale": "no-op"}); status != http.StatusBadRequest {
+	if status, res := op(a, http.MethodPost, "/v2/knowledge/rollbacks", map[string]any{"base": rolled["snapshot"], "to": snapA,
+		"author": "alice", "summary": "again", "rationale": "no-op", "review": rollbackReview}); status != http.StatusBadRequest {
 		t.Fatalf("a rollback that changes nothing = %d %v", status, res)
 	}
 

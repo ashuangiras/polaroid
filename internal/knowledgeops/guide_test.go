@@ -36,8 +36,8 @@ func guideFixture(t *testing.T, children ...string) (*knowledgeops.Guide, string
 		changes = append(changes, knowledge.Change{Key: c, Procedure: knowledgetest.SharedProc(c, c)})
 		records = append(records, knowledge.RecordChange{Key: c, Record: &knowledge.Record{Type: knowledge.TypeProcedure, Key: c, Label: c, Definition: "d", Requires: []string{"test.obligation"}}})
 	}
-	s, err := k.Publish(context.Background(), knowledge.Proposal{Changes: changes, Records: records,
-		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "s", Rationale: "r"}})
+	s, err := k.Publish(context.Background(), knowledgetest.WithFullReview(knowledge.Proposal{Changes: changes, Records: records,
+		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "s", Rationale: "r"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,8 +202,8 @@ func nestedGuideFixture(t *testing.T, specs ...nestedSpec) *knowledgeops.Guide {
 			Type: knowledge.TypeProcedure, Key: s.Key, Label: s.Key, Definition: "d", Composes: s.Composes, Requires: []string{"test.obligation"},
 		}})
 	}
-	if _, err := k.Publish(context.Background(), knowledge.Proposal{Changes: changes, Records: records,
-		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "s", Rationale: "r"}}); err != nil {
+	if _, err := k.Publish(context.Background(), knowledgetest.WithFullReview(knowledge.Proposal{Changes: changes, Records: records,
+		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "s", Rationale: "r"}})); err != nil {
 		t.Fatal(err)
 	}
 	store, err := sqlite.Open(context.Background(), t.TempDir()+"/polaroid.db")
@@ -691,8 +691,8 @@ func guideConditionalFixture(t *testing.T) *knowledgeops.Guide {
 		{Key: domain.Key, Record: domain}, {Key: obligation.Key, Record: obligation}, {Key: conditional.Key, Record: conditional},
 		{Key: rule.Key, Record: rule}, {Key: parent.Key, Record: parent}, {Key: stepA.Key, Record: stepA}, {Key: stepCond.Key, Record: stepCond},
 	}
-	if _, err := k.Publish(context.Background(), knowledge.Proposal{Changes: changes, Records: records,
-		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "s", Rationale: "r"}}); err != nil {
+	if _, err := k.Publish(context.Background(), knowledgetest.WithFullReview(knowledge.Proposal{Changes: changes, Records: records,
+		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "s", Rationale: "r"}})); err != nil {
 		t.Fatal(err)
 	}
 	store, err := sqlite.Open(context.Background(), t.TempDir()+"/polaroid.db")

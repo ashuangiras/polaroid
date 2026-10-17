@@ -249,13 +249,13 @@ var commands = []command{
 	// token configured on the daemon, given here as $POLAROID_KNOWLEDGE_TOKEN.
 	{"knowledge-status", "", "show Git-native knowledge: the active snapshot, its procedure count, and configured sources", 0, 0,
 		func(c *client, _ []string) error { return c.do(http.MethodGet, "/v1/knowledge/status", nil) }},
-	{"knowledge-publish", "[FILE]", "publish knowledge changes from request JSON (base, changes, author, summary, rationale, finding, validation) in FILE or stdin", 0, 1,
+	{"knowledge-publish", "[FILE]", "publish field-reviewed knowledge changes from request JSON (base, changes, records, review, author, summary, rationale, finding, validation) in FILE or stdin", 0, 1,
 		func(c *client, args []string) error {
-			return c.send(http.MethodPost, "/v1/knowledge/publications", args)
+			return c.send(http.MethodPost, "/v2/knowledge/publications", args)
 		}},
-	{"knowledge-rollback", "[FILE]", "restore an earlier published snapshot as a new publication, from request JSON (base, to, author, summary, rationale, validation) in FILE or stdin", 0, 1,
+	{"knowledge-rollback", "[FILE]", "restore an earlier published snapshot as a new, field-reviewed publication from request JSON (base, to, review, author, summary, rationale, validation) in FILE or stdin", 0, 1,
 		func(c *client, args []string) error {
-			return c.send(http.MethodPost, "/v1/knowledge/rollbacks", args)
+			return c.send(http.MethodPost, "/v2/knowledge/rollbacks", args)
 		}},
 	{"knowledge-fetch", "SOURCE [FILE]", "fetch a source's knowledge into quarantine, with optional credentials JSON in FILE or stdin", 1, 2,
 		func(c *client, args []string) error {

@@ -101,13 +101,24 @@ func TestOperatorPublishWithFindingReconciles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := n.operator.Publish(ctx, wire.KnowledgePublishRequest{
+	res, err := n.operator.Publish(ctx, wire.KnowledgePublishV2Request{
 		Base: string(snap),
 		Changes: []wire.KnowledgeChange{{
 			Key: "go.module.tidy", Goal: "Tidy a module", Philosophy: "p", Method: "m, now handling vendoring",
 			Contract: []byte(`{}`), Instructions: []byte(`{}`),
 		}},
 		Author: "operator", Summary: "fix tidy", Rationale: "addresses the report", Finding: f.ID,
+		Review: wire.KnowledgeReviewReceipt{Version: 1, Entities: []wire.KnowledgeReviewEntity{{
+			Kind: "procedure", Key: "go.module.tidy", Fields: []wire.KnowledgeReviewedField{
+				{Field: "goal", Operation: "replace", Citations: []wire.ProposeCitation{{Source: "go.module.tidy", Quote: "Tidy a module"}}},
+				{Field: "philosophy", Operation: "replace", Citations: []wire.ProposeCitation{{Source: "go.module.tidy", Quote: "p"}}},
+				{Field: "method", Operation: "replace", Citations: []wire.ProposeCitation{{Source: "go.module.tidy", Quote: "m, now handling vendoring"}}},
+				{Field: "applicability", Operation: "clear"},
+				{Field: "contract", Operation: "replace"},
+				{Field: "instructions", Operation: "replace"},
+				{Field: "references", Operation: "clear"},
+			},
+		}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -170,10 +181,10 @@ func TestOperatorSyncLifecycle(t *testing.T) {
 	b := newNode(t, knowledgesync.Policy{Sources: []knowledgesync.Source{{Name: "team", URL: remote, Publishers: []string{"alice"}}}})
 	ctx := context.Background()
 
-	if _, err := a.syncer.Kernel().Publish(ctx, knowledge.Proposal{
+	if _, err := a.syncer.Kernel().Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{
 		Base: knowledge.Snapshot(a.active(t)), Changes: knowledgetest.Initial(),
 		Provenance: knowledge.Provenance{Author: "alice", Summary: "seed", Rationale: "initial knowledge"},
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.operator.Push(ctx, "team", none); err != nil {

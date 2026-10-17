@@ -43,6 +43,10 @@ func classify(err error) error {
 		return wire.NewKnowledgeError(http.StatusNotFound, wire.ErrorDetail{Code: "not_found", Message: err.Error()})
 	case errors.Is(err, memory.ErrInvalidOutcome):
 		return wire.NewKnowledgeError(http.StatusBadRequest, wire.ErrorDetail{Code: "invalid_request", Message: err.Error()})
+	case errors.Is(err, memory.ErrFieldDraftConflict):
+		return wire.NewKnowledgeError(http.StatusConflict, wire.ErrorDetail{
+			Code: "draft_conflict", Message: "the field-review draft changed concurrently; peek its current state before retrying",
+		})
 	case errors.Is(err, knowledge.ErrStale):
 		return wire.NewKnowledgeError(http.StatusConflict, wire.ErrorDetail{Code: "stale_snapshot", Message: err.Error()})
 	case errors.Is(err, knowledge.ErrDiverged), errors.Is(err, gitcore.ErrDiverged):

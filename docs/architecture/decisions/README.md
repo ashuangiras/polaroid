@@ -65,5 +65,7 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0059](0059-grounded-publication.md) | Grounded publication: non-vacuous composition, and agent-proposed knowledge by citation and evidence | Accepted |
 | [0060](0060-interactive-proposal-drafts.md) | Grounded publication M3: interactive, field-by-field proposal construction (`propose_start`/`propose_advance`) | Accepted |
 | [0061](0061-draft-every-field-every-time.md) | Every proposal draft walks every field, every time: appending to already-decided content | Accepted |
+| [0062](0062-field-complete-knowledge-publication.md) | Field-complete knowledge publication across all record types and write paths | Accepted |
+| [0062](0062-field-complete-knowledge-publication.md) | Field-complete knowledge publication across all record types and write paths | Accepted |
 
 Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.

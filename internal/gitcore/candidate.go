@@ -300,6 +300,66 @@ func (c *Candidate) Verify(ctx context.Context) ([]Commit, error) {
 	return out, nil
 }
 
+// WalkHistory visits every commit from the candidate's snapshot back to, but
+// excluding, until, oldest first. An empty until walks to the root. Unlike
+// Verify, it includes commits already stored in the repository.
+func (c *Candidate) WalkHistory(ctx context.Context, until Snapshot, visit func(Commit) error) error {
+	if !c.verified {
+		return errors.New("gitcore: the candidate is not verified")
+	}
+	if visit == nil {
+		return errors.New("gitcore: history visitor is nil")
+	}
+	if until != "" && !until.valid() {
+		return fmt.Errorf("%w: snapshot %q", ErrNotFound, until)
+	}
+	view := c.view()
+	var hashes []plumbing.Hash
+	h := plumbing.NewHash(string(c.Snapshot))
+	reached := c.Snapshot == until
+	for !h.IsZero() && !reached {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if Snapshot(h.String()) == until {
+			reached = true
+			break
+		}
+		cm, err := object.GetCommit(view, h)
+		if err != nil {
+			return fmt.Errorf("%w: commit %s: %w", ErrRejected, h, err)
+		}
+		if err := c.checkCommit(cm); err != nil {
+			return err
+		}
+		hashes = append(hashes, h)
+		h = plumbing.ZeroHash
+		if len(cm.ParentHashes) == 1 {
+			h = cm.ParentHashes[0]
+		}
+	}
+	if until != "" && !reached {
+		return fmt.Errorf("%w: snapshot %s is not an ancestor of candidate %s", ErrNotFound, until, c.Snapshot)
+	}
+	for i := len(hashes) - 1; i >= 0; i-- {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		cm, err := object.GetCommit(view, hashes[i])
+		if err != nil {
+			return fmt.Errorf("%w: commit %s: %w", ErrRejected, hashes[i], err)
+		}
+		entry, err := c.r.describe(ctx, view, cm)
+		if err != nil {
+			return err
+		}
+		if err := visit(entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (c *Candidate) checkCommit(cm *object.Commit) error {
 	switch {
 	case len(cm.ParentHashes) > 1:

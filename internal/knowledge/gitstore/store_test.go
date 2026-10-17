@@ -87,14 +87,14 @@ func TestRecoverInFreshProcess(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	k := knowledge.New(open(t, dir))
-	s1, err := k.Publish(ctx, knowledge.Proposal{Changes: knowledgetest.Initial(),
-		Provenance: knowledge.Provenance{Author: "alice", Summary: "Add the Go module procedures", Rationale: "Every module change is verified the same way."}})
+	s1, err := k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Changes: knowledgetest.Initial(),
+		Provenance: knowledge.Provenance{Author: "alice", Summary: "Add the Go module procedures", Rationale: "Every module change is verified the same way."}}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	checks := knowledgetest.Proc("go.module.checks", "Run gofmt, go vet and staticcheck on the module")
-	if _, err := k.Publish(ctx, knowledge.Proposal{Base: s1, Changes: []knowledge.Change{{Key: checks.Key, Procedure: checks}},
-		Provenance: knowledge.Provenance{Author: "bob", Summary: "Add staticcheck", Rationale: "vet misses unused results.", Finding: "fb-42", Validation: "go test ./..."}}); err != nil {
+	if _, err := k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Base: s1, Changes: []knowledge.Change{{Key: checks.Key, Procedure: checks}},
+		Provenance: knowledge.Provenance{Author: "bob", Summary: "Add staticcheck", Rationale: "vet misses unused results.", Finding: "fb-42", Validation: "go test ./..."}})); err != nil {
 		t.Fatal(err)
 	}
 	want := observe(t, k, s1)
@@ -147,8 +147,8 @@ func TestForeignTreesAreRefused(t *testing.T) {
 			if _, err := k.Active(ctx); !errors.Is(err, knowledge.ErrInvalid) {
 				t.Fatalf("served: %v", err)
 			}
-			if _, err := k.Publish(ctx, knowledge.Proposal{Changes: knowledgetest.Initial(),
-				Provenance: knowledge.Provenance{Author: "a", Summary: "s", Rationale: "r"}}); err == nil {
+			if _, err := k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Changes: knowledgetest.Initial(),
+				Provenance: knowledge.Provenance{Author: "a", Summary: "s", Rationale: "r"}})); err == nil {
 				t.Fatal("published on top of an invalid tree")
 			}
 		})
@@ -163,8 +163,8 @@ func TestDamagedDocumentIsCorrupt(t *testing.T) {
 		t.Run(how, func(t *testing.T) {
 			dir := t.TempDir()
 			k := knowledge.New(open(t, dir))
-			s, err := k.Publish(ctx, knowledge.Proposal{Changes: knowledgetest.Initial(),
-				Provenance: knowledge.Provenance{Author: "a", Summary: "s", Rationale: "r"}})
+			s, err := k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Changes: knowledgetest.Initial(),
+				Provenance: knowledge.Provenance{Author: "a", Summary: "s", Rationale: "r"}}))
 			if err != nil {
 				t.Fatal(err)
 			}

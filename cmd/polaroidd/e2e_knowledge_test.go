@@ -49,6 +49,24 @@ func TestKnowledgeAcceptance(t *testing.T) {
 		t.Fatalf("connect agent mode: %v", err)
 	}
 	t.Cleanup(func() { _ = session.Close() })
+	v6Client := sdk.NewClient(&sdk.Implementation{Name: "acceptance-test-v6", Version: "v0"}, nil)
+	v6Session, err := v6Client.Connect(ctx, &sdk.StreamableClientTransport{Endpoint: base + "/mcp/agent/v6", DisableStandaloneSSE: true, MaxRetries: -1}, nil)
+	if err != nil {
+		t.Fatalf("connect agent mode v6: %v", err)
+	}
+	t.Cleanup(func() { _ = v6Session.Close() })
+	v6Tools, err := v6Session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("list v6 tools: %v", err)
+	}
+	var hasFullProposalStart, hasFullProposalAdvance bool
+	for _, tool := range v6Tools.Tools {
+		hasFullProposalStart = hasFullProposalStart || tool.Name == "propose_start"
+		hasFullProposalAdvance = hasFullProposalAdvance || tool.Name == "propose_advance"
+	}
+	if !hasFullProposalStart || !hasFullProposalAdvance {
+		t.Fatalf("v6 endpoint tools = %v, want full proposal tools", v6Tools.Tools)
+	}
 
 	callTool := func(name string, args map[string]any) map[string]any {
 		t.Helper()
@@ -115,14 +133,16 @@ func TestKnowledgeAcceptance(t *testing.T) {
 
 	// 3. An operator publishes the first procedure directly, as task
 	// knowledge: no code change, just a record.
-	status, pub1 := op(http.MethodPost, "/v1/knowledge/publications", token, map[string]any{
-		"base": "",
-		"changes": []map[string]any{{
-			"key": "go.module.tidy", "goal": "Tidy a Go module's dependencies.",
-			"philosophy": "Keep dependencies minimal.", "method": "Run go mod tidy.",
-			"contract": map[string]any{"inputs": map[string]any{"module": "path"}}, "instructions": map[string]any{"steps": []string{"go mod tidy"}},
-		}},
-		"author": "operator.alice", "summary": "add tidy procedure", "rationale": "seed the catalog",
+	changes1 := []map[string]any{{
+		"key": "go.module.tidy", "goal": "Tidy a Go module's dependencies.",
+		"philosophy": "Keep dependencies minimal.", "method": "Run go mod tidy.",
+		"contract": map[string]any{"inputs": map[string]any{"module": "path"}}, "instructions": map[string]any{"steps": []string{"go mod tidy"}},
+	}}
+	status, pub1 := op(http.MethodPost, "/v2/knowledge/publications", token, map[string]any{
+		"base":    "",
+		"changes": changes1,
+		"author":  "operator.alice", "summary": "add tidy procedure", "rationale": "seed the catalog",
+		"review": fullFieldReviewForPayload(t, changes1, []any{}),
 	})
 	if status != http.StatusCreated || pub1["snapshot"] == "" {
 		t.Fatalf("3. publish = %d %v", status, pub1)
@@ -173,15 +193,17 @@ func TestKnowledgeAcceptance(t *testing.T) {
 	// 8. The operator, having reviewed the finding, publishes an improved
 	// procedure addressing it, naming the finding: reconciliation is
 	// attempted automatically and succeeds.
-	status, pub2 := op(http.MethodPost, "/v1/knowledge/publications", token, map[string]any{
-		"base": snap1,
-		"changes": []map[string]any{{
-			"key": "go.module.tidy", "goal": "Tidy a Go module's dependencies, including vendoring.",
-			"philosophy": "Keep dependencies minimal.", "method": "Run go mod tidy, then go mod vendor if vendor/ exists.",
-			"contract":     map[string]any{"inputs": map[string]any{"module": "path"}},
-			"instructions": map[string]any{"steps": []string{"go mod tidy", "test -d vendor && go mod vendor"}},
-		}},
-		"author": "operator.alice", "summary": "handle vendored modules", "rationale": "addresses the agent's finding", "finding": findingID,
+	changes2 := []map[string]any{{
+		"key": "go.module.tidy", "goal": "Tidy a Go module's dependencies, including vendoring.",
+		"philosophy": "Keep dependencies minimal.", "method": "Run go mod tidy, then go mod vendor if vendor/ exists.",
+		"contract":     map[string]any{"inputs": map[string]any{"module": "path"}},
+		"instructions": map[string]any{"steps": []string{"go mod tidy", "test -d vendor && go mod vendor"}},
+	}}
+	status, pub2 := op(http.MethodPost, "/v2/knowledge/publications", token, map[string]any{
+		"base":    snap1,
+		"changes": changes2,
+		"author":  "operator.alice", "summary": "handle vendored modules", "rationale": "addresses the agent's finding", "finding": findingID,
+		"review": fullFieldReviewForPayload(t, changes2, []any{}),
 	})
 	if status != http.StatusCreated {
 		t.Fatalf("8. publish the fix = %d %v", status, pub2)

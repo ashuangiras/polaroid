@@ -64,12 +64,13 @@ func (o *Operator) Status(ctx context.Context) (wire.KnowledgeStatus, error) {
 // feedback report, it then attempts to reconcile that report: a failed
 // reconciliation never undoes the publication, which already succeeded; it
 // is reported in the result for a later, independent retry.
-func (o *Operator) Publish(ctx context.Context, in wire.KnowledgePublishRequest) (wire.KnowledgePublishResult, error) {
+func (o *Operator) Publish(ctx context.Context, in wire.KnowledgePublishV2Request) (wire.KnowledgePublishResult, error) {
 	prop := knowledge.Proposal{
 		Base: knowledge.Snapshot(in.Base),
 		Provenance: knowledge.Provenance{
 			Author: in.Author, Summary: in.Summary, Rationale: in.Rationale, Finding: in.Finding, Validation: in.Validation,
 		},
+		Review: fieldReview(in.Review),
 	}
 	for _, c := range in.Changes {
 		var proc *knowledge.Procedure
@@ -122,14 +123,35 @@ func (o *Operator) Publish(ctx context.Context, in wire.KnowledgePublishRequest)
 // Rollback restores an earlier published snapshot's knowledge as a new
 // publication: restored rules take new revisions, and rule governance
 // applies as to any publication (ADR-0050).
-func (o *Operator) Rollback(ctx context.Context, in wire.KnowledgeRollbackRequest) (wire.KnowledgeRollbackResult, error) {
+func (o *Operator) Rollback(ctx context.Context, in wire.KnowledgeRollbackV2Request) (wire.KnowledgeRollbackResult, error) {
 	snap, err := o.kernel.Rollback(ctx, knowledge.Snapshot(in.Base), knowledge.Snapshot(in.To), knowledge.Provenance{
 		Author: in.Author, Summary: in.Summary, Rationale: in.Rationale, Validation: in.Validation,
-	})
+	}, fieldReview(in.Review))
 	if err != nil {
 		return wire.KnowledgeRollbackResult{}, classify(err)
 	}
 	return wire.KnowledgeRollbackResult{Snapshot: string(snap)}, nil
+}
+
+func fieldReview(in wire.KnowledgeReviewReceipt) knowledge.FieldReviewReceipt {
+	out := knowledge.FieldReviewReceipt{Version: in.Version, Entities: make([]knowledge.EntityReview, len(in.Entities))}
+	for i, entity := range in.Entities {
+		out.Entities[i] = knowledge.EntityReview{
+			Kind: knowledge.ReviewEntityKind(entity.Kind), Key: entity.Key, Type: knowledge.RecordType(entity.Type),
+			Fields: make([]knowledge.ReviewedField, len(entity.Fields)),
+		}
+		for j, field := range entity.Fields {
+			out.Entities[i].Fields[j] = knowledge.ReviewedField{
+				Field: field.Field, Operation: knowledge.ReviewOperation(field.Operation),
+				Value:     field.Value,
+				Citations: make([]knowledge.ReviewCitation, len(field.Citations)),
+			}
+			for k, citation := range field.Citations {
+				out.Entities[i].Fields[j].Citations[k] = knowledge.ReviewCitation{Source: citation.Source, Quote: citation.Quote}
+			}
+		}
+	}
+	return out
 }
 
 // Fetch transfers a source's knowledge into quarantine, replacing any

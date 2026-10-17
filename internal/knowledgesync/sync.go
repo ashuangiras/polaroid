@@ -152,11 +152,13 @@ func (s *Syncer) Fetch(ctx context.Context, source string, cred gitcore.Credenti
 }
 
 // Validate decides whether a fetched candidate is acceptable: Git
-// integrity, then for every new publication an authorised publisher, a
-// stated rationale and a valid complete catalog. A rejected candidate is
-// discarded (ErrRejected, with its problems). An accepted one is stored
-// and tracked, not activated, and its Status says whether it can be.
-// Nothing in the knowledge is executed or interpreted.
+// integrity, then for every incoming publication an authorised publisher,
+// a stated rationale and a valid complete catalog. For a fast-forward it
+// checks the whole history after the active snapshot, including commits
+// already stored locally. A rejected candidate is discarded (ErrRejected,
+// with its problems). An accepted one is stored and tracked, not activated,
+// and its Status says whether it can be. Nothing in the knowledge is
+// executed or interpreted.
 func (s *Syncer) Validate(ctx context.Context, c *Candidate) error {
 	if c.Status != Fetched {
 		return fmt.Errorf("%w: the candidate is %s", ErrNotEligible, c.Status)
@@ -165,11 +167,19 @@ func (s *Syncer) Validate(ctx context.Context, c *Candidate) error {
 	if err != nil {
 		return s.reject(c, err.Error())
 	}
+	local, err := s.repo.Active(ctx)
+	if err != nil {
+		return err
+	}
+	rel, err := c.g.Relation(ctx, local)
+	if err != nil {
+		return err
+	}
 	src := s.sources[c.Source]
 	var probs []string
 	cats := map[knowledge.Snapshot]*knowledge.Catalog{}
 	c.Incoming = nil
-	for _, cm := range commits {
+	validateCommit := func(cm gitcore.Commit) error {
 		in := Incoming{Snapshot: knowledge.Snapshot(cm.Snapshot), Publisher: cm.Author, When: cm.When, Summary: cm.Subject, Rationale: cm.Body}
 		for _, t := range cm.Trailers {
 			in.Trailers = append(in.Trailers, knowledge.Trailer{Key: t.Key, Value: t.Value})
@@ -180,36 +190,49 @@ func (s *Syncer) Validate(ctx context.Context, c *Candidate) error {
 		if strings.TrimSpace(cm.Body) == "" {
 			probs = append(probs, fmt.Sprintf("snapshot %s: no rationale", cm.Snapshot))
 		}
-		tree, err := c.g.Tree(ctx, cm.Snapshot)
+		cat, err := s.catalog(ctx, c, in.Snapshot, cats)
+		if err != nil {
+			if errors.Is(err, knowledge.ErrInvalid) {
+				probs = append(probs, fmt.Sprintf("snapshot %s: %v", cm.Snapshot, err))
+				c.Incoming = append(c.Incoming, in)
+				return nil
+			}
+			return err
+		}
+		in.Procedures = cat.Len()
+		receipt, receiptProblem := fieldReviewFromCommit(cm)
+		if receiptProblem != "" {
+			probs = append(probs, fmt.Sprintf("snapshot %s: %s", cm.Snapshot, receiptProblem))
+			c.Incoming = append(c.Incoming, in)
+			return nil
+		}
+		problem, err := s.checkTransition(ctx, c, cm, cat, cats, receipt)
 		if err != nil {
 			return err
 		}
-		cat, err := s.kernel.Check(ctx, in.Snapshot, gitstore.Files(tree))
-		if err != nil {
-			probs = append(probs, fmt.Sprintf("snapshot %s: %v", cm.Snapshot, err))
-		} else {
-			in.Procedures = cat.Len()
-			cats[in.Snapshot] = cat
-			problem, err := s.checkTransition(ctx, cm, cat, cats)
-			if err != nil {
-				return err
-			}
-			if problem != nil {
-				probs = append(probs, fmt.Sprintf("snapshot %s: %v", cm.Snapshot, problem))
-			}
+		if problem != nil {
+			probs = append(probs, fmt.Sprintf("snapshot %s: %v", cm.Snapshot, problem))
 		}
 		c.Incoming = append(c.Incoming, in)
+		return nil
+	}
+	if rel == gitcore.Behind {
+		err := c.g.WalkHistory(ctx, gitcore.Snapshot(local), validateCommit)
+		if err != nil {
+			if errors.Is(err, gitcore.ErrRejected) || errors.Is(err, gitcore.ErrNotFound) {
+				return s.reject(c, err.Error())
+			}
+			return err
+		}
+	} else {
+		for _, cm := range commits {
+			if err := validateCommit(cm); err != nil {
+				return err
+			}
+		}
 	}
 	if len(probs) > 0 {
 		return s.reject(c, probs...)
-	}
-	local, err := s.repo.Active(ctx)
-	if err != nil {
-		return err
-	}
-	rel, err := c.g.Relation(ctx, local)
-	if err != nil {
-		return err
 	}
 	if err := s.repo.Import(ctx, c.g); err != nil {
 		return err
@@ -217,6 +240,25 @@ func (s *Syncer) Validate(ctx context.Context, c *Candidate) error {
 	c.Local = knowledge.Snapshot(local)
 	c.Status = map[gitcore.Relation]Status{gitcore.Same: Identical, gitcore.Behind: FastForward, gitcore.Ahead: LocalAhead, gitcore.Diverged: Diverged}[rel]
 	return nil
+}
+
+func (s *Syncer) catalog(ctx context.Context, c *Candidate, snapshot knowledge.Snapshot, cats map[knowledge.Snapshot]*knowledge.Catalog) (*knowledge.Catalog, error) {
+	if cat, ok := cats[snapshot]; ok {
+		return cat, nil
+	}
+	tree, err := c.g.Tree(ctx, gitcore.Snapshot(snapshot))
+	if errors.Is(err, gitcore.ErrNotFound) {
+		tree, err = s.repo.StoredTree(ctx, gitcore.Snapshot(snapshot))
+	}
+	if err != nil {
+		return nil, err
+	}
+	cat, err := s.kernel.Check(ctx, snapshot, gitstore.Files(tree))
+	if err != nil {
+		return nil, err
+	}
+	cats[snapshot] = cat
+	return cat, nil
 }
 
 // checkTransition checks an incoming publication against its parent: an
@@ -227,30 +269,55 @@ func (s *Syncer) Validate(ctx context.Context, c *Candidate) error {
 // cancelled by a revision never matches again. A parent held nowhere here
 // is refused rather than skipped. Trailers grant nothing: rule governance
 // has no exemptions.
-func (s *Syncer) checkTransition(ctx context.Context, cm gitcore.Commit, cat *knowledge.Catalog, cats map[knowledge.Snapshot]*knowledge.Catalog) (problem, err error) {
+func (s *Syncer) checkTransition(ctx context.Context, c *Candidate, cm gitcore.Commit, cat *knowledge.Catalog, cats map[knowledge.Snapshot]*knowledge.Catalog,
+	receipt knowledge.FieldReviewReceipt) (problem, err error) {
 	if len(cm.Parents) == 0 {
+		if err := knowledge.CheckFieldReviewTransition(nil, cat, receipt); err != nil {
+			return err, nil
+		}
 		return nil, nil
 	}
 	parent := knowledge.Snapshot(cm.Parents[0])
-	prev := cats[parent]
-	if prev == nil {
-		tree, err := s.repo.StoredTree(ctx, gitcore.Snapshot(parent))
-		if errors.Is(err, gitcore.ErrNotFound) {
-			return fmt.Errorf("its parent %s is not knowledge held here, so the change from it cannot be checked", parent), nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		c, err := s.kernel.Check(ctx, parent, gitstore.Files(tree))
-		if errors.Is(err, knowledge.ErrInvalid) {
-			return fmt.Errorf("its parent %s: %w", parent, err), nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		prev = c
+	prev, err := s.catalog(ctx, c, parent, cats)
+	if errors.Is(err, gitcore.ErrNotFound) {
+		return fmt.Errorf("its parent %s is not knowledge held here, so the change from it cannot be checked", parent), nil
 	}
-	return knowledge.CheckTransition(prev, cat), nil
+	if errors.Is(err, knowledge.ErrInvalid) {
+		return fmt.Errorf("its parent %s: %w", parent, err), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := knowledge.CheckTransition(prev, cat); err != nil {
+		return err, nil
+	}
+	if err := knowledge.CheckFieldReviewTransition(prev, cat, receipt); err != nil {
+		return err, nil
+	}
+	return nil, nil
+}
+
+func fieldReviewFromCommit(cm gitcore.Commit) (knowledge.FieldReviewReceipt, string) {
+	var receipt knowledge.FieldReviewReceipt
+	found := false
+	for _, trailer := range cm.Trailers {
+		if trailer.Key != knowledge.TrailerFieldReview {
+			continue
+		}
+		if found {
+			return knowledge.FieldReviewReceipt{}, "duplicate Polaroid-Field-Review trailer"
+		}
+		var err error
+		receipt, err = knowledge.DecodeFieldReview([]byte(trailer.Value))
+		if err != nil {
+			return knowledge.FieldReviewReceipt{}, fmt.Sprintf("invalid Polaroid-Field-Review trailer: %v", err)
+		}
+		found = true
+	}
+	if !found {
+		return knowledge.FieldReviewReceipt{}, ""
+	}
+	return receipt, ""
 }
 
 func (s *Syncer) reject(c *Candidate, probs ...string) error {
@@ -304,5 +371,54 @@ func (s *Syncer) Publish(ctx context.Context, source string, cred gitcore.Creden
 	if !src.Publish {
 		return gitcore.PushResult{}, fmt.Errorf("%w: %q", ErrNotPermitted, source)
 	}
+	if err := s.checkLocalFieldReviewHistory(ctx); err != nil {
+		return gitcore.PushResult{}, err
+	}
 	return s.repo.Push(ctx, src.remote(), cred)
+}
+
+func (s *Syncer) checkLocalFieldReviewHistory(ctx context.Context) error {
+	active, err := s.repo.Active(ctx)
+	if err != nil {
+		return err
+	}
+	if active == "" {
+		return nil
+	}
+	const batchSize = 128
+	for from := active; from != ""; {
+		commits, err := s.repo.History(ctx, from, batchSize)
+		if err != nil {
+			return err
+		}
+		for _, cm := range commits {
+			receipt, problem := fieldReviewFromCommit(cm)
+			if problem != "" {
+				return &knowledge.ValidationError{Problems: []knowledge.Problem{{
+					Field: "history[" + string(cm.Snapshot) + "].field_review", Message: problem,
+				}}}
+			}
+			next, err := s.kernel.At(ctx, knowledge.Snapshot(cm.Snapshot))
+			if err != nil {
+				return err
+			}
+			var prev *knowledge.Catalog
+			if len(cm.Parents) > 0 {
+				prev, err = s.kernel.At(ctx, knowledge.Snapshot(cm.Parents[0]))
+				if err != nil {
+					return err
+				}
+			}
+			if err := knowledge.CheckFieldReviewTransition(prev, next, receipt); err != nil {
+				return &knowledge.ValidationError{Problems: []knowledge.Problem{{
+					Field: "history[" + string(cm.Snapshot) + "].field_review", Message: err.Error(),
+				}}}
+			}
+		}
+		if len(commits) < batchSize || len(commits[len(commits)-1].Parents) == 0 {
+			break
+		}
+		from = commits[len(commits)-1].Parents[0]
+	}
+	return nil
 }

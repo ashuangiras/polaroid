@@ -103,6 +103,7 @@ type Proposal struct {
 	Changes    []Change
 	Records    []RecordChange
 	Provenance Provenance
+	Review     FieldReviewReceipt
 }
 
 // Trailer keys of a publication's structured provenance.
@@ -215,7 +216,6 @@ func (k *Kernel) buildCandidate(ctx context.Context, prop Proposal) (candidate *
 			continue
 		}
 		if old, ok := procs[c.Key]; ok && equalDocs(old, proc) {
-			p.add(fmt.Sprintf("changes[%d]", i), "%s is unchanged", c.Key)
 			continue
 		}
 		procs[c.Key] = proc
@@ -264,7 +264,6 @@ func (k *Kernel) buildCandidate(ctx context.Context, prop Proposal) (candidate *
 			continue
 		}
 		if old != nil && equalRecords(old, r) {
-			p.add(field, "%s is unchanged", c.Key)
 			continue
 		}
 		if old != nil && old.Type != r.Type {
@@ -288,6 +287,12 @@ func (k *Kernel) buildCandidate(ctx context.Context, prop Proposal) (candidate *
 	candidate = newCatalog("", procs, records)
 	if err := CheckTransition(base, candidate); err != nil {
 		return nil, nil, nil, nil, err
+	}
+	if err := CheckFieldReviewTransition(base, candidate, prop.Review); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if len(files) == 0 {
+		return nil, nil, nil, nil, &ValidationError{Problems: []Problem{{Field: "changes", Message: "contain no knowledge changes"}}}
 	}
 	// ADR-0057, activated (#164): every Domain, Concept and Procedure
 	// record of the resulting catalog needs a real definition, and every
@@ -328,6 +333,13 @@ func (k *Kernel) publish(ctx context.Context, prop Proposal, extra []Trailer) (S
 	}
 	if pv.Validation != "" {
 		trailers = append(trailers, Trailer{TrailerValidation, pv.Validation})
+	}
+	if prop.Review.Version != 0 {
+		review, err := prop.Review.Encode()
+		if err != nil {
+			return "", err
+		}
+		trailers = append(trailers, Trailer{TrailerFieldReview, string(review)})
 	}
 	validated := fmt.Sprintf("catalog of %d procedures: documents, references, applicability, cycles, limits", len(procs))
 	if len(records) > 0 {
@@ -379,7 +391,7 @@ func equalRecords(a, b *Record) bool {
 // Rollback publishes, on top of base, the knowledge of the earlier
 // published snapshot to. History is kept: the rollback is a new
 // publication, recorded with the snapshot it restores.
-func (k *Kernel) Rollback(ctx context.Context, base, to Snapshot, pv Provenance) (Snapshot, error) {
+func (k *Kernel) Rollback(ctx context.Context, base, to Snapshot, pv Provenance, review FieldReviewReceipt) (Snapshot, error) {
 	if to == "" {
 		return "", &ValidationError{Problems: []Problem{{Field: "to", Message: "is required: the published snapshot to restore"}}}
 	}
@@ -436,7 +448,8 @@ func (k *Kernel) Rollback(ctx context.Context, base, to Snapshot, pv Provenance)
 	if len(changes)+len(records) == 0 {
 		return "", &ValidationError{Problems: []Problem{{Field: "to", Message: "the active knowledge already equals that snapshot"}}}
 	}
-	return k.publish(ctx, Proposal{Base: base, Changes: changes, Records: records, Provenance: pv}, []Trailer{{TrailerRollback, string(to)}})
+	return k.publish(ctx, Proposal{Base: base, Changes: changes, Records: records, Provenance: pv, Review: review},
+		[]Trailer{{TrailerRollback, string(to)}})
 }
 
 // restoredRevision is the revision a rollback gives a restored rule that is

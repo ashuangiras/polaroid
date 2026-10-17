@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ashuangiras/polaroid/internal/knowledge"
+	"github.com/ashuangiras/polaroid/internal/knowledge/knowledgetest"
 	"github.com/ashuangiras/polaroid/internal/reasoning"
 	"github.com/ashuangiras/polaroid/internal/reasoning/policy"
 )
@@ -29,7 +30,12 @@ func TestRollbackNeverRevalidatesApprovals(t *testing.T) {
 	changed := original.Clone()
 	changed.Program, changed.Revision = `obligation(P, "check.vet") :- record(P, "Procedure").`, 2
 	w.publish(changed)
-	s, err := w.kernel.Rollback(context.Background(), w.snap, approved, knowledge.Provenance{Author: "test.agent", Summary: "roll back", Rationale: "test"})
+	target, err := w.kernel.At(context.Background(), approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := w.kernel.Rollback(context.Background(), w.snap, approved,
+		knowledge.Provenance{Author: "test.agent", Summary: "roll back", Rationale: "test"}, knowledgetest.ReviewCatalog(target))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -170,20 +170,20 @@ const (
 // at Domain. The approval signs it, so a changed hierarchy never silently
 // widens or keeps an approval (ADR-0050).
 type Authority struct {
-	Level      AuthorityLevel
-	Domain     string
-	Repository string
-	Path       []string
+	Level      AuthorityLevel `json:"level"`
+	Domain     string         `json:"domain,omitzero"`
+	Repository string         `json:"repository,omitzero"`
+	Path       []string       `json:"path,omitzero"`
 }
 
 // Approval is the signed approval of an exception (ADR-0050): an Ed25519
 // signature by the key named Key over the exception's approval payload.
 type Approval struct {
-	Reference  string
-	Key        string
-	ValidFrom  time.Time
-	ValidUntil time.Time
-	Signature  []byte
+	Reference  string    `json:"reference"`
+	Key        string    `json:"key"`
+	ValidFrom  time.Time `json:"valid_from"`
+	ValidUntil time.Time `json:"valid_until"`
+	Signature  []byte    `json:"signature"`
 }
 
 type recordDoc struct {

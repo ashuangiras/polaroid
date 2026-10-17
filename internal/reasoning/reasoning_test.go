@@ -46,9 +46,9 @@ func newWorld(t testing.TB) *world {
 	store := knowledgetest.NewMemoryStore()
 	w := &world{t: t, store: store, kernel: knowledge.New(store, knowledge.WithRecordValidator(v), knowledge.WithRecordValidator(reasoning.RuleValidator{Evaluator: ev})),
 		keys: map[string]ed25519.PrivateKey{}, trust: policy.Trust{Keys: map[string]policy.Key{}, Revoked: map[string]bool{}}}
-	w.snap, err = w.kernel.Publish(context.Background(), knowledge.Proposal{
+	w.snap, err = w.kernel.Publish(context.Background(), knowledgetest.WithFullReview(knowledge.Proposal{
 		Changes: knowledgetest.CorpusProcedures(), Records: knowledgetest.CorpusRecordChanges(),
-		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "corpus", Rationale: "test"}})
+		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "corpus", Rationale: "test"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,8 +72,8 @@ func (w *world) publish(records ...*knowledge.Record) {
 	for _, r := range records {
 		changes = append(changes, knowledge.RecordChange{Key: r.Key, Record: r})
 	}
-	s, err := w.kernel.Publish(context.Background(), knowledge.Proposal{Base: w.snap, Records: changes,
-		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "more", Rationale: "test"}})
+	s, err := w.kernel.Publish(context.Background(), knowledgetest.WithFullReview(knowledge.Proposal{Base: w.snap, Records: changes,
+		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "more", Rationale: "test"}}))
 	if err != nil {
 		w.t.Fatal(err)
 	}
@@ -164,8 +164,8 @@ func (w *world) publishErr(records ...*knowledge.Record) error {
 	for _, r := range records {
 		changes = append(changes, knowledge.RecordChange{Key: r.Key, Record: r})
 	}
-	_, err := w.kernel.Publish(context.Background(), knowledge.Proposal{Base: w.snap, Records: changes,
-		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "try", Rationale: "test"}})
+	_, err := w.kernel.Publish(context.Background(), knowledgetest.WithFullReview(knowledge.Proposal{Base: w.snap, Records: changes,
+		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "try", Rationale: "test"}}))
 	return err
 }
 
@@ -558,8 +558,8 @@ func TestProtectedInvariant(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	_, err := w.kernel.Publish(context.Background(), knowledge.Proposal{Base: w.snap, Records: []knowledge.RecordChange{{Key: "rule.software.tests"}},
-		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "remove", Rationale: "test"}})
+	_, err := w.kernel.Publish(context.Background(), knowledgetest.WithFullReview(knowledge.Proposal{Base: w.snap, Records: []knowledge.RecordChange{{Key: "rule.software.tests"}},
+		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "remove", Rationale: "test"}}))
 	if !errors.Is(err, knowledge.ErrInvalid) || !strings.Contains(err.Error(), "is a protected invariant and cannot be removed") {
 		t.Errorf("remove: %v", err)
 	}
@@ -808,8 +808,8 @@ func TestPublicationRefusesUnsafeRules(t *testing.T) {
 		"helper":    `helper(P) :- record(P, "Procedure").`,
 	} {
 		r := &knowledge.Record{Type: knowledge.TypeRule, Key: "rule.bad", Label: name, Statement: name, Program: program, Revision: 1}
-		_, err := w.kernel.Publish(context.Background(), knowledge.Proposal{Base: w.snap, Records: []knowledge.RecordChange{{Key: r.Key, Record: r}},
-			Provenance: knowledge.Provenance{Author: "test.agent", Summary: name, Rationale: "test"}})
+		_, err := w.kernel.Publish(context.Background(), knowledgetest.WithFullReview(knowledge.Proposal{Base: w.snap, Records: []knowledge.RecordChange{{Key: r.Key, Record: r}},
+			Provenance: knowledge.Provenance{Author: "test.agent", Summary: name, Rationale: "test"}}))
 		if !errors.Is(err, knowledge.ErrInvalid) || !strings.Contains(err.Error(), "rule rule.bad") {
 			t.Errorf("%s: %v", name, err)
 		}
