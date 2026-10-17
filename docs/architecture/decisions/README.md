@@ -61,5 +61,7 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0055](0055-walkthrough-completion.md) | Guided Procedures M4: walkthrough completion semantics and an explicit early close | Accepted |
 | [0056](0056-walkthrough-visibility-and-status.md) | Guided Procedures M5: operator visibility, an agent-reported `blocked` status, and an expand option | Accepted |
 | [0057](0057-typed-record-completeness.md) | Guided Procedures prerequisite: mandatory definitions and formal obligations for typed records (two-phase; activation gated on #152) | Accepted (activated by #164) |
+| [0058](0058-reasoned-walkthrough-steps.md) | Guided Procedures M6: reasoned walkthrough steps — resolving `next`'s obligations against accumulated context | Accepted |
+| [0059](0059-grounded-publication.md) | Grounded publication: non-vacuous composition, and agent-proposed knowledge by citation and evidence | Accepted |
 
 Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.
