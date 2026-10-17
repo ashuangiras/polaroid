@@ -320,6 +320,100 @@ func TestPushRejectsLocalHistoryWithUnreviewedTransition(t *testing.T) {
 	}
 }
 
+func TestFastForwardRejectsPreviouslyImportedUnreviewedHistory(t *testing.T) {
+	ctx := context.Background()
+	remote := bareRemote(t)
+	a := newInstance(t, team(remote, "alice"))
+	b := newInstance(t, team(remote, "alice"))
+	base := a.publish(t, "alice", "Create a procedure", knowledgetest.Proc("go.module.verify", "Verify a Go module"))
+	a.push(t)
+	if err := b.sync.Activate(ctx, b.fetchValidated(t, "team"), decision("operator.b")); err != nil {
+		t.Fatal(err)
+	}
+
+	cat, err := a.k.Active(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	procedure, err := cat.Get("go.module.verify")
+	if err != nil {
+		t.Fatal(err)
+	}
+	procedure.Method = "Change without a field-review receipt"
+	document, err := knowledge.Encode(procedure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unreviewed, err := a.repo.Publish(ctx, gitcore.Publication{
+		Expected: gitcore.Snapshot(base), Author: "alice", Subject: "unreviewed remote change",
+		Body:    "imported by an older daemon",
+		Changes: []gitcore.Change{{Path: knowledge.Path(procedure.Key), Content: document}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.repo.Push(ctx, gitcore.Remote{Name: "team", URL: remote}, none); err != nil {
+		t.Fatal(err)
+	}
+
+	// Model an earlier daemon importing Git-valid history before field-review
+	// validation existed. The current candidate will then have no new pack.
+	legacy, err := b.repo.Fetch(ctx, gitcore.Remote{Name: "team", URL: remote}, none, gitcore.TransferLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = legacy.Close() })
+	if commits, err := legacy.Verify(ctx); err != nil || len(commits) != 1 {
+		t.Fatalf("legacy candidate verify = %d commits, %v; want 1", len(commits), err)
+	}
+	if err := b.repo.Import(ctx, legacy); err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.repo.Tracking(ctx, gitcore.Remote{Name: "team"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != gitcore.Snapshot(unreviewed) {
+		t.Fatalf("legacy import tracked %s, want %s", got, unreviewed)
+	}
+
+	candidate, err := b.sync.Fetch(ctx, "team", none)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Objects != 0 {
+		t.Fatalf("stored candidate has %d received objects, want none", candidate.Objects)
+	}
+	if err := b.sync.Validate(ctx, candidate); !errors.Is(err, knowledgesync.ErrRejected) ||
+		candidate.Status != knowledgesync.Rejected || !strings.Contains(err.Error(), "complete field-review receipt") ||
+		!strings.Contains(err.Error(), string(unreviewed)) {
+		t.Fatalf("validation of stored history = %v, status %s; want missing field-review receipt rejection", err, candidate.Status)
+	}
+	if b.active(t) != base {
+		t.Fatal("validation activated previously imported knowledge")
+	}
+
+	a.publish(t, "alice", "Add a reviewed procedure", knowledgetest.Proc("go.module.extra", "Verify an additional Go module detail"))
+	if _, err := a.repo.Push(ctx, gitcore.Remote{Name: "team", URL: remote}, none); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err = b.sync.Fetch(ctx, "team", none)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Objects == 0 {
+		t.Fatal("the candidate should contain a new commit above the stored history")
+	}
+	if err := b.sync.Validate(ctx, candidate); !errors.Is(err, knowledgesync.ErrRejected) ||
+		candidate.Status != knowledgesync.Rejected || !strings.Contains(err.Error(), "complete field-review receipt") ||
+		!strings.Contains(err.Error(), string(unreviewed)) {
+		t.Fatalf("validation above stored history = %v, status %s; want missing field-review receipt rejection", err, candidate.Status)
+	}
+	if b.active(t) != base {
+		t.Fatal("validation activated a candidate with an unreviewed stored ancestor")
+	}
+}
+
 func TestUntrustedKnowledgeIsRejected(t *testing.T) {
 	ctx := context.Background()
 	remote := bareRemote(t)
