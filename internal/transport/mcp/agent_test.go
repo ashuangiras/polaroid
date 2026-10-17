@@ -878,6 +878,27 @@ func TestDraftMissingCitationIsRejected(t *testing.T) {
 	}
 }
 
+// TestDraftOffersAlreadyNonEmptyFieldWithExistingValues proves
+// (ADR-0061), over the real transport, that propose_start still offers
+// a field already holding published content -- draft.consumer's own
+// preconditions -- instead of silently skipping it, and surfaces its
+// current values and *Complete state so an answer can extend it.
+func TestDraftOffersAlreadyNonEmptyFieldWithExistingValues(t *testing.T) {
+	agent := newKnowledgeHarnessV5(t)
+	draftFixture(t, agent)
+	start := decodeJSON(t, agent.ok(t, "propose_start", `{"key":"draft.consumer","proposer":"test.agent","rationale":"r"}`))
+	if start["next_field"] != "preconditions" {
+		t.Fatalf("next_field = %v, want preconditions (every field is offered, ADR-0061)", start["next_field"])
+	}
+	existing, _ := start["existing_values"].([]any)
+	if len(existing) != 1 || existing[0] != "draft.some-precondition" {
+		t.Fatalf("existing_values = %v, want [draft.some-precondition]", start["existing_values"])
+	}
+	if start["existing_complete"] == true {
+		t.Fatalf("existing_complete = true, want false/omitted (never marked *Complete in the fixture)")
+	}
+}
+
 func TestDraftCloseOverRealTransport(t *testing.T) {
 	agent := newKnowledgeHarnessV5(t)
 	draftFixture(t, agent)

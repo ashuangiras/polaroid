@@ -1,6 +1,6 @@
 # 0060. Interactive, field-by-field proposal construction: `propose_start`/`propose_advance`
 
-**Status:** Accepted (Grounded publication M3; amends [ADR-0059](0059-grounded-publication.md) Part 2 additively — `propose` itself is unchanged).
+**Status:** Accepted (Grounded publication M3; amends [ADR-0059](0059-grounded-publication.md) Part 2 additively — `propose` itself is unchanged). Amended by [ADR-0061](0061-draft-every-field-every-time.md): `propose_start`/`propose_advance` walk every field on every draft, not only ones that start empty or unmarked.
 **Date:** 2026-10-17
 
 ## Context
