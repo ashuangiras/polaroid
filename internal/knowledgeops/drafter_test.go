@@ -177,10 +177,13 @@ func TestDrafterTokenNotFoundAfterCommit(t *testing.T) {
 	}
 }
 
-// TestDrafterSkipsAlreadyDecidedFields proves a field already non-empty
-// (draft.consumer's own preconditions) or already *Complete is skipped
-// entirely, never offered for an answer.
-func TestDrafterSkipsAlreadyDecidedFields(t *testing.T) {
+// TestDrafterOffersAlreadyNonEmptyFieldsWithExistingValues proves
+// (ADR-0061) that a field already non-empty (draft.consumer's own
+// preconditions) is still offered, not skipped, with its current values
+// and *Complete state surfaced in the result -- closing the gap where an
+// already-published field could never be extended through the guided
+// walk, only through a hand-assembled single-shot propose call.
+func TestDrafterOffersAlreadyNonEmptyFieldsWithExistingValues(t *testing.T) {
 	d, _ := drafterFixture(t)
 	ctx := context.Background()
 	start, err := d.Start(ctx, wire.DraftStartRequest{Key: "draft.consumer", Proposer: "test.agent", Rationale: "r"})
@@ -188,9 +191,16 @@ func TestDrafterSkipsAlreadyDecidedFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	// draft.consumer already has Preconditions = ["draft.some-precondition"]:
-	// the walk must skip straight to postconditions.
-	if start.NextField != "postconditions" {
-		t.Fatalf("next_field = %q, want postconditions (preconditions already decided)", start.NextField)
+	// every draft still starts at preconditions, first in fixed order,
+	// surfacing what is already there instead of skipping past it.
+	if start.NextField != "preconditions" {
+		t.Fatalf("next_field = %q, want preconditions (every field is offered, ADR-0061)", start.NextField)
+	}
+	if len(start.ExistingValues) != 1 || start.ExistingValues[0] != "draft.some-precondition" {
+		t.Fatalf("existing_values = %v, want [draft.some-precondition]", start.ExistingValues)
+	}
+	if start.ExistingComplete {
+		t.Fatalf("existing_complete = true, want false (never marked *Complete in the fixture)")
 	}
 }
 

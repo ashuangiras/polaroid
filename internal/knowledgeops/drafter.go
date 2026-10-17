@@ -15,14 +15,17 @@ import (
 // (ADR-0060): interactive, field-by-field construction of a single-shot
 // propose (ADR-0059) request for an existing Procedure, one content
 // field at a time, requiring an explicit answer -- real, citation-grounded
-// content, or an explicit, reasoned decline -- for every field the
-// Procedure does not already decide. Each Values answer's own citations
-// are checked immediately (reusing Proposer's own checkQuotesGrounded),
-// so a missing or unverifiable citation is rejected on the spot, not
-// deferred to the final commit; the moment every field is decided,
-// Drafter delegates the actual commit to Proposer.Propose unchanged --
-// completeness, the non-vacuous composition gate and the novelty-diff
-// are Proposer's, reused, not duplicated.
+// content, or an explicit, reasoned decline -- for every one of its four
+// fields, every draft, every time (ADR-0061): a field that already holds
+// published content is still offered, with its current values surfaced,
+// so new entries can be appended to it, not only to one that starts
+// empty. Each Values answer's own citations are checked immediately
+// (reusing Proposer's own checkQuotesGrounded), so a missing or
+// unverifiable citation is rejected on the spot, not deferred to the
+// final commit; the moment every field is decided, Drafter delegates the
+// actual commit to Proposer.Propose unchanged -- completeness, the
+// non-vacuous composition gate and the novelty-diff are Proposer's,
+// reused, not duplicated.
 type Drafter struct {
 	kernel   *knowledge.Kernel
 	proposer *Proposer
@@ -39,9 +42,10 @@ func NewDrafter(kernel *knowledge.Kernel, proposer *Proposer, drafts *memory.Dra
 
 // draftableFields names, in the fixed order propose_start/propose_advance
 // always offer them, each field and its accessor on a knowledge.Record:
-// the existing values already there (which, if non-empty, means the
-// field is already decided and is skipped) and whether it is already
-// marked *Complete (ADR-0060) from an earlier publish.
+// the values already published there (shown to the agent as context,
+// never a reason to skip the field -- ADR-0061) and whether it is
+// already marked *Complete (ADR-0060) from an earlier publish (also
+// shown, also never a reason to skip).
 type draftableField struct {
 	field    memory.DraftField
 	existing []string
@@ -57,29 +61,28 @@ func draftableFields(rec *knowledge.Record) []draftableField {
 	}
 }
 
-// nextUndecidedField returns the first field that is neither already
-// non-empty nor already marked *Complete nor already answered in st, in
-// draftableFields' fixed order; "" if none remains (every field is
-// decided, one way or another).
-func nextUndecidedField(rec *knowledge.Record, answers map[memory.DraftField]memory.DraftFieldAnswer) memory.DraftField {
-	for _, f := range draftableFields(rec) {
-		if len(f.existing) > 0 || f.complete {
+// nextField returns the first field, in draftableFields' fixed order,
+// not yet answered in this draft's own accumulated answers; "" once all
+// four have been. Unlike an earlier design, this never looks at the
+// record's own existing content or *Complete flag to decide what to
+// skip (ADR-0061): every draft walks all four fields, every time, so
+// that a field already holding real content can still be extended
+// through this guided tool, not only through a hand-assembled
+// single-shot propose call.
+func nextField(answers map[memory.DraftField]memory.DraftFieldAnswer) memory.DraftField {
+	for _, f := range memory.DraftFields {
+		if _, answered := answers[f]; answered {
 			continue
 		}
-		if _, answered := answers[f.field]; answered {
-			continue
-		}
-		return f.field
+		return f
 	}
 	return ""
 }
 
 // Start resolves in.Key at the active snapshot (must be an existing
 // Procedure), pins it for the new draft's lifetime, and returns
-// {token, snapshot, next_field, status}. If every field is already
-// decided (the Procedure already has, or is already marked *Complete
-// for, everything), the commit is attempted immediately, in this same
-// call, exactly as Advance would.
+// {token, snapshot, next_field, existing_values, existing_complete,
+// status}.
 func (d *Drafter) Start(ctx context.Context, in wire.DraftStartRequest) (wire.DraftResult, error) {
 	if in.Key == "" {
 		return wire.DraftResult{}, requiredField("key")
@@ -147,16 +150,26 @@ func (d *Drafter) Advance(ctx context.Context, in wire.DraftAdvanceRequest) (wir
 	return d.resultOrCommit(ctx, rec, st, answer != nil)
 }
 
-// resultOrCommit computes st's next undecided field. If none remains and
-// attemptCommit is true, it attempts the real commit now, through
-// Proposer.Propose, leaving the draft open on failure. attemptCommit is
-// false only for a pure peek (Advance with no outcome): a peek never
-// causes a side-effecting commit attempt, even when nothing is left
-// undecided.
+// resultOrCommit computes st's next field to answer (ADR-0061: never
+// gated on the record's own existing content, only on what this draft
+// has already answered). If none remains and attemptCommit is true, it
+// attempts the real commit now, through Proposer.Propose, leaving the
+// draft open on failure. attemptCommit is false only for a pure peek
+// (Advance with no outcome): a peek never causes a side-effecting commit
+// attempt, even when nothing is left undecided.
 func (d *Drafter) resultOrCommit(ctx context.Context, rec *knowledge.Record, st memory.DraftState, attemptCommit bool) (wire.DraftResult, error) {
-	next := nextUndecidedField(rec, st.Answers)
+	next := nextField(st.Answers)
 	if next != "" || !attemptCommit {
-		return wire.DraftResult{Token: st.Token, Snapshot: st.Snapshot, NextField: string(next), Status: "in_progress"}, nil
+		res := wire.DraftResult{Token: st.Token, Snapshot: st.Snapshot, NextField: string(next), Status: "in_progress"}
+		if next != "" {
+			for _, f := range draftableFields(rec) {
+				if f.field == next {
+					res.ExistingValues, res.ExistingComplete = f.existing, f.complete
+					break
+				}
+			}
+		}
+		return res, nil
 	}
 	res, err := d.proposer.Propose(ctx, draftProposeRequest(st))
 	if err != nil {

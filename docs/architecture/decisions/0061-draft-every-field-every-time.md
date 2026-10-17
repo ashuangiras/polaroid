@@ -1,0 +1,32 @@
+# 0061. Every proposal draft walks every field, every time
+
+**Status:** Accepted (amends [ADR-0060](0060-interactive-proposal-drafts.md)'s field-selection rule in `propose_start`/`propose_advance`, additively — the wire shape, storage schema and single-shot `propose` are all unchanged).
+**Date:** 2026-10-17
+
+## Context
+
+ADR-0060 skips a field — `propose_start`/`propose_advance` never offer it — once it is either already marked `*Complete` or simply already non-empty: `nextUndecidedField` treats "has at least one existing value" as equivalent to "already decided, nothing left to ask." This conflates two different things. A field being non-empty means someone, at some point, added *something* to it; it does not mean nothing further could ever apply. Found concretely while manually demonstrating the shipped feature: `gate.check.race.fresh`'s `invariants` field had exactly one entry (`go.toolchain-available`); if a second real invariant is discovered next month, the interactive, guided tool has no way to prompt for it at all — the field is permanently skipped the moment it holds any content, with no path back in except hand-assembling a single-shot `propose` call, defeating the entire purpose of a guided walk for any record that has grown past its first draft.
+
+The underlying commit mechanism already has no problem with this: `existingProcedureTarget.buildProposal` ([internal/knowledgeops/propose_targets.go](../../../internal/knowledgeops/propose_targets.go)) always appends new values to whatever is already there (`append(append([]string{}, updated.Invariants...), f.Invariants...)`), never requiring a field to start empty. The gap is purely in the interactive walk's own field-selection rule, not in what single-shot `propose` can express.
+
+## Decision
+
+**`propose_start`/`propose_advance` walk all four fields — `preconditions`, `postconditions`, `invariants`, `informal_conditions`, in that fixed order — on every single draft, regardless of a field's existing content or `*Complete` flag.** The only thing that causes a field to be skipped within one draft is having already been answered *in that same draft's own session* (the existing per-field fold, unchanged); nothing about the record's own prior history gates selection any more. This is a deliberate choice over the narrower alternative (skip only once a field is actually marked `*Complete`, leaving an already-non-empty-but-unreviewed field still open to revisit, but an already-`Complete` one closed again) — considered, and rejected in favor of always asking, because the cost of occasionally re-confirming a long-settled field is smaller than the cost of a second kind of silent gap: a field quietly marked `*Complete` that later turns out to need one more entry, with no guided path back in without this rule.
+
+**`propose_start`'s and `propose_advance`'s result now surfaces the named field's own existing state**, so the agent reviewing it can see what is already there before deciding what to do: `DraftResult` gains `existing_values` (the field's current, already-published values, omitted when none) and `existing_complete` (whether it was already marked `*Complete` from an earlier publish). Previously `DraftResult` gave no indication a field had any prior content at all — an agent answering blind could not tell "this is genuinely the first entry" from "this already has two entries, think about what a third might be."
+
+**An answer's two shapes are unchanged in wire shape, only broadened in documented meaning.** `{field, values, citations}` still appends new, citation-grounded entries — now explicitly to whatever is already published there, not only to an empty list. `{field, confirmed_absent: true, reason}` still sets that field's `*Complete` to `true` without altering its existing values (`buildProposal` already left them untouched when no new values are given — this was already correct, just previously only reachable for a field that started empty); its documented meaning broadens from "this field genuinely does not apply" to "no further values for this field right now" — equally sensible whether the field started empty or already held real content. The field's wire name, `confirmed_absent`, is kept as-is rather than renamed: this is a documentation clarification of an already-correct mechanism, not a behavior change needing a new name, and avoids churn across the wire type, every call site, and every reference to it in this project's own development procedures for no functional gain.
+
+**No storage schema change.** `draft_events`' columns, including `confirmed_absent`, are unchanged; migration `0014_draft_proposals.sql` is not touched (an applied migration is never edited, per this project's own rule) and no new migration is added. This entire amendment lives in `internal/knowledgeops` (the field-selection rule) and `internal/transport/wire` (two new, additive `DraftResult` members) only.
+
+**Single-shot `propose` (ADR-0059, `/mcp/agent/v4`) is completely unaffected.** It already supported appending to an already non-empty field; nothing here changes its behavior, schema or tests.
+
+**Explicitly not decided here:**
+- Deduplicating a value an agent re-adds that is already present in a field's existing entries — not addressed, the same as single-shot `propose` has never addressed it; out of scope for this amendment.
+- Any way to mark a field `*Complete` with no further review ever needed again, bypassing this rule (an explicit "trust this forever" declaration) — deferred; today `*Complete` is informational metadata only (ADR-0060's own explicit scope), not yet read by `Compose` or anything else, so there is no actual reasoning cost to re-asking.
+
+## Consequences
+
+- A guided draft is now always exactly four questions, every time, for any key — never fewer, regardless of how settled the record already is. This is a real, accepted cost: an agent proposing one small addition to a long-finished record still walks, and must explicitly answer or decline, all four fields.
+- Any field, at any point in a Procedure's life, can be extended through the guided interactive tool, not only through hand-assembled single-shot `propose` calls — closing the gap this amendment exists to close.
+- `DraftResult` gains two new, additive, optional members (`existing_values`, `existing_complete`); no existing consumer's parsing of a prior response shape breaks.
