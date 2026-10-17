@@ -60,7 +60,7 @@ func TestCorpusPublishesAndReloads(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := `{"@context":"urn:polaroid:context:v1","id":"k:go.verify.concurrent","type":"Procedure","label":"go.verify.concurrent",` +
-		`"classified_as":["k:domain.software.go"],"specializes":["k:go.verify"],"requires":["k:check.leak","k:check.race"]}` + "\n"
+		`"definition":"Verify a concurrent Go change.","classified_as":["k:domain.software.go"],"specializes":["k:go.verify"],"requires":["k:check.leak","k:check.race"]}` + "\n"
 	if string(doc) != want {
 		t.Fatalf("document\n%s\nwant\n%s", doc, want)
 	}

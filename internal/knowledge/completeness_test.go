@@ -2,6 +2,9 @@ package knowledge_test
 
 import (
 	"context"
+	json "encoding/json/v2"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ashuangiras/polaroid/internal/knowledge"
@@ -23,8 +26,54 @@ func TestCompletenessGapsEmpty(t *testing.T) {
 	}
 }
 
+// manifestBytes is corpus.json's canonical bytes, built the same way
+// encodeManifest (unexported) does, for a raw, bypass-Kernel.Publish
+// snapshot (rawSnapshot): both CompletenessGaps/CheckCompleteness's own
+// computation and the ADR-0057 activation (#164) need a catalog that
+// does not meet the bar, which Kernel.Publish itself now refuses to
+// produce.
+func manifestBytes() []byte {
+	b, _ := json.Marshal(struct {
+		Format       int      `json:"format"`
+		Capabilities []string `json:"capabilities"`
+	}{knowledge.FormatRecords, knowledge.Capabilities})
+	return append(b, '\n')
+}
+
+// rawSnapshot commits files directly to store, bypassing Kernel.Publish
+// and every check it runs (including, since #164, completeness): exactly
+// how a snapshot already on disk before that activation looks today, and
+// the only way left to construct an incomplete catalog to test
+// CompletenessGaps/CheckCompleteness's own computation against.
+func rawSnapshot(t *testing.T, store *knowledgetest.MemoryStore, procs []*knowledge.Procedure, records []*knowledge.Record) knowledge.Snapshot {
+	t.Helper()
+	var files []knowledge.FileChange
+	for _, p := range procs {
+		doc, err := knowledge.Encode(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, knowledge.FileChange{Path: knowledge.Path(p.Key), Content: doc})
+	}
+	for _, r := range records {
+		doc, err := knowledge.EncodeRecord(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, knowledge.FileChange{Path: knowledge.RecordPath(r.Type, r.Key), Content: doc})
+	}
+	if len(records) > 0 {
+		files = append(files, knowledge.FileChange{Path: knowledge.ManifestPath, Content: manifestBytes()})
+	}
+	s, err := store.Commit(context.Background(), knowledge.Commit{Changes: files, Author: "seed", Subject: "seed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
 func TestCompletenessGaps(t *testing.T) {
-	k := knowledge.New(knowledgetest.NewMemoryStore(), knowledge.WithRecordValidator(&acceptAll{}))
+	store := knowledgetest.NewMemoryStore()
 
 	// Complete: a Domain and a Concept with definitions, and a Procedure
 	// with both a definition and its own Requires.
@@ -50,20 +99,14 @@ func TestCompletenessGaps(t *testing.T) {
 		Postconditions: []string{"concept.complete"}}
 
 	all := []*knowledge.Record{domain, concept, completeProc, gapDomain, gapConcept, noObligation, inherits, postOnly}
-	var changes []knowledge.RecordChange
-	for _, r := range all {
-		changes = append(changes, knowledge.RecordChange{Key: r.Key, Record: r})
-	}
 	// Every typed Procedure record needs a matching legacy procedure
 	// document, sharing its key (checkRecords): minimal shared stubs.
-	var procs []knowledge.Change
+	var procs []*knowledge.Procedure
 	for _, key := range []string{"proc.complete", "proc.no-obligation", "proc.inherits", "proc.post-only"} {
-		procs = append(procs, put(knowledgetest.SharedProc(key, key)))
+		procs = append(procs, knowledgetest.SharedProc(key, key))
 	}
-	s, err := k.Publish(context.Background(), knowledge.Proposal{Changes: procs, Records: changes, Provenance: prov()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := rawSnapshot(t, store, procs, all)
+	k := knowledge.New(store, knowledge.WithRecordValidator(&acceptAll{}))
 	cat, err := k.At(context.Background(), s)
 	if err != nil {
 		t.Fatal(err)
@@ -85,24 +128,71 @@ func TestCompletenessGaps(t *testing.T) {
 	}
 }
 
-// TestCompletenessIsNotEnforcedYet is ADR-0057's acceptance criterion 1:
-// the rule is written and tested, but nothing in the publish path calls
-// it, so a record missing a definition still publishes successfully.
-func TestCompletenessIsNotEnforcedYet(t *testing.T) {
+// TestCompletenessIsEnforced is ADR-0057's acceptance criterion 2 (#164):
+// the rule is activated, so a new publish missing a definition or an
+// obligation is refused, naming every offending record and field, and
+// nothing is stored.
+func TestCompletenessIsEnforced(t *testing.T) {
 	k := knowledge.New(knowledgetest.NewMemoryStore(), knowledge.WithRecordValidator(&acceptAll{}))
 	incomplete := &knowledge.Record{Type: knowledge.TypeDomain, Key: "domain.undefined", Label: "Undefined"}
 	s, err := k.Publish(context.Background(), knowledge.Proposal{
 		Records: []knowledge.RecordChange{{Key: incomplete.Key, Record: incomplete}}, Provenance: prov(),
 	})
-	if err != nil {
-		t.Fatalf("a record missing definition must still publish today (ADR-0057 is not yet activated): %v", err)
+	var ve *knowledge.ValidationError
+	if !errors.As(err, &ve) || !strings.Contains(err.Error(), "records[domain.undefined].definition: is required for a Domain") {
+		t.Fatalf("a record missing definition must now be refused, got snapshot %q err %v", s, err)
 	}
-	cat, err := k.At(context.Background(), s)
+	if active, _ := k.Active(context.Background()); active.Snapshot() != "" {
+		t.Fatalf("a refused publish must not change the active snapshot, got %q", active.Snapshot())
+	}
+
+	noObligation := &knowledge.Record{Type: knowledge.TypeProcedure, Key: "proc.undefined", Label: "p", Definition: "has a definition, no obligation"}
+	_, err = k.Publish(context.Background(), knowledge.Proposal{
+		Changes: []knowledge.Change{put(knowledgetest.SharedProc("proc.undefined", "p"))},
+		Records: []knowledge.RecordChange{{Key: noObligation.Key, Record: noObligation}}, Provenance: prov(),
+	})
+	if !errors.As(err, &ve) || !strings.Contains(err.Error(),
+		"records[proc.undefined].requires: at least one of requires, preconditions, postconditions, or an inherited one via specializes, is required for a Procedure") {
+		t.Fatalf("a Procedure with no obligation source must now be refused, got %v", err)
+	}
+}
+
+// TestCompletenessDoesNotAffectReadingHistory is the correctness property
+// activation (#164) must not break: Kernel.At/Active read an
+// already-committed snapshot through loadCatalog, the same shared
+// checkCatalog/checkRecords an incoming publish candidate is checked
+// with — but CheckCompleteness is wired only into Kernel.publish's own
+// candidate, never into loadCatalog, exactly so that activating this
+// rule cannot retroactively make history unreadable. Grounded in a real
+// finding, not a hypothetical: the live corpus's own earliest typed
+// records, seeded before #152/#158 existed, have no definition, and
+// would stop loading if checkCatalog's shared scalars table were
+// widened instead (the ADR's own sketch) rather than gating here.
+func TestCompletenessDoesNotAffectReadingHistory(t *testing.T) {
+	store := knowledgetest.NewMemoryStore()
+	gap := &knowledge.Record{Type: knowledge.TypeDomain, Key: "domain.old", Label: "Old"} // no definition: pre-activation-looking
+	old := rawSnapshot(t, store, nil, []*knowledge.Record{gap})
+
+	k := knowledge.New(store, knowledge.WithRecordValidator(&acceptAll{}))
+	cat, err := k.At(context.Background(), old)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("reading an already-committed, incomplete snapshot must still succeed after activation: %v", err)
 	}
 	if len(cat.CompletenessGaps().MissingDefinition) != 1 {
-		t.Fatalf("the published gap must still be detectable by CompletenessGaps")
+		t.Fatalf("the old gap must still be visible to CompletenessGaps, unaffected by activation")
+	}
+
+	// The whole catalog is re-validated on the next publish, however
+	// small and unrelated (ADR-0057's own documented consequence): even
+	// a new, unrelated, complete record is refused while domain.old's own
+	// gap is still part of the resulting catalog.
+	unrelated := &knowledge.Record{Type: knowledge.TypeDomain, Key: "domain.new", Label: "New", Definition: "d"}
+	_, err = k.Publish(context.Background(), knowledge.Proposal{
+		Base: old, Records: []knowledge.RecordChange{{Key: unrelated.Key, Record: unrelated}}, Provenance: prov(),
+	})
+	var ve *knowledge.ValidationError
+	if !errors.As(err, &ve) || !strings.Contains(err.Error(), "domain.old") {
+		t.Fatalf("a small, unrelated publish on top of an incomplete base must still be refused for the pre-existing gap: %v", err)
 	}
 }
 

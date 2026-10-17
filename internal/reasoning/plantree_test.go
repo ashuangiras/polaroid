@@ -26,11 +26,13 @@ func publishTree(t *testing.T, specs []treeSpec) *knowledge.Catalog {
 	store := knowledgetest.NewMemoryStore()
 	k := knowledge.New(store, knowledge.WithRecordValidator(reasoning.RuleValidator{Evaluator: ev}))
 	var changes []knowledge.Change
-	var records []knowledge.RecordChange
+	// test.obligation satisfies ADR-0057's completeness bar (#164): this
+	// fixture is about plan-tree shape, not obligation reasoning.
+	records := []knowledge.RecordChange{{Key: "test.obligation", Record: &knowledge.Record{Type: knowledge.TypeConcept, Key: "test.obligation", Label: "done", Definition: "d"}}}
 	for _, s := range specs {
 		changes = append(changes, knowledge.Change{Key: s.Key, Procedure: knowledgetest.SharedProc(s.Key, s.Key)})
 		records = append(records, knowledge.RecordChange{Key: s.Key, Record: &knowledge.Record{
-			Type: knowledge.TypeProcedure, Key: s.Key, Label: s.Key, Definition: "d", Composes: s.Composes, Precedes: s.Precedes,
+			Type: knowledge.TypeProcedure, Key: s.Key, Label: s.Key, Definition: "d", Composes: s.Composes, Precedes: s.Precedes, Requires: []string{"test.obligation"},
 		}})
 	}
 	snap, err := k.Publish(context.Background(), knowledge.Proposal{Changes: changes, Records: records,

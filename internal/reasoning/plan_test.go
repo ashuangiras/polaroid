@@ -17,14 +17,16 @@ func planCatalog(t *testing.T, children []string, edges map[string][]string) (*k
 	t.Helper()
 	store := knowledgetest.NewMemoryStore()
 	k := knowledge.New(store, knowledge.WithRecordValidator(reasoning.RuleValidator{Evaluator: ev}))
-	parent := &knowledge.Record{Type: knowledge.TypeProcedure, Key: "parent", Label: "parent", Definition: "d", Composes: children}
+	parent := &knowledge.Record{Type: knowledge.TypeProcedure, Key: "parent", Label: "parent", Definition: "d", Composes: children, Requires: []string{"test.obligation"}}
 	var changes []knowledge.Change
-	var records []knowledge.RecordChange
+	// test.obligation satisfies ADR-0057's completeness bar (#164): this
+	// fixture is about plan ordering, not obligation reasoning.
+	records := []knowledge.RecordChange{{Key: "test.obligation", Record: &knowledge.Record{Type: knowledge.TypeConcept, Key: "test.obligation", Label: "done", Definition: "d"}}}
 	changes = append(changes, knowledge.Change{Key: "parent", Procedure: knowledgetest.SharedProc("parent", "parent")})
 	records = append(records, knowledge.RecordChange{Key: "parent", Record: parent})
 	for _, c := range children {
 		changes = append(changes, knowledge.Change{Key: c, Procedure: knowledgetest.SharedProc(c, c)})
-		records = append(records, knowledge.RecordChange{Key: c, Record: &knowledge.Record{Type: knowledge.TypeProcedure, Key: c, Label: c, Definition: "d", Precedes: edges[c]}})
+		records = append(records, knowledge.RecordChange{Key: c, Record: &knowledge.Record{Type: knowledge.TypeProcedure, Key: c, Label: c, Definition: "d", Precedes: edges[c], Requires: []string{"test.obligation"}}})
 	}
 	s, err := k.Publish(context.Background(), knowledge.Proposal{Changes: changes, Records: records,
 		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "s", Rationale: "r"}})

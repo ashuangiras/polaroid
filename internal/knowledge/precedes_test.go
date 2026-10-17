@@ -15,16 +15,17 @@ import (
 // with a matching legacy procedure document.
 func precedesFixture(t *testing.T, k *knowledge.Kernel, precedes map[string][]string) (knowledge.Snapshot, error) {
 	t.Helper()
-	parent := &knowledge.Record{Type: knowledge.TypeProcedure, Key: "parent", Label: "parent", Definition: "d", Composes: []string{"a", "b", "c"}}
+	concept := &knowledge.Record{Type: knowledge.TypeConcept, Key: "precedes.step-done", Label: "step done", Definition: "d"}
+	parent := &knowledge.Record{Type: knowledge.TypeProcedure, Key: "parent", Label: "parent", Definition: "d", Composes: []string{"a", "b", "c"}, Requires: []string{"precedes.step-done"}}
 	var changes []knowledge.Change
-	var records []knowledge.RecordChange
+	records := []knowledge.RecordChange{{Key: concept.Key, Record: concept}}
 	for _, key := range []string{"parent", "a", "b", "c", "outsider"} {
 		changes = append(changes, put(knowledgetest.SharedProc(key, key)))
 		if key == "parent" {
 			records = append(records, knowledge.RecordChange{Key: parent.Key, Record: parent})
 			continue
 		}
-		r := &knowledge.Record{Type: knowledge.TypeProcedure, Key: key, Label: key, Definition: "d"}
+		r := &knowledge.Record{Type: knowledge.TypeProcedure, Key: key, Label: key, Definition: "d", Requires: []string{"precedes.step-done"}}
 		if key != "outsider" {
 			r.Precedes = precedes[key]
 		}

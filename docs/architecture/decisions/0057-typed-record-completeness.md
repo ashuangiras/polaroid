@@ -1,6 +1,6 @@
 # 0057. Mandatory definitions and formal obligations for typed records (Guided Procedures, prerequisite)
 
-**Status:** Accepted. **This is a two-phase decision: the validation rule it defines must not be activated until the authoring backlog it depends on is cleared** (tracked by [#152](https://github.com/ashuangiras/polaroid/issues/152), not re-scoped here). Blocks [ADR-0052](0052-ordered-sibling-steps.md) from being safely enabled against the live corpus, though 0052's own code is independent of this one.
+**Status:** Accepted. **Two-phase decision, both phases now complete.** Phase 1 wrote the validation rule and the checkable gate, inert. Phase 2 (#164) cleared the authoring backlog it depended on (tracked by [#152](https://github.com/ashuangiras/polaroid/issues/152)) against the live corpus and activated the rule in `Kernel.publish`, gated only there, never against an already-committed snapshot read through `loadCatalog` — a correction found while implementing #164, not anticipated by this ADR's own sketch of widening `checkCatalog`'s shared `scalars` table; see `internal/knowledge/kernel.go`'s own comment at the activation site. [ADR-0052](0052-ordered-sibling-steps.md) is now safely enabled against the live corpus.
 **Date:** 2026-10-15
 
 ## Context
@@ -13,7 +13,7 @@ Checked against the actual validation code, not assumed: `internal/knowledge/rec
 
 **Two fields become genuinely required, for every future publication, once activated:**
 
-- **`definition`**, non-empty, for every `Domain`, `Concept` and `Procedure` record (`scalars`' existing `required` list, currently `nil`, becomes `[]RecordType{TypeDomain, TypeConcept, TypeProcedure}`).
+- **`definition`**, non-empty, for every `Domain`, `Concept` and `Procedure` record. (As implemented by #164: not by widening `scalars`' `required` list, the mechanism sketched here — that table is shared with `loadCatalog`, which reads *any* already-committed snapshot, including history that predates this bar; `Catalog.CheckCompleteness`, below, is called only against a new publish candidate instead. See the Status line above.)
 - **At least one of `requires`, `preconditions`, `postconditions`, or an inherited obligation via `specializes`**, for every `Procedure` record — not all three, since the kernel already treats `requires` alone as sufficient to produce a real obligation (`own_obligation(S, R, S) :- requires(S, R)`, [ADR-0050](0050-corpus-logic.md)'s reasoning kernel); a procedure that specializes another already inherits its obligations, so it need not restate them itself.
 
 A publication that leaves any record without these, once this is active, fails the same way any other invalid-knowledge publish does: `invalid_request`, naming every offending record and field, nothing stored.
@@ -29,7 +29,7 @@ A publication that leaves any record without these, once this is active, fails t
 
 ## Consequences
 
-- Once active, authoring a new procedure or typed record without a real definition, or a Procedure with no formal obligation content at all, is refused at publish time — a real, if deliberately deferred, tightening of what Polaroid accepts.
-- Nothing already stored is affected or re-checked; the immutability and no-retroactive-rewrite guarantees elsewhere are untouched.
-- Until the backlog is cleared and this is actually activated, Guided Procedures (ADR-0052 onward) can still be built and merged, but should not be treated as meaningfully usable against the live corpus: `precedes` and `plan` would mostly resolve against empty obligation sets.
-- The stats feature shipped earlier in this initiative ([ADR-0051](0051-agent-mode-discover-kinds.md)) turns out to be exactly the tool needed to measure and announce readiness for this one — a dependency this ADR did not originally anticipate when 0051 was designed, found only by tracing what "complete" would actually require checking.
+- Now active (#164): authoring a new procedure or typed record without a real definition, or a Procedure with no formal obligation content at all, is refused at publish time — a real tightening of what Polaroid accepts, applied only to new publications.
+- Nothing already stored is affected or re-checked; the immutability and no-retroactive-rewrite guarantees elsewhere are untouched. This extends to *reading* history too, found while implementing #164: `Kernel.At`/`Active`/`Check` and `Load` read an already-committed snapshot through the same `checkCatalog` a publish candidate is checked with, so the completeness gate is wired in only at the one call site that builds a *new* candidate (`Kernel.publish`), never into that shared path — an already-committed snapshot that predates this bar (the live corpus's own earliest typed records among them) stays readable exactly as before.
+- The backlog is now cleared and the rule active: Guided Procedures (ADR-0052 onward) are meaningfully usable against the live corpus — `precedes` and `plan` resolve against real obligation sets, not empty ones.
+- The stats feature shipped earlier in this initiative ([ADR-0051](0051-agent-mode-discover-kinds.md)) turned out to be exactly the tool needed to measure and announce readiness for this one — a dependency this ADR did not originally anticipate when 0051 was designed, found only by tracing what "complete" would actually require checking.
