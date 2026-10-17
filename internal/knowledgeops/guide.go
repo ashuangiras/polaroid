@@ -5,21 +5,25 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/ashuangiras/polaroid/internal/knowledge"
 	"github.com/ashuangiras/polaroid/internal/memory"
 	"github.com/ashuangiras/polaroid/internal/reasoning"
+	"github.com/ashuangiras/polaroid/internal/reasoning/policy"
 	"github.com/ashuangiras/polaroid/internal/transport/wire"
 )
 
 // Guide answers /mcp/agent/v3's start and advance (ADR-0053, amended by
-// ADR-0054 for multi-level plans and by ADR-0055 for completion
-// semantics and an early close): a goal resolved and pinned at a
-// snapshot, plus persisted, per-agent walkthrough state
+// ADR-0054 for multi-level plans, ADR-0055 for completion semantics and
+// an early close, and ADR-0058 for reasoned steps): a goal resolved and
+// pinned at a snapshot, plus persisted, per-agent walkthrough state
 // (internal/memory), folded into a plan by reasoning.PlanTree — not
-// reasoning.Plan (resolve's own one-level function, unaffected by this)
-// and not the full reasoning.Resolve, since a walkthrough's context is
-// only captured here (ADR-0053), not yet reasoned over.
+// reasoning.Plan (resolve's own one-level function, unaffected by this).
+// On every call, the plan's own current next leaf (if any) is
+// additionally resolved through the full reasoning.Resolve (ADR-0058),
+// against the walkthrough's accumulated Context but call-scoped
+// Assertions/Trusted, never persisted across calls the way Context is.
 //
 // Note on ADR-0053's text: start's goal is resolved through
 // knowledge.Catalog.Record, a typed record, which — unlike read's legacy
@@ -34,11 +38,16 @@ import (
 type Guide struct {
 	kernel       *knowledge.Kernel
 	walkthroughs *memory.Walkthroughs
+	ev           reasoning.Evaluator
+	trust        policy.Trust
+	now          func() time.Time
 }
 
-// NewGuide builds a Guide.
-func NewGuide(kernel *knowledge.Kernel, walkthroughs *memory.Walkthroughs) *Guide {
-	return &Guide{kernel: kernel, walkthroughs: walkthroughs}
+// NewGuide builds a Guide. ev and trust are the same reasoning evaluator
+// and operator-held trust material Resolver already uses (ADR-0058):
+// Guide's own per-leaf resolution needs them for exactly the same reason.
+func NewGuide(kernel *knowledge.Kernel, walkthroughs *memory.Walkthroughs, ev reasoning.Evaluator, trust policy.Trust) *Guide {
+	return &Guide{kernel: kernel, walkthroughs: walkthroughs, ev: ev, trust: trust, now: time.Now}
 }
 
 // Start resolves in.Goal at the active snapshot, pins it for the new
@@ -66,7 +75,11 @@ func (g *Guide) Start(ctx context.Context, in wire.WalkthroughStartRequest) (wir
 	if err != nil {
 		return wire.WalkthroughResult{}, classify(err)
 	}
-	return newWalkthroughResult(st, plan), nil
+	resolution, err := g.resolveNextLeaf(ctx, cat, plan, st.Context, in.Assertions)
+	if err != nil {
+		return wire.WalkthroughResult{}, err
+	}
+	return newWalkthroughResult(st, plan, resolution), nil
 }
 
 // Advance reports in.Outcome (nil for a pure peek) and in.Context on
@@ -109,7 +122,11 @@ func (g *Guide) Advance(ctx context.Context, in wire.WalkthroughAdvanceRequest) 
 	if err != nil {
 		return wire.WalkthroughResult{}, classify(err)
 	}
-	result := newWalkthroughResult(state, plan)
+	resolution, err := g.resolveNextLeaf(ctx, cat, plan, state.Context, in.Assertions)
+	if err != nil {
+		return wire.WalkthroughResult{}, err
+	}
+	result := newWalkthroughResult(state, plan, resolution)
 	if in.Close {
 		if err := g.walkthroughs.Close(ctx, in.Token); err != nil {
 			return wire.WalkthroughResult{}, classify(err)
@@ -216,12 +233,56 @@ func leafStatusFrom(statuses map[string]memory.WalkthroughOutcomeStatus) func([]
 	}
 }
 
-// newWalkthroughResult builds a WalkthroughResult from st and plan,
-// deriving status (ADR-0055).
-func newWalkthroughResult(st memory.WalkthroughState, plan []reasoning.PlanEntry) wire.WalkthroughResult {
-	out := wire.WalkthroughResult{Token: st.Token, Snapshot: st.Snapshot, Status: walkthroughStatus(plan)}
+// newWalkthroughResult builds a WalkthroughResult from st, plan and
+// resolution (ADR-0058, nil when nothing is resolved), deriving status
+// (ADR-0055).
+func newWalkthroughResult(st memory.WalkthroughState, plan []reasoning.PlanEntry, resolution *wire.KnowledgeResolution) wire.WalkthroughResult {
+	out := wire.WalkthroughResult{Token: st.Token, Snapshot: st.Snapshot, Status: walkthroughStatus(plan), Resolution: resolution}
 	out.Plan = newPlanEntries(plan)
 	return out
+}
+
+// nextLeafPath finds plan's own single "next", "escalate" or "blocked"
+// top-level entry (there is at most one, PlanTree/ExpandTree's own
+// construction: every entry after it is a bare, pathless key) and
+// returns its full path down to the actual leaf; nil once nothing
+// remains (ADR-0055's "complete").
+func nextLeafPath(plan []reasoning.PlanEntry) []string {
+	for _, e := range plan {
+		if len(e.Path) > 0 {
+			return e.Path
+		}
+	}
+	return nil
+}
+
+// resolveNextLeaf resolves plan's own current next leaf (ADR-0058)
+// against cat, accumulatedContext (the walkthrough's own fold, ADR-0053)
+// and assertions presented on this call alone — never persisted or
+// inherited from an earlier call, unlike accumulatedContext. Returns nil
+// when plan has no next leaf (nothing to resolve, not an error).
+func (g *Guide) resolveNextLeaf(ctx context.Context, cat *knowledge.Catalog, plan []reasoning.PlanEntry,
+	accumulatedContext map[string]string, assertions []wire.KnowledgeAssertion) (*wire.KnowledgeResolution, error) {
+	path := nextLeafPath(plan)
+	if path == nil {
+		return nil, nil
+	}
+	at := g.now().UTC().Truncate(time.Second)
+	trusted, err := establishTrusted(g.trust, assertions, at, at)
+	if err != nil {
+		return nil, err
+	}
+	rctx, cancel := context.WithTimeout(ctx, ResolveTimeout)
+	defer cancel()
+	res, err := reasoning.Resolve(rctx, cat, g.ev, g.trust, reasoning.Request{Goal: path[len(path)-1], Context: accumulatedContext, Trusted: trusted, At: at})
+	if err != nil {
+		return nil, classifyResolveErr(err)
+	}
+	out, err := toWireResolution(res)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // newPlanEntries converts a plan, recursively (ADR-0056's expand).

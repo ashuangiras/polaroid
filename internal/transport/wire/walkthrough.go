@@ -11,11 +11,15 @@ package wire
 
 // WalkthroughStartRequest starts a new walkthrough for goal, resolved and
 // pinned at the currently active snapshot for the walkthrough's lifetime.
+// Assertions are call-scoped only (ADR-0058): they establish trusted
+// context for this call's own resolution alone, never persisted or
+// inherited by a later advance the way Context already is.
 type WalkthroughStartRequest struct {
-	Goal       string            `json:"goal" jsonschema:"the key of the procedure to walk through"`
-	Repository string            `json:"repository,omitzero" jsonschema:"your repository identifier; stored with the walkthrough, not checked against anything"`
-	Context    map[string]string `json:"context,omitzero" jsonschema:"facts about your situation as name and value strings; stored with the walkthrough"`
-	Expand     bool              `json:"expand,omitzero" jsonschema:"include the whole nested plan tree (ADR-0056) instead of discovering depth one leaf at a time; a nested entry's own status is done, escalate, blocked or pending, not gated by its siblings' order the way the top level's next is"`
+	Goal       string               `json:"goal" jsonschema:"the key of the procedure to walk through"`
+	Repository string               `json:"repository,omitzero" jsonschema:"your repository identifier; stored with the walkthrough, not checked against anything"`
+	Context    map[string]string    `json:"context,omitzero" jsonschema:"facts about your situation as name and value strings; stored with the walkthrough"`
+	Expand     bool                 `json:"expand,omitzero" jsonschema:"include the whole nested plan tree (ADR-0056) instead of discovering depth one leaf at a time; a nested entry's own status is done, escalate, blocked or pending, not gated by its siblings' order the way the top level's next is"`
+	Assertions []KnowledgeAssertion `json:"assertions,omitzero" jsonschema:"signed context assertions, the same meaning as resolve's: establish trusted context for this call's own resolution only (ADR-0058), never stored or inherited by a later advance"`
 }
 
 // WalkthroughOutcomeArg is one leaf's reported outcome, given to advance:
@@ -40,13 +44,15 @@ type WalkthroughOutcomeArg struct {
 // current plan unchanged when outcome is omitted. Either way, this
 // resets token's sliding expiry. Close ends the walkthrough immediately
 // (ADR-0055), after applying outcome (if given) in the same call;
-// whether or not every leaf is done.
+// whether or not every leaf is done. Assertions are call-scoped only
+// (ADR-0058), the same as start's.
 type WalkthroughAdvanceRequest struct {
-	Token   string                 `json:"token" jsonschema:"the token start or an earlier advance returned"`
-	Outcome *WalkthroughOutcomeArg `json:"outcome,omitzero" jsonschema:"omit to peek the current plan unchanged"`
-	Context map[string]string      `json:"context,omitzero" jsonschema:"facts to add to what this walkthrough has reported so far"`
-	Close   bool                   `json:"close,omitzero" jsonschema:"end the walkthrough immediately, whether or not every leaf is done; outcome may still be given in the same call to report a final leaf and close in one round trip. A later call with this token is then not_found, the same as an expired one"`
-	Expand  bool                   `json:"expand,omitzero" jsonschema:"include the whole nested plan tree (ADR-0056) instead of discovering depth one leaf at a time; a nested entry's own status is done, escalate, blocked or pending, not gated by its siblings' order the way the top level's next is"`
+	Token      string                 `json:"token" jsonschema:"the token start or an earlier advance returned"`
+	Outcome    *WalkthroughOutcomeArg `json:"outcome,omitzero" jsonschema:"omit to peek the current plan unchanged"`
+	Context    map[string]string      `json:"context,omitzero" jsonschema:"facts to add to what this walkthrough has reported so far"`
+	Close      bool                   `json:"close,omitzero" jsonschema:"end the walkthrough immediately, whether or not every leaf is done; outcome may still be given in the same call to report a final leaf and close in one round trip. A later call with this token is then not_found, the same as an expired one"`
+	Expand     bool                   `json:"expand,omitzero" jsonschema:"include the whole nested plan tree (ADR-0056) instead of discovering depth one leaf at a time; a nested entry's own status is done, escalate, blocked or pending, not gated by its siblings' order the way the top level's next is"`
+	Assertions []KnowledgeAssertion   `json:"assertions,omitzero" jsonschema:"signed context assertions, the same meaning as resolve's: establish trusted context for this call's own resolution only (ADR-0058), never stored or inherited by an earlier or later call"`
 }
 
 // WalkthroughResult is start's and advance's result: token, the snapshot
@@ -58,9 +64,17 @@ type WalkthroughAdvanceRequest struct {
 // or blocked entry left, "in_progress" otherwise. status is not
 // terminal: since plan folds the latest report per leaf, a later advance
 // reopening an already-done leaf moves status back to "in_progress".
+// Resolution (ADR-0058) is what applies to plan's own current next leaf
+// (the same shape resolve's own result uses), resolved fresh on every
+// call against the walkthrough's pinned snapshot and its accumulated
+// Context; omitted once status is "complete" (nothing left to resolve).
+// It is informational only: its own unknowns, exceptions or conflicts
+// never set or clear next/escalate/blocked themselves, only an agent's
+// own reported outcome does.
 type WalkthroughResult struct {
-	Token    string               `json:"token"`
-	Snapshot string               `json:"snapshot"`
-	Plan     []KnowledgePlanEntry `json:"plan,omitzero"`
-	Status   string               `json:"status"`
+	Token      string               `json:"token"`
+	Snapshot   string               `json:"snapshot"`
+	Plan       []KnowledgePlanEntry `json:"plan,omitzero"`
+	Status     string               `json:"status"`
+	Resolution *KnowledgeResolution `json:"resolution,omitzero"`
 }

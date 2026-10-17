@@ -174,7 +174,7 @@ func setupKnowledge(dir, sourcesPath, authoritiesPath, tokenPath string, fb *mem
 	return &knowledgeComponents{
 		agent:    knowledgeops.NewAgent(syncer.Kernel(), fb),
 		resolver: knowledgeops.NewResolver(syncer.Kernel(), ev, trust),
-		guide:    knowledgeops.NewGuide(syncer.Kernel(), memory.NewWalkthroughs(walkthroughs)),
+		guide:    knowledgeops.NewGuide(syncer.Kernel(), memory.NewWalkthroughs(walkthroughs), ev, trust),
 		operator: knowledgeops.NewOperator(syncer, policy, fb),
 		token:    token,
 	}, nil
