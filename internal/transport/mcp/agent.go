@@ -67,6 +67,10 @@ func (t *tools) agentDiscover(ctx context.Context, in wire.KnowledgeDiscoverRequ
 			wire.KnowledgeToolInfo{Name: "start", Description: "Start a stateful walkthrough of a procedure's composed steps, pinned at the active snapshot."},
 			wire.KnowledgeToolInfo{Name: "advance", Description: "Report an outcome for one of a walkthrough's composed steps, or peek its current plan unchanged."})
 	}
+	if in.Kind == wire.KindTools && t.proposer != nil {
+		out.Tools = append(out.Tools, wire.KnowledgeToolInfo{Name: "propose",
+			Description: "Propose new, citation-grounded knowledge: committed immediately if it passes citation, completeness, non-vacuous composition and novelty checks."})
+	}
 	return out, nil
 }
 
@@ -140,4 +144,37 @@ func (t *tools) agentStart(ctx context.Context, in wire.WalkthroughStartRequest)
 
 func (t *tools) agentAdvance(ctx context.Context, in wire.WalkthroughAdvanceRequest) (any, error) {
 	return t.guide.Advance(ctx, in)
+}
+
+// Agent mode v4 (ADR-0059 Parts 2-3): the v3 tools, unchanged, plus
+// propose -- agent mode's first write to Git-native knowledge itself
+// (start/advance write only one agent's own runtime progress, never
+// knowledge content). v1, v2 and v3 stay exactly as before.
+
+const agentInstructionsV4 = agentInstructionsV3 + `
+7. propose new, grounded knowledge directly, when you have it: new formal content on an existing Procedure, a new supporting Concept or Claim (each citation-grounded: cite the exact existing text -- a file, or another record -- you are mirroring; Polaroid only checks that your quote appears verbatim in what you are adding, never that the citation is accurate against a real file), or a wholly new orchestration Procedure that only composes Procedures that already exist, in order (no citation needed for that). Polaroid also checks your proposal changes something: a candidate that alters no resolution anywhere in the catalog is refused as redundant, not committed. Passing every check, propose commits immediately: no draft, no queue, no operator approval.`
+
+// AgentProposer is what agent mode v4 adds: agent-proposed knowledge,
+// expressed only in wire shapes. internal/knowledgeops.Proposer satisfies
+// it.
+type AgentProposer interface {
+	Propose(ctx context.Context, in wire.ProposeRequest) (wire.ProposeResult, error)
+}
+
+func newAgentServerV4(agent AgentKnowledge, resolver AgentResolver, guide AgentGuide, proposer AgentProposer, logger *slog.Logger) *sdk.Server {
+	s := baseServer(agentInstructionsV4, logger)
+	t := &tools{agent: agent, resolver: resolver, guide: guide, proposer: proposer, logger: logger}
+	const read, write = true, false
+	add(s, t, "discover", discoverDescription, read, t.agentDiscover)
+	add(s, t, "read", "Get one procedure's executable guidance by its canonical key, at a snapshot (the active one by default): contract, instructions, and each reference's key, condition and mapped inputs, resolved one level.", read, t.agentRead)
+	add(s, t, "feedback", "Report a finding that changes what is known about the procedure at key, as served by snapshot, with a classification. Not for product defects, environment problems or transient failures.", write, t.agentFeedback)
+	add(s, t, "resolve", "Resolve what applies to a record (procedure, concept or claim) in your context, at a snapshot: obligations with derivation identifiers, specializations, verified and rejected exceptions, derived facts, conflicts, unknowns, whether the result is complete, evidence status, and with then, whether a second procedure can follow it. Deterministic for the same snapshot, context and time.", read, t.agentResolve)
+	add(s, t, "start", "Start a stateful walkthrough of goal's composed steps, pinned at the active snapshot. Returns {token, snapshot, plan}: keep the token to call advance across later turns or sessions. Pass expand true for the whole nested plan tree instead of one leaf at a time.", write, t.agentStart)
+	add(s, t, "advance", "Report an outcome (done, skipped, escalate or blocked, with an optional reason) for one of a walkthrough's composed steps, or peek its current plan unchanged when outcome is omitted. Returns the updated {token, snapshot, plan, status}. Pass close true to end the walkthrough immediately, whether or not it is complete; pass expand true as start's.", write, t.agentAdvance)
+	add(s, t, "propose", "Propose new, citation-grounded knowledge -- new formal content on an existing Procedure, a new supporting Concept or Claim, or a wholly new orchestration Procedure that only composes already-existing Procedures (no citation needed for that one case) -- checked for citation self-consistency, completeness, non-vacuous composition and novelty, then committed immediately: no draft, no queue, no operator step.", write, t.agentPropose)
+	return s
+}
+
+func (t *tools) agentPropose(ctx context.Context, in wire.ProposeRequest) (any, error) {
+	return t.proposer.Propose(ctx, in)
 }

@@ -231,3 +231,53 @@ func TestDiscoveryIsDeterministic(t *testing.T) {
 		t.Fatalf("empty query = %+v", got)
 	}
 }
+
+// Validate (ADR-0059, for Proposer's own pre-commit checks) runs exactly
+// Publish's own validation -- but commits nothing.
+func TestKernelValidateDoesNotCommit(t *testing.T) {
+	ctx := context.Background()
+	k := knowledge.New(knowledgetest.NewMemoryStore())
+	base, err := publish(t, k, "", knowledgetest.Initial()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := k.Validate(ctx, knowledge.Proposal{Base: base,
+		Changes: []knowledge.Change{put(knowledgetest.Proc("go.module.extra", "Extra"))}, Provenance: prov()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := candidate.Get("go.module.extra"); err != nil {
+		t.Fatalf("candidate does not reflect the proposal: %v", err)
+	}
+	if candidate.Snapshot() != "" {
+		t.Fatalf("candidate snapshot = %q, want empty (never committed)", candidate.Snapshot())
+	}
+	active, err := k.Active(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.Snapshot() != base {
+		t.Fatalf("active snapshot = %s, want unchanged %s: Validate must not commit", active.Snapshot(), base)
+	}
+	if _, err := active.Get("go.module.extra"); err == nil {
+		t.Fatal("Validate's candidate leaked into the active catalog")
+	}
+}
+
+// Validate reports exactly the same error Publish would, for the same
+// invalid proposal.
+func TestKernelValidateReportsPublishsOwnErrors(t *testing.T) {
+	ctx := context.Background()
+	k := knowledge.New(knowledgetest.NewMemoryStore())
+	base, err := publish(t, k, "", knowledgetest.Initial()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := knowledge.Proposal{Base: base,
+		Changes: []knowledge.Change{put(knowledgetest.Proc("go.module.missing-ref", "Bad", "b=go.module.gone"))}, Provenance: prov()}
+	_, validateErr := k.Validate(ctx, bad)
+	_, publishErr := k.Publish(ctx, bad)
+	if validateErr == nil || publishErr == nil || validateErr.Error() != publishErr.Error() {
+		t.Fatalf("validate err = %v, publish err = %v, want identical", validateErr, publishErr)
+	}
+}

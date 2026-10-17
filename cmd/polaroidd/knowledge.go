@@ -115,6 +115,7 @@ type knowledgeComponents struct {
 	agent    *knowledgeops.Agent
 	resolver *knowledgeops.Resolver
 	guide    *knowledgeops.Guide
+	proposer *knowledgeops.Proposer
 	operator *knowledgeops.Operator
 	token    string
 }
@@ -175,6 +176,7 @@ func setupKnowledge(dir, sourcesPath, authoritiesPath, tokenPath string, fb *mem
 		agent:    knowledgeops.NewAgent(syncer.Kernel(), fb),
 		resolver: knowledgeops.NewResolver(syncer.Kernel(), ev, trust),
 		guide:    knowledgeops.NewGuide(syncer.Kernel(), memory.NewWalkthroughs(walkthroughs), ev, trust),
+		proposer: knowledgeops.NewProposer(syncer.Kernel(), ev, trust),
 		operator: knowledgeops.NewOperator(syncer, policy, fb),
 		token:    token,
 	}, nil

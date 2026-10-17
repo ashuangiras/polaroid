@@ -140,7 +140,26 @@ func (k *Kernel) Publish(ctx context.Context, prop Proposal) (Snapshot, error) {
 	return k.publish(ctx, prop, nil)
 }
 
-func (k *Kernel) publish(ctx context.Context, prop Proposal, extra []Trailer) (Snapshot, error) {
+// Validate builds and fully validates the catalog that would result from
+// applying prop to its base — every check Publish itself runs (reference
+// graph and cycles, immutability/governance transition, ADR-0057
+// completeness, this package's own semantic and Rule validators) — without
+// committing anything. Its candidate's own Snapshot is empty, since it was
+// never published. ErrStale if base is no longer active; a ValidationError
+// if the result is invalid. internal/knowledgeops' Proposer (ADR-0059) uses
+// this for its own pre-commit checks — the non-vacuous composition gate
+// (#173) and the novelty-diff — reusing exactly this candidate
+// construction rather than duplicating it.
+func (k *Kernel) Validate(ctx context.Context, prop Proposal) (*Catalog, error) {
+	candidate, _, _, _, err := k.buildCandidate(ctx, prop)
+	return candidate, err
+}
+
+// buildCandidate is Publish's and Validate's shared first half: validates
+// prop against its base and returns the resulting candidate catalog
+// (Snapshot empty, not yet committed), ready either to commit (Publish) or
+// to read further and discard (Validate).
+func (k *Kernel) buildCandidate(ctx context.Context, prop Proposal) (candidate *Catalog, procs map[string]*Procedure, records map[string]*Record, files []FileChange, err error) {
 	var p problems
 	prop.Provenance.check(&p)
 	if len(prop.Changes)+len(prop.Records) == 0 {
@@ -159,17 +178,16 @@ func (k *Kernel) publish(ctx context.Context, prop Proposal, extra []Trailer) (S
 		}
 	}
 	if err := p.err(); err != nil {
-		return "", err
+		return nil, nil, nil, nil, err
 	}
 	base, err := k.At(ctx, prop.Base)
 	if err != nil {
-		return "", err
+		return nil, nil, nil, nil, err
 	}
-	procs := make(map[string]*Procedure, len(base.procs)+len(prop.Changes))
+	procs = make(map[string]*Procedure, len(base.procs)+len(prop.Changes))
 	for key, proc := range base.procs {
 		procs[key] = proc
 	}
-	var files []FileChange
 	for i, c := range prop.Changes {
 		if c.Procedure == nil {
 			if _, ok := procs[c.Key]; !ok {
@@ -203,7 +221,7 @@ func (k *Kernel) publish(ctx context.Context, prop Proposal, extra []Trailer) (S
 		procs[c.Key] = proc
 		files = append(files, FileChange{Path: Path(c.Key), Content: doc})
 	}
-	records := make(map[string]*Record, len(base.records)+len(prop.Records))
+	records = make(map[string]*Record, len(base.records)+len(prop.Records))
 	for key, r := range base.records {
 		records[key] = r
 	}
@@ -256,7 +274,7 @@ func (k *Kernel) publish(ctx context.Context, prop Proposal, extra []Trailer) (S
 		files = append(files, FileChange{Path: RecordPath(r.Type, c.Key), Content: doc})
 	}
 	if err := p.err(); err != nil {
-		return "", err
+		return nil, nil, nil, nil, err
 	}
 	switch hadManifest := len(base.records) > 0; {
 	case len(records) > 0 && !hadManifest:
@@ -265,11 +283,11 @@ func (k *Kernel) publish(ctx context.Context, prop Proposal, extra []Trailer) (S
 		files = append(files, FileChange{Path: ManifestPath, Delete: true})
 	}
 	if err := checkCatalog(procs, records); err != nil {
-		return "", err
+		return nil, nil, nil, nil, err
 	}
-	candidate := newCatalog("", procs, records)
+	candidate = newCatalog("", procs, records)
 	if err := CheckTransition(base, candidate); err != nil {
-		return "", err
+		return nil, nil, nil, nil, err
 	}
 	// ADR-0057, activated (#164): every Domain, Concept and Procedure
 	// record of the resulting catalog needs a real definition, and every
@@ -290,12 +308,19 @@ func (k *Kernel) publish(ctx context.Context, prop Proposal, extra []Trailer) (S
 	// candidate: a new publish is held to the bar, reading history never
 	// is.
 	if problems := candidate.CheckCompleteness(); len(problems) > 0 {
-		return "", &ValidationError{Problems: problems}
+		return nil, nil, nil, nil, &ValidationError{Problems: problems}
 	}
 	if err := validateRecords(ctx, k.validators, records); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	return candidate, procs, records, files, nil
+}
+
+func (k *Kernel) publish(ctx context.Context, prop Proposal, extra []Trailer) (Snapshot, error) {
+	_, procs, records, files, err := k.buildCandidate(ctx, prop)
+	if err != nil {
 		return "", err
 	}
-
 	pv := prop.Provenance
 	trailers := append([]Trailer(nil), extra...)
 	if pv.Finding != "" {

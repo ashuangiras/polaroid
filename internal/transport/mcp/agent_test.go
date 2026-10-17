@@ -168,6 +168,39 @@ func newKnowledgeHarnessV3(t *testing.T) *knowledgeHarness {
 	return &knowledgeHarness{harness: h, kernel: kernel}
 }
 
+// newKnowledgeHarnessV4 runs /mcp/agent/v4 (ADR-0059 Parts 2-3): the same
+// v3 tools, plus propose -- agent mode's first write to knowledge content
+// itself.
+func newKnowledgeHarnessV4(t *testing.T) *knowledgeHarness {
+	t.Helper()
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "polaroid.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	repo, err := gitcore.Open(filepath.Join(t.TempDir(), "knowledge"), gitcore.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sem, err := semantic.New(semantic.DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := datalog.Evaluator{}
+	kernel := knowledge.New(gitstore.New(repo), knowledge.WithRecordValidator(sem), knowledge.WithRecordValidator(reasoning.RuleValidator{Evaluator: ev}))
+	agent := knowledgeops.NewAgent(kernel, memory.NewService(store))
+	resolver := knowledgeops.NewResolver(kernel, ev, policy.Trust{})
+	guide := knowledgeops.NewGuide(kernel, memory.NewWalkthroughs(store), ev, policy.Trust{})
+	proposer := knowledgeops.NewProposer(kernel, ev, policy.Trust{})
+	logs := &syncBuffer{}
+	srv := httptest.NewServer(mcptransport.NewAgentHandlerV4(agent, resolver, guide, proposer, slog.New(slog.NewTextHandler(logs, nil))))
+	t.Cleanup(srv.Close)
+	h := &harness{url: srv.URL, store: store, logs: logs}
+	h.session = h.connect(t, "")
+	return &knowledgeHarness{harness: h, kernel: kernel}
+}
+
 func decodeJSON(t *testing.T, text string) map[string]any {
 	t.Helper()
 	var m map[string]any
@@ -523,6 +556,140 @@ func TestAgentV2AndV3SchemasMatch(t *testing.T) {
 	v3Tools := v3.ok(t, "discover", `{"kind":"tools"}`)
 	if !strings.Contains(v3Tools, `"start"`) || !strings.Contains(v3Tools, `"advance"`) {
 		t.Fatalf("discover(kind=tools) at v3 must list start and advance: %s", v3Tools)
+	}
+}
+
+// Agent mode v4 (ADR-0059 Parts 2-3): the v3 tools, unchanged, plus
+// propose -- agent mode's first write to knowledge content itself.
+
+func TestAgentV3AndV4SchemasMatch(t *testing.T) {
+	v3, v4 := newKnowledgeHarnessV3(t), newKnowledgeHarnessV4(t)
+	schemas := func(h *knowledgeHarness) map[string]string {
+		t.Helper()
+		out := map[string]string{}
+		for tool, err := range h.session.Tools(context.Background(), nil) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := json.Marshal(tool.InputSchema)
+			out[tool.Name] = string(b)
+		}
+		return out
+	}
+	s3, s4 := schemas(v3), schemas(v4)
+	for _, name := range []string{"discover", "read", "feedback", "resolve", "start", "advance"} {
+		if s3[name] == "" || s3[name] != s4[name] {
+			t.Fatalf("%s schema differs between v3 and v4:\nv3: %s\nv4: %s", name, s3[name], s4[name])
+		}
+	}
+	if len(s4) != 7 || s4["propose"] == "" {
+		t.Fatalf("v4 tools = %v, want discover/read/feedback/resolve/start/advance/propose", s4)
+	}
+	v4Tools := v4.ok(t, "discover", `{"kind":"tools"}`)
+	if !strings.Contains(v4Tools, `"propose"`) {
+		t.Fatalf("discover(kind=tools) at v4 must list propose: %s", v4Tools)
+	}
+}
+
+// proposeFixture publishes the same vacuous producer/consumer shape
+// #173's own fixtures use, over the real kernel the harness itself
+// wraps (not through propose, so the fixture's own validity is never in
+// question) -- for proving propose actually closes it over the real
+// transport.
+func proposeFixture(t *testing.T, agent *knowledgeHarness) knowledge.Snapshot {
+	t.Helper()
+	procs := []*knowledge.Procedure{
+		knowledgetest.SharedProc("propose.producer", "producer"), knowledgetest.SharedProc("propose.consumer", "consumer"),
+		knowledgetest.SharedProc("propose.parent", "parent"),
+	}
+	records := []*knowledge.Record{
+		{Type: knowledge.TypeConcept, Key: "test.obligation", Label: "done", Definition: "d"},
+		{Type: knowledge.TypeConcept, Key: "propose.some-precondition", Label: "x", Definition: "d"},
+		{Type: knowledge.TypeProcedure, Key: "propose.producer", Label: "producer", Definition: "d",
+			Precedes: []string{"propose.consumer"}, Requires: []string{"test.obligation"}},
+		{Type: knowledge.TypeProcedure, Key: "propose.consumer", Label: "consumer", Definition: "d",
+			Preconditions: []string{"propose.some-precondition"}, Requires: []string{"test.obligation"}},
+		{Type: knowledge.TypeProcedure, Key: "propose.parent", Label: "parent", Definition: "d",
+			Composes: []string{"propose.producer", "propose.consumer"}, Requires: []string{"test.obligation"}},
+	}
+	s, err := agent.publishRecords(t, procs, records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// TestProposeCommitsAndIsImmediatelyReadable proves AC4 over the real
+// transport: a valid, citation-grounded, novel, non-vacuous candidate
+// commits immediately and is readable via discover/read/resolve in the
+// very next call, with no separate approval step.
+func TestProposeCommitsAndIsImmediatelyReadable(t *testing.T) {
+	agent := newKnowledgeHarnessV4(t)
+	proposeFixture(t, agent)
+	res := decodeJSON(t, agent.ok(t, "propose", `{"proposer":"test.agent","rationale":"mirrors an existing fact",
+		"existing_procedure":{"key":"propose.producer","postconditions":["propose.some-precondition"],
+		"citations":[{"source":"test.md","quote":"propose.some-precondition"}]}}`))
+	if res["key"] != "propose.producer" || res["snapshot"] == "" {
+		t.Fatalf("propose result = %v", res)
+	}
+	resolved := decodeJSON(t, agent.ok(t, "resolve", `{"goal":"propose.producer","then":"propose.consumer"}`))
+	composition, _ := resolved["composition"].(map[string]any)
+	if composition == nil || composition["verdict"] != "compatible" {
+		t.Fatalf("resolve ... then must show the pair compatible immediately after propose, got %v", resolved)
+	}
+}
+
+func TestProposeMissingCitationIsRejected(t *testing.T) {
+	agent := newKnowledgeHarnessV4(t)
+	proposeFixture(t, agent)
+	errJSON := agent.fail(t, "propose", `{"proposer":"test.agent","rationale":"r",
+		"existing_procedure":{"key":"propose.producer","postconditions":["propose.some-precondition"]}}`, "invalid_request")
+	if !strings.Contains(errJSON.Message, "citations") {
+		t.Fatalf("error = %+v, want it naming citations", errJSON)
+	}
+}
+
+// TestProposeOrchestrationOverRealTransport proves AC5/AC6 over the real
+// transport: a Tier 1 orchestration needs no citation, and an unknown
+// composed key is refused.
+func TestProposeOrchestrationOverRealTransport(t *testing.T) {
+	agent := newKnowledgeHarnessV4(t)
+	proposeFixture(t, agent)
+	res := decodeJSON(t, agent.ok(t, "propose", `{"proposer":"test.agent","rationale":"r",
+		"new_orchestration":{"key":"propose.orchestration","label":"o","definition":"composes producer then consumer",
+		"composes":["propose.producer","propose.consumer"],"requires":["test.obligation"]}}`))
+	if res["key"] != "propose.orchestration" {
+		t.Fatalf("propose result = %v", res)
+	}
+	guidance := decodeJSON(t, agent.ok(t, "read", `{"key":"propose.orchestration"}`))
+	if guidance["goal"] != "composes producer then consumer" {
+		t.Fatalf("read of the new orchestration = %v", guidance)
+	}
+	agent.fail(t, "propose", `{"proposer":"test.agent","rationale":"r",
+		"new_orchestration":{"key":"propose.orchestration-bad","label":"o","definition":"d","composes":["nope.does-not-exist"]}}`, "invalid_request")
+}
+
+// TestProposeNeverAffectsFeedback is AC7's regression: propose and
+// feedback are independent, deliberately (ADR-0059's own design
+// requirement) -- a propose call changes nothing feedback reports or
+// stores, and feedback keeps working normally alongside it.
+func TestProposeNeverAffectsFeedback(t *testing.T) {
+	agent := newKnowledgeHarnessV4(t)
+	snap := proposeFixture(t, agent)
+	before := agent.ok(t, "feedback", `{"key":"propose.producer","snapshot":"`+string(snap)+`","classification":"improved_method","summary":"s","details":"d","reporter":"test.agent"}`)
+	if _, err := agent.publishRecords(t, nil, []*knowledge.Record{
+		{Type: knowledge.TypeConcept, Key: "propose.unrelated-concept", Label: "u", Definition: "d"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.session.CallTool(context.Background(), &sdk.CallToolParams{Name: "propose", Arguments: json.RawMessage(
+		`{"proposer":"test.agent","rationale":"r","new_concept":{"key":"propose.via-tool","label":"v","definition":"grounded content",
+		"citations":[{"source":"test.md","quote":"grounded content"}]}}`)}); err != nil {
+		t.Fatal(err)
+	}
+	after := agent.ok(t, "feedback", `{"key":"propose.producer","snapshot":"`+string(snap)+`","classification":"improved_method","summary":"s2","details":"d","reporter":"test.agent"}`)
+	if before == "" || after == "" {
+		t.Fatalf("feedback must keep working normally alongside propose: before=%q after=%q", before, after)
 	}
 }
 
