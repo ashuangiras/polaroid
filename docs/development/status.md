@@ -2,7 +2,7 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
-**[#177](https://github.com/ashuangiras/polaroid/issues/177) implemented: reasoned walkthrough steps (ADR-0058, Guided Procedures Milestone 6), as of 2026-10-17.** Opened as [PR #179](https://github.com/ashuangiras/polaroid/pull/179) from branch `issue-177-reasoned-walkthrough-steps`, not yet merged.
+**[#177](https://github.com/ashuangiras/polaroid/issues/177) implemented: reasoned walkthrough steps (ADR-0058, Guided Procedures Milestone 6), as of 2026-10-17.** Merged as [PR #179](https://github.com/ashuangiras/polaroid/pull/179).
 
 - **`start`/`advance` now resolve plan's own current `next` leaf through the full `reasoning.Resolve`**, not just `reasoning.PlanTree` ([internal/knowledgeops/guide.go](../../internal/knowledgeops/guide.go)): a new `resolution` member on the result, resolve's own shape, scoped to the one `next` leaf, computed fresh every call, omitted once `status` is `"complete"`. Closes the gap `guide.go`'s own doc comment named: "a walkthrough's context is only captured here, not yet reasoned over."
 - **`context` keeps accumulating** exactly as ADR-0053 already folds it (feeds `Resolve`'s `Context`); **`assertions`/`Trusted` are call-scoped only**, established fresh every call, never persisted across a walkthrough's calls the way `context` is. **No retroactivity, by construction**: resolution is computed only for `next`, so a leaf once `done` is never resolved again.
@@ -11,9 +11,9 @@ This page is a snapshot of the repository's current state, replaced at every han
 - **Deliberately not added**: a dedicated assertions/`Trusted`-scoping test and a `budget_exceeded` test for `Guide` — neither mechanism has any existing test at this layer for `Resolver` either, so adding one exclusively for `Guide` would be new depth beyond what this reused code already has anywhere.
 - **Verified (`verify-change`, full)**: `make check` (lint 0 issues, full test suite incl. `-race`, fresh archtest/lifecycle/recovery, deps/docs-check 981 links/records-check/loader-check all PASS), `make vuln` (0 affecting the code), `make demo` (PASS), `make e2e` 313/0, `make e2e-mcp E2E_INTEROP=0` 137/0. `make lifecycle` not run: no installation/service change.
 - **Documentation updated**: `docs/architecture/mcp.md`'s `start`/`advance` rows and `docs/architecture/knowledge-guide.md`'s `/mcp/agent/v3` description, for the new `assertions` argument and `resolution` member.
-- **Not done**: the PR is open but not merged. [#174](https://github.com/ashuangiras/polaroid/issues/174) (the `propose` tool, ADR-0059 Parts 2–3) remains the other open, independent item, not started.
+- **Not done**: [#174](https://github.com/ashuangiras/polaroid/issues/174) (the `propose` tool, ADR-0059 Parts 2–3) remains the other open, independent item, not started.
 
-Next action: review and merge [PR #179](https://github.com/ashuangiras/polaroid/pull/179); then pick up #174, the only remaining open item from this session.
+Next action: pick up #174, the only remaining open item from this session.
 
 
 **[#173](https://github.com/ashuangiras/polaroid/issues/173) implemented: a non-vacuous composition gate, written but not activated (ADR-0059 Part 1, Grounded publication M1), as of 2026-10-17.** Merged as [PR #178](https://github.com/ashuangiras/polaroid/pull/178).
