@@ -159,7 +159,7 @@ func newKnowledgeHarnessV3(t *testing.T) *knowledgeHarness {
 	kernel := knowledge.New(gitstore.New(repo), knowledge.WithRecordValidator(sem), knowledge.WithRecordValidator(reasoning.RuleValidator{Evaluator: ev}))
 	agent := knowledgeops.NewAgent(kernel, memory.NewService(store))
 	resolver := knowledgeops.NewResolver(kernel, ev, policy.Trust{})
-	guide := knowledgeops.NewGuide(kernel, memory.NewWalkthroughs(store))
+	guide := knowledgeops.NewGuide(kernel, memory.NewWalkthroughs(store), ev, policy.Trust{})
 	logs := &syncBuffer{}
 	srv := httptest.NewServer(mcptransport.NewAgentHandlerV3(agent, resolver, guide, slog.New(slog.NewTextHandler(logs, nil))))
 	t.Cleanup(srv.Close)

@@ -64,36 +64,62 @@ func (r *Resolver) Resolve(ctx context.Context, in wire.KnowledgeResolveRequest)
 	}
 	ctx, cancel := context.WithTimeout(ctx, ResolveTimeout)
 	defer cancel()
-	// Only verified assertions establish trusted context; without them,
-	// project-scoped and conditional exceptions fail closed. An assertion
-	// must be valid now as well as at the evaluation time, so choosing an
-	// earlier time never revives an expired one.
-	assertions, err := decodeAssertions(in.Assertions)
+	trusted, err := establishTrusted(r.trust, in.Assertions, now, at)
 	if err != nil {
 		return wire.KnowledgeResolution{}, err
-	}
-	if _, err := policy.Establish(r.trust, assertions, now); err != nil {
-		return wire.KnowledgeResolution{}, invalidField("assertions",
-			fmt.Sprintf("%v (checked at the current time %s: an assertion must be valid when it is presented, whatever the evaluation time)", err, now.Format(time.RFC3339)))
-	}
-	trusted, err := policy.Establish(r.trust, assertions, at)
-	if err != nil {
-		return wire.KnowledgeResolution{}, invalidField("assertions", err.Error())
 	}
 	res, err := reasoning.Resolve(ctx, cat, r.ev, r.trust, reasoning.Request{Goal: in.Goal, Context: in.Context, Trusted: trusted, Then: in.Then, At: at, Completed: in.Completed})
+	if err != nil {
+		return wire.KnowledgeResolution{}, classifyResolveErr(err)
+	}
+	return toWireResolution(res)
+}
+
+// establishTrusted decodes in and establishes trusted context from trust,
+// checked at both now (when the assertions are presented) and at (the
+// evaluation time): an assertion must be valid at both, so choosing an
+// earlier evaluation time never revives one already expired now. Shared
+// by Resolver.Resolve and Guide's own per-leaf resolution (ADR-0058),
+// which establishes trust fresh on every call, the same way, rather than
+// persisting or inheriting it across a walkthrough's calls.
+func establishTrusted(trust policy.Trust, in []wire.KnowledgeAssertion, now, at time.Time) (map[string]string, error) {
+	assertions, err := decodeAssertions(in)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := policy.Establish(trust, assertions, now); err != nil {
+		return nil, invalidField("assertions",
+			fmt.Sprintf("%v (checked at the current time %s: an assertion must be valid when it is presented, whatever the evaluation time)", err, now.Format(time.RFC3339)))
+	}
+	trusted, err := policy.Establish(trust, assertions, at)
+	if err != nil {
+		return nil, invalidField("assertions", err.Error())
+	}
+	return trusted, nil
+}
+
+// classifyResolveErr maps a reasoning.Resolve error to the request error
+// it should produce, shared by Resolver.Resolve and Guide's own per-leaf
+// resolution (ADR-0058).
+func classifyResolveErr(err error) error {
 	switch {
 	case errors.Is(err, reasoning.ErrUnknownGoal):
-		return wire.KnowledgeResolution{}, wire.NewKnowledgeError(http.StatusNotFound, wire.ErrorDetail{Code: "not_found", Message: err.Error()})
+		return wire.NewKnowledgeError(http.StatusNotFound, wire.ErrorDetail{Code: "not_found", Message: err.Error()})
 	case errors.Is(err, reasoning.ErrContextConflict):
-		return wire.KnowledgeResolution{}, invalidField("context", err.Error())
+		return invalidField("context", err.Error())
 	case errors.Is(err, reasoning.ErrInvalidCompleted):
-		return wire.KnowledgeResolution{}, invalidField("completed", err.Error())
+		return invalidField("completed", err.Error())
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, reasoning.ErrBudget):
-		return wire.KnowledgeResolution{}, wire.NewKnowledgeError(http.StatusUnprocessableEntity, wire.ErrorDetail{Code: "budget_exceeded",
+		return wire.NewKnowledgeError(http.StatusUnprocessableEntity, wire.ErrorDetail{Code: "budget_exceeded",
 			Message: fmt.Sprintf("resolution exceeded its budget (%s, or a fact limit): %v", ResolveTimeout, err)})
-	case err != nil:
-		return wire.KnowledgeResolution{}, err
+	default:
+		return err
 	}
+}
+
+// toWireResolution converts res to resolve's own canonical JSON shape
+// (ADR-0050), reused by Guide for its own per-leaf resolution (ADR-0058).
+func toWireResolution(res *reasoning.Resolution) (wire.KnowledgeResolution, error) {
 	b, err := json.Marshal(res)
 	if err != nil {
 		return wire.KnowledgeResolution{}, err

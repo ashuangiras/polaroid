@@ -12,6 +12,7 @@ import (
 	"github.com/ashuangiras/polaroid/internal/memory"
 	"github.com/ashuangiras/polaroid/internal/reasoning"
 	"github.com/ashuangiras/polaroid/internal/reasoning/datalog"
+	"github.com/ashuangiras/polaroid/internal/reasoning/policy"
 	"github.com/ashuangiras/polaroid/internal/storage/sqlite"
 	"github.com/ashuangiras/polaroid/internal/transport/wire"
 )
@@ -45,7 +46,7 @@ func guideFixture(t *testing.T, children ...string) (*knowledgeops.Guide, string
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	return knowledgeops.NewGuide(k, memory.NewWalkthroughs(store)), string(s)
+	return knowledgeops.NewGuide(k, memory.NewWalkthroughs(store), datalog.Evaluator{}, policy.Trust{}), string(s)
 }
 
 func TestGuideStartPinsSnapshotAndPlan(t *testing.T) {
@@ -210,7 +211,7 @@ func nestedGuideFixture(t *testing.T, specs ...nestedSpec) *knowledgeops.Guide {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	return knowledgeops.NewGuide(k, memory.NewWalkthroughs(store))
+	return knowledgeops.NewGuide(k, memory.NewWalkthroughs(store), datalog.Evaluator{}, policy.Trust{})
 }
 
 // AC2: a nested plan's next correctly descends to the true next leaf,
@@ -658,5 +659,163 @@ func TestGuideAdvanceExpandChildrenNotGatedBySiblingOrder(t *testing.T) {
 	children := res.Plan[0].Children
 	if len(children) != 2 || children[0].Status != "pending" || children[1].Status != "blocked" {
 		t.Fatalf("children = %+v, want b pending and c blocked regardless of order", children)
+	}
+}
+
+// guideConditionalFixture publishes a parent composing "step.a" (an
+// ordinary, unconditional step) then "step.cond" (classified under
+// test.conditional-domain, with an obligation that only becomes required
+// given context "mode"="special", via a Rule) -- for proving ADR-0058's
+// context accumulation and reasoned-obligation behavior, which a plain
+// Requires edge (guideFixture's own steps) cannot exercise.
+func guideConditionalFixture(t *testing.T) *knowledgeops.Guide {
+	t.Helper()
+	k := knowledge.New(knowledgetest.NewMemoryStore(), knowledge.WithRecordValidator(reasoning.RuleValidator{Evaluator: datalog.Evaluator{}}))
+	domain := &knowledge.Record{Type: knowledge.TypeDomain, Key: "test.conditional-domain", Label: "d", Definition: "d"}
+	obligation := &knowledge.Record{Type: knowledge.TypeConcept, Key: "test.obligation", Label: "done", Definition: "d"}
+	conditional := &knowledge.Record{Type: knowledge.TypeConcept, Key: "test.conditional-obligation", Label: "c", Definition: "d"}
+	rule := &knowledge.Record{Type: knowledge.TypeRule, Key: "test.conditional-rule", Label: "r", Statement: "r", Revision: 1, Waivable: true,
+		ClassifiedAs: []string{"test.conditional-domain"},
+		Program:      `obligation(P, "test.conditional-obligation") :- record(P, "Procedure"), classified_as(P, "test.conditional-domain"), context("mode", "special").`}
+	parent := &knowledge.Record{Type: knowledge.TypeProcedure, Key: "parent", Label: "parent", Definition: "d",
+		Composes: []string{"step.a", "step.cond"}, Requires: []string{"test.obligation"}}
+	stepA := &knowledge.Record{Type: knowledge.TypeProcedure, Key: "step.a", Label: "a", Definition: "d", Requires: []string{"test.obligation"}}
+	stepCond := &knowledge.Record{Type: knowledge.TypeProcedure, Key: "step.cond", Label: "cond", Definition: "d",
+		ClassifiedAs: []string{"test.conditional-domain"}, Requires: []string{"test.obligation"}}
+	changes := []knowledge.Change{
+		{Key: "parent", Procedure: knowledgetest.SharedProc("parent", "parent")},
+		{Key: "step.a", Procedure: knowledgetest.SharedProc("step.a", "step.a")},
+		{Key: "step.cond", Procedure: knowledgetest.SharedProc("step.cond", "step.cond")},
+	}
+	records := []knowledge.RecordChange{
+		{Key: domain.Key, Record: domain}, {Key: obligation.Key, Record: obligation}, {Key: conditional.Key, Record: conditional},
+		{Key: rule.Key, Record: rule}, {Key: parent.Key, Record: parent}, {Key: stepA.Key, Record: stepA}, {Key: stepCond.Key, Record: stepCond},
+	}
+	if _, err := k.Publish(context.Background(), knowledge.Proposal{Changes: changes, Records: records,
+		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "s", Rationale: "r"}}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := sqlite.Open(context.Background(), t.TempDir()+"/polaroid.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return knowledgeops.NewGuide(k, memory.NewWalkthroughs(store), datalog.Evaluator{}, policy.Trust{})
+}
+
+// TestGuideResolutionForNextLeaf proves ADR-0058's core behavior: start's
+// result includes a resolution scoped to plan's own current next leaf.
+func TestGuideResolutionForNextLeaf(t *testing.T) {
+	g, _ := guideFixture(t, "step.a", "step.b")
+	res, err := g.Start(context.Background(), wire.WalkthroughStartRequest{Goal: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Resolution == nil || res.Resolution.Goal != "step.a" {
+		t.Fatalf("resolution = %+v, want scoped to next leaf step.a", res.Resolution)
+	}
+	found := false
+	for _, o := range res.Resolution.Obligations {
+		if o.Requirement == "test.obligation" && o.Status == "required" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("resolution.obligations = %+v, want test.obligation required", res.Resolution.Obligations)
+	}
+}
+
+// TestGuideResolutionOmittedWhenComplete proves resolution is omitted
+// once status is "complete": nothing left to resolve.
+func TestGuideResolutionOmittedWhenComplete(t *testing.T) {
+	g, _ := guideFixture(t, "step.a")
+	start, err := g.Start(context.Background(), wire.WalkthroughStartRequest{Goal: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := g.Advance(context.Background(), wire.WalkthroughAdvanceRequest{Token: start.Token,
+		Outcome: &wire.WalkthroughOutcomeArg{Key: "step.a", Status: "done"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "complete" || res.Resolution != nil {
+		t.Fatalf("result = %+v, want complete with no resolution", res)
+	}
+}
+
+// TestGuideResolutionAccumulatesContextAcrossCalls proves ADR-0058's
+// central claim: context given once at start still applies when a later
+// leaf is reached several advance calls later, without resending it.
+func TestGuideResolutionAccumulatesContextAcrossCalls(t *testing.T) {
+	g := guideConditionalFixture(t)
+	start, err := g.Start(context.Background(), wire.WalkthroughStartRequest{Goal: "parent", Context: map[string]string{"mode": "special"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if start.Resolution == nil || start.Resolution.Goal != "step.a" {
+		t.Fatalf("start resolution = %+v, want step.a", start.Resolution)
+	}
+	res, err := g.Advance(context.Background(), wire.WalkthroughAdvanceRequest{Token: start.Token,
+		Outcome: &wire.WalkthroughOutcomeArg{Key: "step.a", Status: "done"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Resolution == nil || res.Resolution.Goal != "step.cond" {
+		t.Fatalf("resolution = %+v, want scoped to step.cond", res.Resolution)
+	}
+	found := false
+	for _, o := range res.Resolution.Obligations {
+		if o.Requirement == "test.conditional-obligation" && o.Status == "required" {
+			found = true
+		}
+	}
+	if !found || len(res.Resolution.Unknowns) != 0 {
+		t.Fatalf("resolution = %+v, want test.conditional-obligation required, fully decided from context given at start", res.Resolution)
+	}
+}
+
+// TestGuideResolutionWithoutContextIsUnknown is the contrast case: without
+// "mode=special" ever given, the same conditional obligation is an
+// unknown, never silently assumed either way (ADR-0050's open world).
+func TestGuideResolutionWithoutContextIsUnknown(t *testing.T) {
+	g := guideConditionalFixture(t)
+	start, err := g.Start(context.Background(), wire.WalkthroughStartRequest{Goal: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := g.Advance(context.Background(), wire.WalkthroughAdvanceRequest{Token: start.Token,
+		Outcome: &wire.WalkthroughOutcomeArg{Key: "step.a", Status: "done"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Resolution == nil || len(res.Resolution.Unknowns) != 1 || res.Resolution.Unknowns[0].Requirement != "test.conditional-obligation" {
+		t.Fatalf("resolution = %+v, want test.conditional-obligation unknown without context", res.Resolution)
+	}
+}
+
+// TestGuideResolutionNoRetroactivity proves ADR-0058's "no retroactivity,
+// by construction": once step.a is done, a later peek -- even bearing new
+// context -- never resolves it again; it stays scoped to the real current
+// next leaf.
+func TestGuideResolutionNoRetroactivity(t *testing.T) {
+	g, _ := guideFixture(t, "step.a", "step.b")
+	start, err := g.Start(context.Background(), wire.WalkthroughStartRequest{Goal: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adv, err := g.Advance(context.Background(), wire.WalkthroughAdvanceRequest{Token: start.Token,
+		Outcome: &wire.WalkthroughOutcomeArg{Key: "step.a", Status: "done"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adv.Resolution == nil || adv.Resolution.Goal != "step.b" {
+		t.Fatalf("after step.a done, resolution = %+v, want scoped to step.b", adv.Resolution)
+	}
+	peek, err := g.Advance(context.Background(), wire.WalkthroughAdvanceRequest{Token: start.Token, Context: map[string]string{"anything": "new"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if peek.Resolution == nil || peek.Resolution.Goal != "step.b" {
+		t.Fatalf("peek resolution = %+v, want still scoped to step.b, never step.a again", peek.Resolution)
 	}
 }
