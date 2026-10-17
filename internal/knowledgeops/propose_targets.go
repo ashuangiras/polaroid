@@ -13,21 +13,33 @@ import (
 // against base (the active catalog at the time of the call).
 type proposeTarget interface {
 	buildProposal(base *knowledge.Catalog, in wire.ProposeRequest) (knowledge.Proposal, string, error)
-	// affectsReasoning reports whether this target's content could ever
-	// show up in a Resolve or Compose result at all. False only for an
-	// existingProcedureTarget whose only new content is Definition —
-	// Corpus Logic never reads it (found while implementing: Definition
-	// appears in no Resolution or CompositionResult field at all), so
-	// the non-vacuous composition gate (#173) and the novelty-diff
-	// (which can only ever say "no difference found" for such content)
-	// would both wrongly refuse it — the gate for an unrelated,
-	// pre-existing vacuous pair this change could not possibly affect
-	// either way, the diff as redundant, since "changes no resolution"
-	// would otherwise be true of every one of them, by construction, not
-	// because any particular one is actually redundant. ADR-0057's
-	// completeness bar and the citation check already govern Definition
-	// fully on their own.
-	affectsReasoning() bool
+	// touchesComposition reports whether this target's content could
+	// ever change the non-vacuous composition gate's (#173) own verdict
+	// for the proposal's key: false only for an existingProcedureTarget
+	// giving neither a new value nor a *Complete flag (ADR-0060) for any
+	// of Preconditions/Postconditions/Invariants/InformalConditions — a
+	// bare Definition change, which Compose never reads at all (found
+	// while implementing: Definition appears in no CompositionResult
+	// field). Deliberately includes a *Complete-flag-only answer (an
+	// ADR-0060 decline, no new values): Compose's own verdict for an
+	// already-vacuous pair is genuinely unchanged by one (Compose does
+	// not read *Complete, by design, this milestone), so the gate still
+	// correctly refuses it if the pair stays vacuous — a decline is not
+	// an exemption from the gate, only from needing a citation (that is
+	// checkQuotesGrounded's own, separate empty-content exemption) and
+	// from the novelty-diff (see hasNewValues).
+	touchesComposition() bool
+	// hasNewValues reports whether this target gives any new,
+	// non-empty value for Preconditions/Postconditions/Invariants/
+	// InformalConditions — as opposed to only marking a *Complete flag
+	// with no new values at all. Gates the novelty-diff only: a
+	// flag-only answer's entire value is in being stored for later
+	// audit and reasoning use (ADR-0060's own stated purpose), not in
+	// changing any resolution today — it would always, trivially, fail
+	// the novelty-diff's "changes nothing" standard, for a reason
+	// unrelated to whether it is actually worth recording, so it is
+	// never asked to pass that standard at all.
+	hasNewValues() bool
 }
 
 // classifyPropose picks in's one target, or reports exactly the shape
@@ -65,11 +77,14 @@ func baseProvenance(in wire.ProposeRequest, summary string) knowledge.Provenance
 // citation-grounded (ADR-0059 Part 2).
 type existingProcedureTarget struct{ f *wire.ProposeFieldAddition }
 
-// affectsReasoning is false exactly when only Definition is given: see
-// proposeTarget's own doc comment for why.
-func (t existingProcedureTarget) affectsReasoning() bool {
+func (t existingProcedureTarget) touchesComposition() bool {
 	f := t.f
-	return len(f.Preconditions)+len(f.Postconditions)+len(f.Invariants)+len(f.InformalConditions) > 0
+	return t.hasNewValues() || f.PreconditionsComplete || f.PostconditionsComplete || f.InvariantsComplete || f.InformalConditionsComplete
+}
+
+func (t existingProcedureTarget) hasNewValues() bool {
+	f := t.f
+	return len(f.Preconditions) > 0 || len(f.Postconditions) > 0 || len(f.Invariants) > 0 || len(f.InformalConditions) > 0
 }
 
 func (t existingProcedureTarget) buildProposal(base *knowledge.Catalog, in wire.ProposeRequest) (knowledge.Proposal, string, error) {
@@ -96,6 +111,21 @@ func (t existingProcedureTarget) buildProposal(base *knowledge.Catalog, in wire.
 	updated.Postconditions = append(append([]string{}, updated.Postconditions...), f.Postconditions...)
 	updated.Invariants = append(append([]string{}, updated.Invariants...), f.Invariants...)
 	updated.InformalConditions = append(append([]string{}, updated.InformalConditions...), f.InformalConditions...)
+	// *Complete (ADR-0060): a true value sets the flag; omitted (false)
+	// never clears an already-true flag, and never defaults one to true
+	// just because this proposal happened to touch a different field.
+	if f.PreconditionsComplete {
+		updated.PreconditionsComplete = true
+	}
+	if f.PostconditionsComplete {
+		updated.PostconditionsComplete = true
+	}
+	if f.InvariantsComplete {
+		updated.InvariantsComplete = true
+	}
+	if f.InformalConditionsComplete {
+		updated.InformalConditionsComplete = true
+	}
 	prop := knowledge.Proposal{
 		Base:       base.Snapshot(),
 		Records:    []knowledge.RecordChange{{Key: f.Key, Record: updated}},
@@ -122,10 +152,12 @@ type newRecordTarget struct {
 	n   *wire.ProposeNewRecord
 }
 
-// affectsReasoning is always true: the checks run and trivially pass for
-// a brand new key either way (nothing to compare against), via isNovel's
-// and checkOwnComposition's own shortcuts for it.
-func (t newRecordTarget) affectsReasoning() bool { return true }
+// touchesComposition/hasNewValues are always true: the checks run and
+// trivially pass for a brand new key either way (nothing to compare
+// against), via isNovel's and checkOwnComposition's own shortcuts for
+// it.
+func (t newRecordTarget) touchesComposition() bool { return true }
+func (t newRecordTarget) hasNewValues() bool       { return true }
 
 func (t newRecordTarget) buildProposal(base *knowledge.Catalog, in wire.ProposeRequest) (knowledge.Proposal, string, error) {
 	n := t.n
@@ -166,10 +198,10 @@ func (t newRecordTarget) buildProposal(base *knowledge.Catalog, in wire.ProposeR
 // each child, through existingProcedureTarget.
 type newOrchestrationTarget struct{ o *wire.ProposeOrchestration }
 
-// affectsReasoning is always true: the checks run and trivially pass for
-// a brand new key either way (nothing to compare against), via isNovel's
-// and checkOwnComposition's own shortcuts for it.
-func (t newOrchestrationTarget) affectsReasoning() bool { return true }
+// touchesComposition/hasNewValues are always true, the same reason
+// newRecordTarget's own are.
+func (t newOrchestrationTarget) touchesComposition() bool { return true }
+func (t newOrchestrationTarget) hasNewValues() bool       { return true }
 
 func (t newOrchestrationTarget) buildProposal(base *knowledge.Catalog, in wire.ProposeRequest) (knowledge.Proposal, string, error) {
 	o := t.o

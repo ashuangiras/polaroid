@@ -93,6 +93,10 @@ pc:ProcedureShape a sh:NodeShape ;
   sh:property [ sh:path pc:postcondition ; sh:class skos:Concept ] ;
   sh:property [ sh:path pc:invariant ; sh:class skos:Concept ] ;
   sh:property [ sh:path pc:informalCondition ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path pc:preconditionsComplete ; sh:maxCount 1 ; sh:datatype xsd:boolean ] ;
+  sh:property [ sh:path pc:postconditionsComplete ; sh:maxCount 1 ; sh:datatype xsd:boolean ] ;
+  sh:property [ sh:path pc:invariantsComplete ; sh:maxCount 1 ; sh:datatype xsd:boolean ] ;
+  sh:property [ sh:path pc:informalConditionsComplete ; sh:maxCount 1 ; sh:datatype xsd:boolean ] ;
   sh:property [ sh:path dcterms:replaces ; sh:class pc:Procedure ] .
 
 pc:PortShape a sh:NodeShape ;

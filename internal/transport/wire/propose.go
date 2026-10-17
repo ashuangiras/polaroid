@@ -35,15 +35,24 @@ type ProposeCitation struct {
 // Every given field's new entries are appended to whatever the record
 // already has. At least one Citation is required whenever any field is
 // given, and every Citation's Quote must appear verbatim in the combined
-// new content.
+// new content. The four *Complete flags (ADR-0060) are optional, direct
+// settings for an agent that already knows the answer: omitting one
+// leaves that field's existing *Complete value exactly as it was
+// (never defaulted to true just because this proposal happened to touch
+// a different field) -- the interactive propose_start/propose_advance
+// flow is the only path that requires an explicit answer for every one.
 type ProposeFieldAddition struct {
-	Key                string            `json:"key" jsonschema:"the existing Procedure's canonical key"`
-	Definition         string            `json:"definition,omitzero"`
-	Preconditions      []string          `json:"preconditions,omitzero"`
-	Postconditions     []string          `json:"postconditions,omitzero"`
-	Invariants         []string          `json:"invariants,omitzero"`
-	InformalConditions []string          `json:"informal_conditions,omitzero"`
-	Citations          []ProposeCitation `json:"citations" jsonschema:"one or more; every quote must appear verbatim in the new content above"`
+	Key                        string            `json:"key" jsonschema:"the existing Procedure's canonical key"`
+	Definition                 string            `json:"definition,omitzero"`
+	Preconditions              []string          `json:"preconditions,omitzero"`
+	Postconditions             []string          `json:"postconditions,omitzero"`
+	Invariants                 []string          `json:"invariants,omitzero"`
+	InformalConditions         []string          `json:"informal_conditions,omitzero"`
+	PreconditionsComplete      bool              `json:"preconditions_complete,omitzero" jsonschema:"declare preconditions deliberately complete as given (ADR-0060); omit to leave it unset"`
+	PostconditionsComplete     bool              `json:"postconditions_complete,omitzero" jsonschema:"declare postconditions deliberately complete as given"`
+	InvariantsComplete         bool              `json:"invariants_complete,omitzero" jsonschema:"declare invariants deliberately complete as given"`
+	InformalConditionsComplete bool              `json:"informal_conditions_complete,omitzero" jsonschema:"declare informal_conditions deliberately complete as given"`
+	Citations                  []ProposeCitation `json:"citations" jsonschema:"one or more; every quote must appear verbatim in the new content above"`
 }
 
 // ProposeNewRecord is a new Concept (Definition) or Claim (Statement); the

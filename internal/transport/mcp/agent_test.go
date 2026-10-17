@@ -201,6 +201,39 @@ func newKnowledgeHarnessV4(t *testing.T) *knowledgeHarness {
 	return &knowledgeHarness{harness: h, kernel: kernel}
 }
 
+// newKnowledgeHarnessV5 runs /mcp/agent/v5 (ADR-0060): the same v4
+// tools, plus propose_start and propose_advance.
+func newKnowledgeHarnessV5(t *testing.T) *knowledgeHarness {
+	t.Helper()
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "polaroid.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	repo, err := gitcore.Open(filepath.Join(t.TempDir(), "knowledge"), gitcore.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sem, err := semantic.New(semantic.DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := datalog.Evaluator{}
+	kernel := knowledge.New(gitstore.New(repo), knowledge.WithRecordValidator(sem), knowledge.WithRecordValidator(reasoning.RuleValidator{Evaluator: ev}))
+	agent := knowledgeops.NewAgent(kernel, memory.NewService(store))
+	resolver := knowledgeops.NewResolver(kernel, ev, policy.Trust{})
+	guide := knowledgeops.NewGuide(kernel, memory.NewWalkthroughs(store), ev, policy.Trust{})
+	proposer := knowledgeops.NewProposer(kernel, ev, policy.Trust{})
+	drafter := knowledgeops.NewDrafter(kernel, proposer, memory.NewDrafts(store))
+	logs := &syncBuffer{}
+	srv := httptest.NewServer(mcptransport.NewAgentHandlerV5(agent, resolver, guide, proposer, drafter, slog.New(slog.NewTextHandler(logs, nil))))
+	t.Cleanup(srv.Close)
+	h := &harness{url: srv.URL, store: store, logs: logs}
+	h.session = h.connect(t, "")
+	return &knowledgeHarness{harness: h, kernel: kernel}
+}
+
 func decodeJSON(t *testing.T, text string) map[string]any {
 	t.Helper()
 	var m map[string]any
@@ -691,6 +724,170 @@ func TestProposeNeverAffectsFeedback(t *testing.T) {
 	if before == "" || after == "" {
 		t.Fatalf("feedback must keep working normally alongside propose: before=%q after=%q", before, after)
 	}
+}
+
+// Agent mode v5 (ADR-0060): the v4 tools, unchanged, plus propose_start
+// and propose_advance.
+
+func TestAgentV4AndV5SchemasMatch(t *testing.T) {
+	v4, v5 := newKnowledgeHarnessV4(t), newKnowledgeHarnessV5(t)
+	schemas := func(h *knowledgeHarness) map[string]string {
+		t.Helper()
+		out := map[string]string{}
+		for tool, err := range h.session.Tools(context.Background(), nil) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := json.Marshal(tool.InputSchema)
+			out[tool.Name] = string(b)
+		}
+		return out
+	}
+	s4, s5 := schemas(v4), schemas(v5)
+	for _, name := range []string{"discover", "read", "feedback", "resolve", "start", "advance", "propose"} {
+		if s4[name] == "" || s4[name] != s5[name] {
+			t.Fatalf("%s schema differs between v4 and v5:\nv4: %s\nv5: %s", name, s4[name], s5[name])
+		}
+	}
+	if len(s5) != 9 || s5["propose_start"] == "" || s5["propose_advance"] == "" {
+		t.Fatalf("v5 tools = %v, want discover/read/feedback/resolve/start/advance/propose/propose_start/propose_advance", s5)
+	}
+	v5Tools := v5.ok(t, "discover", `{"kind":"tools"}`)
+	if !strings.Contains(v5Tools, `"propose_start"`) || !strings.Contains(v5Tools, `"propose_advance"`) {
+		t.Fatalf("discover(kind=tools) at v5 must list propose_start and propose_advance: %s", v5Tools)
+	}
+}
+
+// draftFixture publishes the same vacuous producer/consumer shape
+// proposeFixture uses, plus a standalone procedure with every content
+// field genuinely undecided -- for walking propose_start/propose_advance
+// over the real transport.
+func draftFixture(t *testing.T, agent *knowledgeHarness) knowledge.Snapshot {
+	t.Helper()
+	procs := []*knowledge.Procedure{
+		knowledgetest.SharedProc("draft.producer", "producer"), knowledgetest.SharedProc("draft.consumer", "consumer"),
+		knowledgetest.SharedProc("draft.parent", "parent"),
+	}
+	records := []*knowledge.Record{
+		{Type: knowledge.TypeConcept, Key: "test.obligation", Label: "done", Definition: "d"},
+		{Type: knowledge.TypeConcept, Key: "draft.some-precondition", Label: "x", Definition: "d"},
+		{Type: knowledge.TypeProcedure, Key: "draft.producer", Label: "producer", Definition: "d",
+			Precedes: []string{"draft.consumer"}, Requires: []string{"test.obligation"}},
+		{Type: knowledge.TypeProcedure, Key: "draft.consumer", Label: "consumer", Definition: "d",
+			Preconditions: []string{"draft.some-precondition"}, Requires: []string{"test.obligation"}},
+		{Type: knowledge.TypeProcedure, Key: "draft.parent", Label: "parent", Definition: "d",
+			Composes: []string{"draft.producer", "draft.consumer"}, Requires: []string{"test.obligation"}},
+	}
+	s, err := agent.publishRecords(t, procs, records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// TestDraftWalksFieldsAndCommits proves AC-equivalent behavior over the
+// real transport: propose_start reports the first undecided field,
+// propose_advance walks the rest, and the final answer (a real,
+// grounding postcondition) auto-commits -- confirmed by resolve ...
+// then reporting the pair compatible immediately after.
+func TestDraftWalksFieldsAndCommits(t *testing.T) {
+	agent := newKnowledgeHarnessV5(t)
+	draftFixture(t, agent)
+
+	start := decodeJSON(t, agent.ok(t, "propose_start", `{"key":"draft.producer","proposer":"test.agent","rationale":"r"}`))
+	if start["status"] != "in_progress" || start["next_field"] != "preconditions" || start["token"] == "" {
+		t.Fatalf("propose_start = %v, want next_field preconditions", start)
+	}
+	token := start["token"].(string)
+
+	res := decodeJSON(t, agent.ok(t, "propose_advance", `{"token":"`+token+`","outcome":{"field":"preconditions","confirmed_absent":true,"reason":"none"}}`))
+	if res["status"] != "in_progress" || res["next_field"] != "postconditions" {
+		t.Fatalf("after preconditions decline: %v", res)
+	}
+
+	res = decodeJSON(t, agent.ok(t, "propose_advance", `{"token":"`+token+`","outcome":{"field":"postconditions","values":["draft.some-precondition"],
+		"citations":[{"source":"draft.consumer","quote":"draft.some-precondition"}]}}`))
+	if res["status"] != "in_progress" || res["next_field"] != "invariants" {
+		t.Fatalf("after postconditions answer: %v", res)
+	}
+
+	res = decodeJSON(t, agent.ok(t, "propose_advance", `{"token":"`+token+`","outcome":{"field":"invariants","confirmed_absent":true,"reason":"none"}}`))
+	if res["status"] != "in_progress" || res["next_field"] != "informal_conditions" {
+		t.Fatalf("after invariants decline: %v", res)
+	}
+
+	res = decodeJSON(t, agent.ok(t, "propose_advance", `{"token":"`+token+`","outcome":{"field":"informal_conditions","confirmed_absent":true,"reason":"none"}}`))
+	if res["status"] != "complete" || res["key"] != "draft.producer" || res["snapshot"] == "" {
+		t.Fatalf("final answer must auto-commit: %v", res)
+	}
+
+	resolved := decodeJSON(t, agent.ok(t, "resolve", `{"goal":"draft.producer","then":"draft.consumer"}`))
+	composition, _ := resolved["composition"].(map[string]any)
+	if composition == nil || composition["verdict"] != "compatible" {
+		t.Fatalf("resolve ... then must show the pair compatible immediately after the draft commits, got %v", resolved)
+	}
+
+	// The token is now gone: not_found on any later call.
+	errJSON := agent.fail(t, "propose_advance", `{"token":"`+token+`"}`, "not_found")
+	if errJSON.Code != "not_found" {
+		t.Fatalf("err = %+v, want not_found after commit", errJSON)
+	}
+}
+
+// TestDraftStillVacuousFailsAndStaysOpen proves a still-vacuous
+// composition is returned as the specific error over the real
+// transport, and the draft remains open: confirmed by a peek (no
+// outcome) staying safe and not re-erroring, then a correction
+// succeeding.
+func TestDraftStillVacuousFailsAndStaysOpen(t *testing.T) {
+	agent := newKnowledgeHarnessV5(t)
+	draftFixture(t, agent)
+	start := decodeJSON(t, agent.ok(t, "propose_start", `{"key":"draft.producer","proposer":"test.agent","rationale":"r"}`))
+	token := start["token"].(string)
+	for _, field := range []string{"preconditions", "postconditions", "invariants"} {
+		if _, err := agent.session.CallTool(context.Background(), &sdk.CallToolParams{Name: "propose_advance", Arguments: json.RawMessage(
+			`{"token":"` + token + `","outcome":{"field":"` + field + `","confirmed_absent":true,"reason":"none"}}`)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	errJSON := agent.fail(t, "propose_advance", `{"token":"`+token+`","outcome":{"field":"informal_conditions","confirmed_absent":true,"reason":"none"}}`, "invalid_request")
+	if !strings.Contains(errJSON.Message, "vacuous") {
+		t.Fatalf("err = %+v, want it naming the still-vacuous composition", errJSON)
+	}
+	// A pure peek must stay safe: no error, draft still alive.
+	peek := decodeJSON(t, agent.ok(t, "propose_advance", `{"token":"`+token+`"}`))
+	if peek["status"] != "in_progress" {
+		t.Fatalf("peek after a failed commit = %v, want still in_progress, no error", peek)
+	}
+	// Correct the field actually keeping it vacuous.
+	res := decodeJSON(t, agent.ok(t, "propose_advance", `{"token":"`+token+`","outcome":{"field":"postconditions","values":["draft.some-precondition"],
+		"citations":[{"source":"draft.consumer","quote":"draft.some-precondition"}]}}`))
+	if res["status"] != "complete" {
+		t.Fatalf("after correcting the vacuous field: %v, want complete", res)
+	}
+}
+
+func TestDraftMissingCitationIsRejected(t *testing.T) {
+	agent := newKnowledgeHarnessV5(t)
+	draftFixture(t, agent)
+	start := decodeJSON(t, agent.ok(t, "propose_start", `{"key":"draft.producer","proposer":"test.agent","rationale":"r"}`))
+	token := start["token"].(string)
+	errJSON := agent.fail(t, "propose_advance", `{"token":"`+token+`","outcome":{"field":"preconditions","values":["x"]}}`, "invalid_request")
+	if errJSON.Code != "invalid_request" {
+		t.Fatalf("err = %+v, want invalid_request (neither values-without-citations nor confirmed_absent is unambiguous)", errJSON)
+	}
+}
+
+func TestDraftCloseOverRealTransport(t *testing.T) {
+	agent := newKnowledgeHarnessV5(t)
+	draftFixture(t, agent)
+	start := decodeJSON(t, agent.ok(t, "propose_start", `{"key":"draft.producer","proposer":"test.agent","rationale":"r"}`))
+	token := start["token"].(string)
+	res := decodeJSON(t, agent.ok(t, "propose_advance", `{"token":"`+token+`","close":true}`))
+	if res["status"] != "closed" {
+		t.Fatalf("close result = %v", res)
+	}
+	agent.fail(t, "propose_advance", `{"token":"`+token+`"}`, "not_found")
 }
 
 func TestWalkthroughStartPinsSnapshotAndReturnsPlan(t *testing.T) {

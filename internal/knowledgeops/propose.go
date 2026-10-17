@@ -41,15 +41,21 @@ func NewProposer(kernel *knowledge.Kernel, ev reasoning.Evaluator, trust policy.
 
 // Propose validates in's shape, builds the candidate it describes, and
 // checks it before committing anything (ADR-0059): citation
-// self-consistency (skipped entirely for a Tier 1 orchestration, which
-// needs none), ADR-0057's completeness (run by Kernel.Validate's own
-// candidate construction, reused here rather than duplicated), and, only
-// when the target's own content could actually affect one (skipped for
-// a bare Definition change, which Corpus Logic never reads at all) the
-// non-vacuous composition gate (#173, scoped to pairs this proposal's
-// own key touches, never the whole catalog) and a novelty-diff. Passing
-// every applicable check, it commits immediately through Kernel.Publish
-// and returns the new snapshot.
+// self-consistency (skipped when there is no new value content to
+// ground at all — a bare Definition change, or an ADR-0060 decline with
+// only *Complete flags set, needs no citation), ADR-0057's completeness
+// (run by Kernel.Validate's own candidate construction, reused here
+// rather than duplicated), the non-vacuous composition gate (#173,
+// scoped to pairs this proposal's own key touches, never the whole
+// catalog — skipped only for a bare Definition change, which Compose
+// never reads at all; a *Complete-flag-only decline still runs it,
+// since Compose's own verdict for an already-vacuous pair is genuinely
+// unchanged by one), and a novelty-diff (skipped whenever no new,
+// non-empty value is given at all, flags or not — a flag-only
+// decline's value is in being stored for later audit, not in changing
+// any resolution today, so it is never asked to pass that standard).
+// Passing every applicable check, it commits immediately through
+// Kernel.Publish and returns the new snapshot.
 func (p *Proposer) Propose(ctx context.Context, in wire.ProposeRequest) (wire.ProposeResult, error) {
 	if in.Proposer == "" {
 		return wire.ProposeResult{}, requiredField("proposer")
@@ -72,12 +78,14 @@ func (p *Proposer) Propose(ctx context.Context, in wire.ProposeRequest) (wire.Pr
 	if err != nil {
 		return wire.ProposeResult{}, classify(err)
 	}
-	if target.affectsReasoning() {
+	if target.touchesComposition() {
 		if problems, err := p.checkOwnComposition(ctx, candidate, key); err != nil {
 			return wire.ProposeResult{}, err
 		} else if len(problems) > 0 {
 			return wire.ProposeResult{}, classify(&knowledge.ValidationError{Problems: problems})
 		}
+	}
+	if target.hasNewValues() {
 		novel, err := p.isNovel(ctx, base, candidate)
 		if err != nil {
 			return wire.ProposeResult{}, err
@@ -230,8 +238,13 @@ func compositionsEqual(a, b *reasoning.CompositionResult) bool {
 // checkQuotesGrounded requires at least one citation and every citation's
 // quote to appear verbatim in content (the new prose this submission
 // adds, concatenated) -- the one check Polaroid can enforce without
-// filesystem access to any consuming repository (ADR-0059).
+// filesystem access to any consuming repository (ADR-0059). content
+// empty (ADR-0060: a bare *Complete declaration with no real values at
+// all) needs no citation: there is nothing to ground.
 func checkQuotesGrounded(field string, citations []wire.ProposeCitation, content string) error {
+	if strings.TrimSpace(content) == "" {
+		return nil
+	}
 	if len(citations) == 0 {
 		return requiredField(field + ".citations")
 	}

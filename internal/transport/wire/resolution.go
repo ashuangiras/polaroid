@@ -100,14 +100,18 @@ type KnowledgePort struct {
 
 // KnowledgeContract is a procedure's formal contract.
 type KnowledgeContract struct {
-	Key                string          `json:"key"`
-	Inputs             []KnowledgePort `json:"inputs,omitzero"`
-	Outputs            []KnowledgePort `json:"outputs,omitzero"`
-	OutputsComplete    bool            `json:"outputs_complete"`
-	Preconditions      []string        `json:"preconditions,omitzero"`
-	Postconditions     []string        `json:"postconditions,omitzero"`
-	Invariants         []string        `json:"invariants,omitzero"`
-	InformalConditions []string        `json:"informal_conditions,omitzero"`
+	Key                        string          `json:"key"`
+	Inputs                     []KnowledgePort `json:"inputs,omitzero"`
+	Outputs                    []KnowledgePort `json:"outputs,omitzero"`
+	OutputsComplete            bool            `json:"outputs_complete"`
+	Preconditions              []string        `json:"preconditions,omitzero"`
+	Postconditions             []string        `json:"postconditions,omitzero"`
+	Invariants                 []string        `json:"invariants,omitzero"`
+	InformalConditions         []string        `json:"informal_conditions,omitzero"`
+	PreconditionsComplete      bool            `json:"preconditions_complete,omitzero"`
+	PostconditionsComplete     bool            `json:"postconditions_complete,omitzero"`
+	InvariantsComplete         bool            `json:"invariants_complete,omitzero"`
+	InformalConditionsComplete bool            `json:"informal_conditions_complete,omitzero"`
 }
 
 // KnowledgeFinding is one reason for a composition verdict.

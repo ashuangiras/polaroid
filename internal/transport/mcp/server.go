@@ -80,6 +80,14 @@ func NewAgentHandlerV4(agent AgentKnowledge, resolver AgentResolver, guide Agent
 	return handler(newAgentServerV4(agent, resolver, guide, proposer, logger), logger)
 }
 
+// NewAgentHandlerV5 returns agent mode v5 (ADR-0060): the v4 tools, with
+// the same contracts, plus propose_start and propose_advance:
+// interactive, field-by-field construction of a propose request,
+// complementing single-shot propose (v4), unaffected.
+func NewAgentHandlerV5(agent AgentKnowledge, resolver AgentResolver, guide AgentGuide, proposer AgentProposer, drafter AgentDrafter, logger *slog.Logger) http.Handler {
+	return handler(newAgentServerV5(agent, resolver, guide, proposer, drafter, logger), logger)
+}
+
 func handler(server *sdk.Server, logger *slog.Logger) http.Handler {
 	h := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, &sdk.StreamableHTTPOptions{
 		Stateless:           true,
@@ -114,13 +122,15 @@ type tools struct {
 	svc *memory.Service
 	// agent is set only for the agent-mode server; full mode never reads it.
 	agent AgentKnowledge
-	// resolver is set only for agent mode v2, v3 and v4.
+	// resolver is set only for agent mode v2, v3, v4 and v5.
 	resolver AgentResolver
-	// guide is set only for agent mode v3 and v4 (ADR-0053).
+	// guide is set only for agent mode v3, v4 and v5 (ADR-0053).
 	guide AgentGuide
-	// proposer is set only for agent mode v4 (ADR-0059).
+	// proposer is set only for agent mode v4 and v5 (ADR-0059).
 	proposer AgentProposer
-	logger   *slog.Logger
+	// drafter is set only for agent mode v5 (ADR-0060).
+	drafter AgentDrafter
+	logger  *slog.Logger
 }
 
 // Free-form JSON objects are advertised as objects; everything else is
