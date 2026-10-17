@@ -116,6 +116,7 @@ type knowledgeComponents struct {
 	resolver *knowledgeops.Resolver
 	guide    *knowledgeops.Guide
 	proposer *knowledgeops.Proposer
+	drafter  *knowledgeops.Drafter
 	operator *knowledgeops.Operator
 	token    string
 }
@@ -138,11 +139,13 @@ func loadTrust(path string) (policy.Trust, error) {
 // not exist: no source is contacted), the exception trust material at
 // authoritiesPath (empty if missing), and loads or creates the operator
 // token at tokenPath. walkthroughs backs /mcp/agent/v3's stateful start
-// and advance (ADR-0053): new, per-agent storage, not Git-native
-// knowledge. A Git catalog that starts empty is not a failure here
-// (ADR-0048's explicit migration boundary): only a storage or policy
-// problem is.
-func setupKnowledge(dir, sourcesPath, authoritiesPath, tokenPath string, fb *memory.Service, walkthroughs memory.WalkthroughStore) (*knowledgeComponents, error) {
+// and advance (ADR-0053); drafts backs /mcp/agent/v5's stateful
+// propose_start and propose_advance (ADR-0060): both new, per-agent
+// storage, not Git-native knowledge, usually the same underlying
+// *sqlite.Store satisfying both narrower interfaces. A Git catalog that
+// starts empty is not a failure here (ADR-0048's explicit migration
+// boundary): only a storage or policy problem is.
+func setupKnowledge(dir, sourcesPath, authoritiesPath, tokenPath string, fb *memory.Service, walkthroughs memory.WalkthroughStore, drafts memory.DraftStore) (*knowledgeComponents, error) {
 	if err := prepareKnowledgeParents(dir); err != nil {
 		return nil, err
 	}
@@ -172,11 +175,13 @@ func setupKnowledge(dir, sourcesPath, authoritiesPath, tokenPath string, fb *mem
 	if err != nil {
 		return nil, err
 	}
+	proposer := knowledgeops.NewProposer(syncer.Kernel(), ev, trust)
 	return &knowledgeComponents{
 		agent:    knowledgeops.NewAgent(syncer.Kernel(), fb),
 		resolver: knowledgeops.NewResolver(syncer.Kernel(), ev, trust),
 		guide:    knowledgeops.NewGuide(syncer.Kernel(), memory.NewWalkthroughs(walkthroughs), ev, trust),
-		proposer: knowledgeops.NewProposer(syncer.Kernel(), ev, trust),
+		proposer: proposer,
+		drafter:  knowledgeops.NewDrafter(syncer.Kernel(), proposer, memory.NewDrafts(drafts)),
 		operator: knowledgeops.NewOperator(syncer, policy, fb),
 		token:    token,
 	}, nil

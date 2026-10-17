@@ -30,20 +30,30 @@ type Port struct {
 }
 
 // Contract is a procedure's formal contract as composition reads it.
+// PreconditionsComplete/PostconditionsComplete/InvariantsComplete/
+// InformalConditionsComplete (ADR-0060) are carried through for
+// visibility only: Compose does not yet read them, the same deliberate
+// deferral ADR-0060 itself states.
 type Contract struct {
-	Key                string   `json:"key"`
-	Inputs             []Port   `json:"inputs,omitzero"`
-	Outputs            []Port   `json:"outputs,omitzero"`
-	OutputsComplete    bool     `json:"outputs_complete"`
-	Preconditions      []string `json:"preconditions,omitzero"`
-	Postconditions     []string `json:"postconditions,omitzero"`
-	Invariants         []string `json:"invariants,omitzero"`
-	InformalConditions []string `json:"informal_conditions,omitzero"`
+	Key                        string   `json:"key"`
+	Inputs                     []Port   `json:"inputs,omitzero"`
+	Outputs                    []Port   `json:"outputs,omitzero"`
+	OutputsComplete            bool     `json:"outputs_complete"`
+	Preconditions              []string `json:"preconditions,omitzero"`
+	Postconditions             []string `json:"postconditions,omitzero"`
+	Invariants                 []string `json:"invariants,omitzero"`
+	InformalConditions         []string `json:"informal_conditions,omitzero"`
+	PreconditionsComplete      bool     `json:"preconditions_complete,omitzero"`
+	PostconditionsComplete     bool     `json:"postconditions_complete,omitzero"`
+	InvariantsComplete         bool     `json:"invariants_complete,omitzero"`
+	InformalConditionsComplete bool     `json:"informal_conditions_complete,omitzero"`
 }
 
 func contractOf(r *knowledge.Record) Contract {
 	c := Contract{Key: r.Key, OutputsComplete: r.OutputsComplete, Preconditions: r.Preconditions, Postconditions: r.Postconditions,
-		Invariants: r.Invariants, InformalConditions: r.InformalConditions}
+		Invariants: r.Invariants, InformalConditions: r.InformalConditions,
+		PreconditionsComplete: r.PreconditionsComplete, PostconditionsComplete: r.PostconditionsComplete,
+		InvariantsComplete: r.InvariantsComplete, InformalConditionsComplete: r.InformalConditionsComplete}
 	for _, p := range r.Inputs {
 		c.Inputs = append(c.Inputs, Port(p))
 	}

@@ -110,6 +110,17 @@ type Record struct {
 	Postconditions     []string
 	Invariants         []string
 	InformalConditions []string
+	// *Complete (ADR-0060) generalizes OutputsComplete to the other
+	// content lists: true means the list is deliberately complete as
+	// given (possibly empty), confirmed by whoever last reviewed it --
+	// distinguishing "reviewed and genuinely has none" from "never
+	// considered". false (every pre-existing record's value) means the
+	// latter: not yet reviewed this way. Informational only so far: not
+	// yet read by Compose or any other reasoning code.
+	PreconditionsComplete      bool
+	PostconditionsComplete     bool
+	InvariantsComplete         bool
+	InformalConditionsComplete bool
 
 	// Exception
 	Excepts       []string
@@ -176,44 +187,48 @@ type Approval struct {
 }
 
 type recordDoc struct {
-	Context            string        `json:"@context"`
-	ID                 string        `json:"id"`
-	Type               string        `json:"type"`
-	Label              string        `json:"label"`
-	Definition         string        `json:"definition,omitzero"`
-	Statement          string        `json:"statement,omitzero"`
-	ClassifiedAs       []string      `json:"classified_as,omitzero"`
-	Broader            []string      `json:"broader,omitzero"`
-	Specializes        []string      `json:"specializes,omitzero"`
-	Uses               []string      `json:"uses,omitzero"`
-	Composes           []string      `json:"composes,omitzero"`
-	Precedes           []string      `json:"precedes,omitzero"`
-	Requires           []string      `json:"requires,omitzero"`
-	Supports           []string      `json:"supports,omitzero"`
-	Contradicts        []string      `json:"contradicts,omitzero"`
-	Supersedes         []string      `json:"supersedes,omitzero"`
-	Asserts            []Assertion   `json:"asserts,omitzero"`
-	Source             string        `json:"source,omitzero"`
-	Program            string        `json:"program,omitzero"`
-	Revision           int           `json:"revision,omitzero"`
-	Protected          bool          `json:"protected,omitzero"`
-	Waivable           bool          `json:"waivable,omitzero"`
-	Inputs             []portDoc     `json:"inputs,omitzero"`
-	Outputs            []portDoc     `json:"outputs,omitzero"`
-	OutputsComplete    bool          `json:"outputs_complete,omitzero"`
-	Preconditions      []string      `json:"preconditions,omitzero"`
-	Postconditions     []string      `json:"postconditions,omitzero"`
-	Invariants         []string      `json:"invariants,omitzero"`
-	InformalConditions []string      `json:"informal_conditions,omitzero"`
-	Excepts            []string      `json:"excepts,omitzero"`
-	RuleDigest         string        `json:"rule_digest,omitzero"`
-	AppliesTo          []string      `json:"applies_to,omitzero"`
-	Conditions         []Condition   `json:"conditions,omitzero"`
-	Waives             string        `json:"waives,omitzero"`
-	Replacement        string        `json:"replacement,omitzero"`
-	Justification      string        `json:"justification,omitzero"`
-	Authority          *authorityDoc `json:"authority,omitzero"`
-	Approval           *approvalDoc  `json:"approval,omitzero"`
+	Context                    string        `json:"@context"`
+	ID                         string        `json:"id"`
+	Type                       string        `json:"type"`
+	Label                      string        `json:"label"`
+	Definition                 string        `json:"definition,omitzero"`
+	Statement                  string        `json:"statement,omitzero"`
+	ClassifiedAs               []string      `json:"classified_as,omitzero"`
+	Broader                    []string      `json:"broader,omitzero"`
+	Specializes                []string      `json:"specializes,omitzero"`
+	Uses                       []string      `json:"uses,omitzero"`
+	Composes                   []string      `json:"composes,omitzero"`
+	Precedes                   []string      `json:"precedes,omitzero"`
+	Requires                   []string      `json:"requires,omitzero"`
+	Supports                   []string      `json:"supports,omitzero"`
+	Contradicts                []string      `json:"contradicts,omitzero"`
+	Supersedes                 []string      `json:"supersedes,omitzero"`
+	Asserts                    []Assertion   `json:"asserts,omitzero"`
+	Source                     string        `json:"source,omitzero"`
+	Program                    string        `json:"program,omitzero"`
+	Revision                   int           `json:"revision,omitzero"`
+	Protected                  bool          `json:"protected,omitzero"`
+	Waivable                   bool          `json:"waivable,omitzero"`
+	Inputs                     []portDoc     `json:"inputs,omitzero"`
+	Outputs                    []portDoc     `json:"outputs,omitzero"`
+	OutputsComplete            bool          `json:"outputs_complete,omitzero"`
+	Preconditions              []string      `json:"preconditions,omitzero"`
+	Postconditions             []string      `json:"postconditions,omitzero"`
+	Invariants                 []string      `json:"invariants,omitzero"`
+	InformalConditions         []string      `json:"informal_conditions,omitzero"`
+	PreconditionsComplete      bool          `json:"preconditions_complete,omitzero"`
+	PostconditionsComplete     bool          `json:"postconditions_complete,omitzero"`
+	InvariantsComplete         bool          `json:"invariants_complete,omitzero"`
+	InformalConditionsComplete bool          `json:"informal_conditions_complete,omitzero"`
+	Excepts                    []string      `json:"excepts,omitzero"`
+	RuleDigest                 string        `json:"rule_digest,omitzero"`
+	AppliesTo                  []string      `json:"applies_to,omitzero"`
+	Conditions                 []Condition   `json:"conditions,omitzero"`
+	Waives                     string        `json:"waives,omitzero"`
+	Replacement                string        `json:"replacement,omitzero"`
+	Justification              string        `json:"justification,omitzero"`
+	Authority                  *authorityDoc `json:"authority,omitzero"`
+	Approval                   *approvalDoc  `json:"approval,omitzero"`
 }
 
 type portDoc struct {
@@ -276,8 +291,10 @@ func EncodeRecord(r *Record) ([]byte, error) {
 		Program: n.Program, Revision: n.Revision, Protected: n.Protected, Waivable: n.Waivable,
 		Inputs: ports(n.Inputs), Outputs: ports(n.Outputs), OutputsComplete: n.OutputsComplete,
 		Preconditions: ids(n.Preconditions), Postconditions: ids(n.Postconditions), Invariants: ids(n.Invariants),
-		InformalConditions: n.InformalConditions,
-		Excepts:            ids(n.Excepts), RuleDigest: n.RuleDigest, AppliesTo: ids(n.AppliesTo), Conditions: n.Conditions,
+		InformalConditions:    n.InformalConditions,
+		PreconditionsComplete: n.PreconditionsComplete, PostconditionsComplete: n.PostconditionsComplete,
+		InvariantsComplete: n.InvariantsComplete, InformalConditionsComplete: n.InformalConditionsComplete,
+		Excepts: ids(n.Excepts), RuleDigest: n.RuleDigest, AppliesTo: ids(n.AppliesTo), Conditions: n.Conditions,
 		Waives: id(n.Waives), Replacement: id(n.Replacement), Justification: n.Justification,
 	}
 	if a := n.Authority; a != nil {
@@ -404,6 +421,8 @@ func ParseRecord(b []byte) (*Record, error) {
 		OutputsComplete: d.OutputsComplete, Preconditions: unids("preconditions", d.Preconditions, &p),
 		Postconditions: unids("postconditions", d.Postconditions, &p), Invariants: unids("invariants", d.Invariants, &p),
 		InformalConditions: d.InformalConditions, Excepts: unids("excepts", d.Excepts, &p), RuleDigest: d.RuleDigest,
+		PreconditionsComplete: d.PreconditionsComplete, PostconditionsComplete: d.PostconditionsComplete,
+		InvariantsComplete: d.InvariantsComplete, InformalConditionsComplete: d.InformalConditionsComplete,
 		AppliesTo: unids("applies_to", d.AppliesTo, &p), Conditions: d.Conditions,
 		Waives: unid("waives", d.Waives, &p), Replacement: unid("replacement", d.Replacement, &p), Justification: d.Justification,
 	}

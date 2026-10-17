@@ -71,6 +71,11 @@ func (t *tools) agentDiscover(ctx context.Context, in wire.KnowledgeDiscoverRequ
 		out.Tools = append(out.Tools, wire.KnowledgeToolInfo{Name: "propose",
 			Description: "Propose new, citation-grounded knowledge: committed immediately if it passes citation, completeness, non-vacuous composition and novelty checks."})
 	}
+	if in.Kind == wire.KindTools && t.drafter != nil {
+		out.Tools = append(out.Tools,
+			wire.KnowledgeToolInfo{Name: "propose_start", Description: "Start an interactive, field-by-field draft of a propose call for an existing Procedure's key."},
+			wire.KnowledgeToolInfo{Name: "propose_advance", Description: "Answer a draft's next undecided field, or peek its current state unchanged; attempts the real commit once every field is decided."})
+	}
 	return out, nil
 }
 
@@ -177,4 +182,48 @@ func newAgentServerV4(agent AgentKnowledge, resolver AgentResolver, guide AgentG
 
 func (t *tools) agentPropose(ctx context.Context, in wire.ProposeRequest) (any, error) {
 	return t.proposer.Propose(ctx, in)
+}
+
+// Agent mode v5 (ADR-0060): the v4 tools, unchanged, plus propose_start
+// and propose_advance: interactive, field-by-field construction of a
+// propose request for an existing Procedure, requiring an explicit
+// answer -- real, citation-grounded content, or an explicit, reasoned
+// decline -- for every content field the Procedure does not already
+// decide, instead of allowing one to be silently omitted. Complements
+// single-shot propose (v4), unaffected. v1 through v4 stay exactly as
+// before.
+
+const agentInstructionsV5 = agentInstructionsV4 + `
+8. For an existing Procedure whose preconditions, postconditions, invariants or informal_conditions are not all decided yet, propose_start it (key, proposer, rationale) instead of assembling a whole propose call yourself: Polaroid returns the first undecided field to answer, in a fixed order. Call propose_advance with the token and an outcome for that field -- either {field, values, citations} (new entries, citation-grounded exactly as propose's own existing_procedure requires) or {field, confirmed_absent: true, reason} (your own testimony that this field genuinely does not apply; never verified by Polaroid, the same epistemic category escalate/blocked already are for walkthroughs) -- or with no outcome to peek the current state unchanged. The moment every field is decided, that same call automatically attempts the real commit, through the same checks propose itself runs; a failure (still vacuous composition, or redundant) is returned as the specific error, and the draft stays open, every earlier answer intact, so you can correct exactly the field responsible and call propose_advance again. On success the result's status is "complete" with the new snapshot and key, and the token then behaves exactly like a closed or expired one on any later call (not_found, no trace). Call propose_advance with close true to abandon the draft immediately instead.`
+
+// AgentDrafter is what agent mode v5 adds: interactive proposal
+// construction, expressed only in wire shapes.
+// internal/knowledgeops.Drafter satisfies it.
+type AgentDrafter interface {
+	Start(ctx context.Context, in wire.DraftStartRequest) (wire.DraftResult, error)
+	Advance(ctx context.Context, in wire.DraftAdvanceRequest) (wire.DraftResult, error)
+}
+
+func newAgentServerV5(agent AgentKnowledge, resolver AgentResolver, guide AgentGuide, proposer AgentProposer, drafter AgentDrafter, logger *slog.Logger) *sdk.Server {
+	s := baseServer(agentInstructionsV5, logger)
+	t := &tools{agent: agent, resolver: resolver, guide: guide, proposer: proposer, drafter: drafter, logger: logger}
+	const read, write = true, false
+	add(s, t, "discover", discoverDescription, read, t.agentDiscover)
+	add(s, t, "read", "Get one procedure's executable guidance by its canonical key, at a snapshot (the active one by default): contract, instructions, and each reference's key, condition and mapped inputs, resolved one level.", read, t.agentRead)
+	add(s, t, "feedback", "Report a finding that changes what is known about the procedure at key, as served by snapshot, with a classification. Not for product defects, environment problems or transient failures.", write, t.agentFeedback)
+	add(s, t, "resolve", "Resolve what applies to a record (procedure, concept or claim) in your context, at a snapshot: obligations with derivation identifiers, specializations, verified and rejected exceptions, derived facts, conflicts, unknowns, whether the result is complete, evidence status, and with then, whether a second procedure can follow it. Deterministic for the same snapshot, context and time.", read, t.agentResolve)
+	add(s, t, "start", "Start a stateful walkthrough of goal's composed steps, pinned at the active snapshot. Returns {token, snapshot, plan}: keep the token to call advance across later turns or sessions. Pass expand true for the whole nested plan tree instead of one leaf at a time.", write, t.agentStart)
+	add(s, t, "advance", "Report an outcome (done, skipped, escalate or blocked, with an optional reason) for one of a walkthrough's composed steps, or peek its current plan unchanged when outcome is omitted. Returns the updated {token, snapshot, plan, status}. Pass close true to end the walkthrough immediately, whether or not it is complete; pass expand true as start's.", write, t.agentAdvance)
+	add(s, t, "propose", "Propose new, citation-grounded knowledge -- new formal content on an existing Procedure, a new supporting Concept or Claim, or a wholly new orchestration Procedure that only composes already-existing Procedures (no citation needed for that one case) -- checked for citation self-consistency, completeness, non-vacuous composition and novelty, then committed immediately: no draft, no queue, no operator step.", write, t.agentPropose)
+	add(s, t, "propose_start", "Start an interactive, field-by-field draft of a propose call for an existing Procedure's key. Returns {token, snapshot, next_field, status}: the first undecided content field to answer, in a fixed order, or status \"complete\" immediately if nothing was left to decide.", write, t.agentProposeStart)
+	add(s, t, "propose_advance", "Answer token's next_field (values with citations, or confirmed_absent with a reason), or peek its current state unchanged when outcome is omitted. The moment every field is decided, this call attempts the real commit automatically; a failure leaves the draft open for correction. Pass close true to abandon the draft immediately.", write, t.agentProposeAdvance)
+	return s
+}
+
+func (t *tools) agentProposeStart(ctx context.Context, in wire.DraftStartRequest) (any, error) {
+	return t.drafter.Start(ctx, in)
+}
+
+func (t *tools) agentProposeAdvance(ctx context.Context, in wire.DraftAdvanceRequest) (any, error) {
+	return t.drafter.Advance(ctx, in)
 }
