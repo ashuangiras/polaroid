@@ -216,6 +216,7 @@ func run(ctx context.Context, cfg config, logger *slog.Logger, ready func(net.Ad
 			mux.Handle("/mcp/agent", mcptransport.NewAgentHandler(kc.agent, logger))
 			mux.Handle("/mcp/agent/v2", mcptransport.NewAgentHandlerV2(kc.agent, kc.resolver, logger))
 			mux.Handle("/mcp/agent/v3", mcptransport.NewAgentHandlerV3(kc.agent, kc.resolver, kc.guide, logger))
+			mux.Handle("/mcp/agent/v4", mcptransport.NewAgentHandlerV4(kc.agent, kc.resolver, kc.guide, kc.proposer, logger))
 			mux.Handle("/v1/knowledge/", httpops.NewHandler(kc.operator, kc.token, logger))
 		}
 	}
