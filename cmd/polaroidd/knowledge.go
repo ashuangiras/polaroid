@@ -108,17 +108,17 @@ func readOperatorToken(path string) (string, error) {
 }
 
 // knowledgeComponents are what the daemon wires for the Git-native
-// knowledge path (ADR-0048): the agent interface mounted at /mcp/agent,
-// the operator interface mounted at /v1/knowledge, and the token that
-// guards it.
+// knowledge path (ADR-0048): agent interfaces mounted at /mcp/agent/vN,
+// the operator interface mounted at /v1 and /v2/knowledge, and its token.
 type knowledgeComponents struct {
-	agent    *knowledgeops.Agent
-	resolver *knowledgeops.Resolver
-	guide    *knowledgeops.Guide
-	proposer *knowledgeops.Proposer
-	drafter  *knowledgeops.Drafter
-	operator *knowledgeops.Operator
-	token    string
+	agent        *knowledgeops.Agent
+	resolver     *knowledgeops.Resolver
+	guide        *knowledgeops.Guide
+	proposer     *knowledgeops.Proposer
+	drafter      *knowledgeops.Drafter
+	fieldDrafter *knowledgeops.FieldDrafter
+	operator     *knowledgeops.Operator
+	token        string
 }
 
 // loadTrust reads the operator-held exception trust material (ADR-0050). A
@@ -142,10 +142,12 @@ func loadTrust(path string) (policy.Trust, error) {
 // and advance (ADR-0053); drafts backs /mcp/agent/v5's stateful
 // propose_start and propose_advance (ADR-0060): both new, per-agent
 // storage, not Git-native knowledge, usually the same underlying
-// *sqlite.Store satisfying both narrower interfaces. A Git catalog that
-// starts empty is not a failure here (ADR-0048's explicit migration
-// boundary): only a storage or policy problem is.
-func setupKnowledge(dir, sourcesPath, authoritiesPath, tokenPath string, fb *memory.Service, walkthroughs memory.WalkthroughStore, drafts memory.DraftStore) (*knowledgeComponents, error) {
+// *sqlite.Store satisfying the interfaces. The v5 Drafter is a compatibility
+// stub and rejects its incomplete write contract; fieldDrafts backs v6's
+// field-complete proposal flow (ADR-0062). A Git catalog that starts empty
+// is not a failure here (ADR-0048's explicit migration boundary): only a
+// storage or policy problem is.
+func setupKnowledge(dir, sourcesPath, authoritiesPath, tokenPath string, fb *memory.Service, walkthroughs memory.WalkthroughStore, drafts memory.DraftStore, fieldDrafts memory.FieldDraftStore) (*knowledgeComponents, error) {
 	if err := prepareKnowledgeParents(dir); err != nil {
 		return nil, err
 	}
@@ -177,19 +179,20 @@ func setupKnowledge(dir, sourcesPath, authoritiesPath, tokenPath string, fb *mem
 	}
 	proposer := knowledgeops.NewProposer(syncer.Kernel(), ev, trust)
 	return &knowledgeComponents{
-		agent:    knowledgeops.NewAgent(syncer.Kernel(), fb),
-		resolver: knowledgeops.NewResolver(syncer.Kernel(), ev, trust),
-		guide:    knowledgeops.NewGuide(syncer.Kernel(), memory.NewWalkthroughs(walkthroughs), ev, trust),
-		proposer: proposer,
-		drafter:  knowledgeops.NewDrafter(syncer.Kernel(), proposer, memory.NewDrafts(drafts)),
-		operator: knowledgeops.NewOperator(syncer, policy, fb),
-		token:    token,
+		agent:        knowledgeops.NewAgent(syncer.Kernel(), fb),
+		resolver:     knowledgeops.NewResolver(syncer.Kernel(), ev, trust),
+		guide:        knowledgeops.NewGuide(syncer.Kernel(), memory.NewWalkthroughs(walkthroughs), ev, trust),
+		proposer:     proposer,
+		drafter:      knowledgeops.NewDrafter(syncer.Kernel(), proposer, memory.NewDrafts(drafts)),
+		fieldDrafter: knowledgeops.NewFieldDrafter(syncer.Kernel(), proposer, memory.NewFieldDrafts(fieldDrafts)),
+		operator:     knowledgeops.NewOperator(syncer, policy, fb),
+		token:        token,
 	}, nil
 }
 
 // logKnowledgeUnavailable reports why the Git-native knowledge path did
-// not start: /mcp/agent and /v1/knowledge are not mounted, but the legacy
-// API and full-mode MCP are unaffected.
+// not start: /mcp/agent and /v1/knowledge or /v2/knowledge are not
+// mounted, but the legacy API and full-mode MCP are unaffected.
 func logKnowledgeUnavailable(logger *slog.Logger, err error) {
 	logger.Warn("knowledge path unavailable: /mcp/agent and /v1/knowledge are not served", "error", err)
 }

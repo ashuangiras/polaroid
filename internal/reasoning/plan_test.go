@@ -28,8 +28,8 @@ func planCatalog(t *testing.T, children []string, edges map[string][]string) (*k
 		changes = append(changes, knowledge.Change{Key: c, Procedure: knowledgetest.SharedProc(c, c)})
 		records = append(records, knowledge.RecordChange{Key: c, Record: &knowledge.Record{Type: knowledge.TypeProcedure, Key: c, Label: c, Definition: "d", Precedes: edges[c], Requires: []string{"test.obligation"}}})
 	}
-	s, err := k.Publish(context.Background(), knowledge.Proposal{Changes: changes, Records: records,
-		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "s", Rationale: "r"}})
+	s, err := k.Publish(context.Background(), knowledgetest.WithFullReview(knowledge.Proposal{Changes: changes, Records: records,
+		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "s", Rationale: "r"}}))
 	if err != nil {
 		t.Fatal(err)
 	}

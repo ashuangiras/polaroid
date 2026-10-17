@@ -190,7 +190,13 @@ func (s *Syncer) Validate(ctx context.Context, c *Candidate) error {
 		} else {
 			in.Procedures = cat.Len()
 			cats[in.Snapshot] = cat
-			problem, err := s.checkTransition(ctx, cm, cat, cats)
+			receipt, receiptProblem := fieldReviewFromCommit(cm)
+			if receiptProblem != "" {
+				probs = append(probs, fmt.Sprintf("snapshot %s: %s", cm.Snapshot, receiptProblem))
+				c.Incoming = append(c.Incoming, in)
+				continue
+			}
+			problem, err := s.checkTransition(ctx, cm, cat, cats, receipt)
 			if err != nil {
 				return err
 			}
@@ -227,8 +233,12 @@ func (s *Syncer) Validate(ctx context.Context, c *Candidate) error {
 // cancelled by a revision never matches again. A parent held nowhere here
 // is refused rather than skipped. Trailers grant nothing: rule governance
 // has no exemptions.
-func (s *Syncer) checkTransition(ctx context.Context, cm gitcore.Commit, cat *knowledge.Catalog, cats map[knowledge.Snapshot]*knowledge.Catalog) (problem, err error) {
+func (s *Syncer) checkTransition(ctx context.Context, cm gitcore.Commit, cat *knowledge.Catalog, cats map[knowledge.Snapshot]*knowledge.Catalog,
+	receipt knowledge.FieldReviewReceipt) (problem, err error) {
 	if len(cm.Parents) == 0 {
+		if err := knowledge.CheckFieldReviewTransition(nil, cat, receipt); err != nil {
+			return err, nil
+		}
 		return nil, nil
 	}
 	parent := knowledge.Snapshot(cm.Parents[0])
@@ -250,7 +260,36 @@ func (s *Syncer) checkTransition(ctx context.Context, cm gitcore.Commit, cat *kn
 		}
 		prev = c
 	}
-	return knowledge.CheckTransition(prev, cat), nil
+	if err := knowledge.CheckTransition(prev, cat); err != nil {
+		return err, nil
+	}
+	if err := knowledge.CheckFieldReviewTransition(prev, cat, receipt); err != nil {
+		return err, nil
+	}
+	return nil, nil
+}
+
+func fieldReviewFromCommit(cm gitcore.Commit) (knowledge.FieldReviewReceipt, string) {
+	var receipt knowledge.FieldReviewReceipt
+	found := false
+	for _, trailer := range cm.Trailers {
+		if trailer.Key != knowledge.TrailerFieldReview {
+			continue
+		}
+		if found {
+			return knowledge.FieldReviewReceipt{}, "duplicate Polaroid-Field-Review trailer"
+		}
+		var err error
+		receipt, err = knowledge.DecodeFieldReview([]byte(trailer.Value))
+		if err != nil {
+			return knowledge.FieldReviewReceipt{}, fmt.Sprintf("invalid Polaroid-Field-Review trailer: %v", err)
+		}
+		found = true
+	}
+	if !found {
+		return knowledge.FieldReviewReceipt{}, ""
+	}
+	return receipt, ""
 }
 
 func (s *Syncer) reject(c *Candidate, probs ...string) error {
@@ -304,5 +343,54 @@ func (s *Syncer) Publish(ctx context.Context, source string, cred gitcore.Creden
 	if !src.Publish {
 		return gitcore.PushResult{}, fmt.Errorf("%w: %q", ErrNotPermitted, source)
 	}
+	if err := s.checkLocalFieldReviewHistory(ctx); err != nil {
+		return gitcore.PushResult{}, err
+	}
 	return s.repo.Push(ctx, src.remote(), cred)
+}
+
+func (s *Syncer) checkLocalFieldReviewHistory(ctx context.Context) error {
+	active, err := s.repo.Active(ctx)
+	if err != nil {
+		return err
+	}
+	if active == "" {
+		return nil
+	}
+	const batchSize = 128
+	for from := active; from != ""; {
+		commits, err := s.repo.History(ctx, from, batchSize)
+		if err != nil {
+			return err
+		}
+		for _, cm := range commits {
+			receipt, problem := fieldReviewFromCommit(cm)
+			if problem != "" {
+				return &knowledge.ValidationError{Problems: []knowledge.Problem{{
+					Field: "history[" + string(cm.Snapshot) + "].field_review", Message: problem,
+				}}}
+			}
+			next, err := s.kernel.At(ctx, knowledge.Snapshot(cm.Snapshot))
+			if err != nil {
+				return err
+			}
+			var prev *knowledge.Catalog
+			if len(cm.Parents) > 0 {
+				prev, err = s.kernel.At(ctx, knowledge.Snapshot(cm.Parents[0]))
+				if err != nil {
+					return err
+				}
+			}
+			if err := knowledge.CheckFieldReviewTransition(prev, next, receipt); err != nil {
+				return &knowledge.ValidationError{Problems: []knowledge.Problem{{
+					Field: "history[" + string(cm.Snapshot) + "].field_review", Message: err.Error(),
+				}}}
+			}
+		}
+		if len(commits) < batchSize || len(commits[len(commits)-1].Parents) == 0 {
+			break
+		}
+		from = commits[len(commits)-1].Parents[0]
+	}
+	return nil
 }

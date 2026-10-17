@@ -31,8 +31,8 @@ func publish(t *testing.T, k *knowledge.Kernel, changes ...knowledge.Change) kno
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := k.Publish(ctx, knowledge.Proposal{Base: base.Snapshot(), Changes: changes,
-		Provenance: knowledge.Provenance{Author: "test", Summary: "fixture", Rationale: "test fixture"}})
+	s, err := k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Base: base.Snapshot(), Changes: changes,
+		Provenance: knowledge.Provenance{Author: "test", Summary: "fixture", Rationale: "test fixture"}}))
 	if err != nil {
 		t.Fatal(err)
 	}

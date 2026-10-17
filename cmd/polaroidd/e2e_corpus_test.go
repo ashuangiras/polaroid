@@ -98,8 +98,9 @@ func TestCorpusLogicAcceptance(t *testing.T) {
 		}
 		records = append(records, map[string]any{"key": r.Key, "document": json.RawMessage(doc)})
 	}
-	status, pub := op(http.MethodPost, "/v1/knowledge/publications", map[string]any{"base": "", "changes": changes, "records": records,
-		"author": "operator.test", "summary": "Corpus Logic fixtures", "rationale": "acceptance"})
+	status, pub := op(http.MethodPost, "/v2/knowledge/publications", map[string]any{"base": "", "changes": changes, "records": records,
+		"author": "operator.test", "summary": "Corpus Logic fixtures", "rationale": "acceptance",
+		"review": fullFieldReviewForPayload(t, changes, records)})
 	if status != http.StatusCreated && status != http.StatusOK {
 		t.Fatalf("publish = %d %v", status, pub)
 	}
@@ -113,8 +114,10 @@ func TestCorpusLogicAcceptance(t *testing.T) {
 	bad := &knowledge.Record{Type: knowledge.TypeRule, Key: "rule.bad", Label: "bad", Statement: "bad", Revision: 1,
 		Program: `obligation(P, "x") :- record(P, "Procedure"), !specializes(P, "y").`}
 	badDoc, _ := knowledge.EncodeRecord(bad)
-	status, refused := op(http.MethodPost, "/v1/knowledge/publications", map[string]any{"base": snap, "changes": []any{},
-		"records": []map[string]any{{"key": bad.Key, "document": json.RawMessage(badDoc)}}, "author": "operator.test", "summary": "bad", "rationale": "test"})
+	badRecords := []map[string]any{{"key": bad.Key, "document": json.RawMessage(badDoc)}}
+	status, refused := op(http.MethodPost, "/v2/knowledge/publications", map[string]any{"base": snap, "changes": []any{},
+		"records": badRecords, "author": "operator.test", "summary": "bad", "rationale": "test",
+		"review": fullFieldReviewForPayload(t, []any{}, badRecords)})
 	if status != http.StatusBadRequest || !strings.Contains(refused["error"].(map[string]any)["message"].(string), "negation is not admitted") {
 		t.Fatalf("unsafe rule = %d %v", status, refused)
 	}

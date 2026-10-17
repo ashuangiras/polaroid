@@ -82,8 +82,9 @@ func TestOriginSurvivesRestartAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	forged, err := a.repo.Publish(ctx, gitcore.Publication{Expected: gitcore.Snapshot(s1), Author: "operator.b", Subject: "Improve the build", Body: "Looks local to B.",
-		Trailers: []gitcore.Trailer{{Key: "Polaroid-Instance", Value: bID}, {Key: knowledge.TrailerFinding, Value: "01a13000-0000-7000-8000-000000000000"}},
-		Changes:  []gitcore.Change{{Path: knowledge.Path("go.module.build"), Content: doc}}})
+		Trailers: []gitcore.Trailer{{Key: "Polaroid-Instance", Value: bID}, {Key: knowledge.TrailerFinding, Value: "01a13000-0000-7000-8000-000000000000"},
+			reviewTrailer(t, []knowledge.Change{{Key: "go.module.build", Procedure: knowledgetest.Proc("go.module.build", "Build, as B would")}}, nil)},
+		Changes: []gitcore.Change{{Path: knowledge.Path("go.module.build"), Content: doc}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +94,12 @@ func TestOriginSurvivesRestartAndRecovery(t *testing.T) {
 	}
 	sForged := knowledge.Snapshot(forged)
 	local := b.publish(t, "operator.b", "Local improvement", knowledgetest.Proc("go.module.checks", "Checks, improved here"))
-	back, err := b.k.Rollback(ctx, local, sForged, knowledge.Provenance{Author: "operator.b", Summary: "Roll back", Rationale: "Testing rollback"})
+	rollbackTarget, err := b.k.At(ctx, sForged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := b.k.Rollback(ctx, local, sForged, knowledge.Provenance{Author: "operator.b", Summary: "Roll back", Rationale: "Testing rollback"},
+		knowledgetest.ReviewCatalog(rollbackTarget))
 	if err != nil {
 		t.Fatal(err)
 	}

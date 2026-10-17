@@ -10,6 +10,15 @@ import (
 	"github.com/ashuangiras/polaroid/internal/knowledge/knowledgetest"
 )
 
+func reviewSnapshot(t *testing.T, k *knowledge.Kernel, snapshot knowledge.Snapshot) knowledge.FieldReviewReceipt {
+	t.Helper()
+	cat, err := k.At(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return knowledgetest.ReviewCatalog(cat)
+}
+
 // A rollback is a new publication that restores earlier semantics under
 // new revisions: never below the active revision, never with an
 // exemption, never lifting a protection, and never changing history
@@ -18,11 +27,11 @@ func TestRollbackRestoresUnderNewRevisions(t *testing.T) {
 	ctx := context.Background()
 	m := knowledgetest.NewMemoryStore()
 	k := knowledge.New(m, knowledge.WithRecordValidator(&acceptAll{}))
-	s0, err := k.Publish(ctx, knowledge.Proposal{Changes: knowledgetest.CorpusProcedures(), Provenance: prov()})
+	s0, err := k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Changes: knowledgetest.CorpusProcedures(), Provenance: prov()}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	s1, err := k.Publish(ctx, knowledge.Proposal{Base: s0, Records: knowledgetest.CorpusRecordChanges(), Provenance: prov()})
+	s1, err := k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Base: s0, Records: knowledgetest.CorpusRecordChanges(), Provenance: prov()}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,13 +56,13 @@ func TestRollbackRestoresUnderNewRevisions(t *testing.T) {
 	// new revision.
 	relabelled := unchanged.Clone()
 	relabelled.Label = "Race detector, relabelled"
-	s2, err := k.Publish(ctx, knowledge.Proposal{Base: s1, Records: []knowledge.RecordChange{{Key: vet2.Key, Record: vet2}, {Key: tests2.Key, Record: tests2},
-		{Key: relabelled.Key, Record: relabelled}}, Provenance: prov()})
+	s2, err := k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Base: s1, Records: []knowledge.RecordChange{{Key: vet2.Key, Record: vet2}, {Key: tests2.Key, Record: tests2},
+		{Key: relabelled.Key, Record: relabelled}}, Provenance: prov()}))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	s3, err := k.Rollback(ctx, s2, s1, prov())
+	s3, err := k.Rollback(ctx, s2, s1, prov(), reviewSnapshot(t, k, s1))
 	if err != nil {
 		t.Fatalf("rollback: %v", err)
 	}
@@ -76,10 +85,10 @@ func TestRollbackRestoresUnderNewRevisions(t *testing.T) {
 	}
 	// A rollback never lifts a protection: returning to a snapshot from
 	// before the protected rule existed would remove it.
-	if _, err := k.Rollback(ctx, s3, s0, prov()); !errors.Is(err, knowledge.ErrInvalid) || !strings.Contains(err.Error(), "is a protected invariant and cannot be removed") {
+	if _, err := k.Rollback(ctx, s3, s0, prov(), reviewSnapshot(t, k, s0)); !errors.Is(err, knowledge.ErrInvalid) || !strings.Contains(err.Error(), "is a protected invariant and cannot be removed") {
 		t.Fatalf("rollback removing a protected invariant: %v", err)
 	}
-	if _, err := k.Rollback(ctx, s3, "", prov()); !errors.Is(err, knowledge.ErrInvalid) || !strings.Contains(err.Error(), "to: is required") {
+	if _, err := k.Rollback(ctx, s3, "", prov(), knowledge.FieldReviewReceipt{}); !errors.Is(err, knowledge.ErrInvalid) || !strings.Contains(err.Error(), "to: is required") {
 		t.Fatalf("rollback to nothing: %v", err)
 	}
 }
@@ -92,7 +101,7 @@ func TestPublishedRulesAreNeverRemoved(t *testing.T) {
 	ctx := context.Background()
 	m := knowledgetest.NewMemoryStore()
 	k := knowledge.New(m, knowledge.WithRecordValidator(&acceptAll{}))
-	s1, err := k.Publish(ctx, knowledge.Proposal{Changes: knowledgetest.CorpusProcedures(), Records: knowledgetest.CorpusRecordChanges(), Provenance: prov()})
+	s1, err := k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Changes: knowledgetest.CorpusProcedures(), Records: knowledgetest.CorpusRecordChanges(), Provenance: prov()}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +139,7 @@ func TestPublishedRulesAreNeverRemoved(t *testing.T) {
 	}
 	// A rule absent from the active knowledge has a history this instance
 	// never governed, so a rollback refuses to restore it.
-	if _, err := k.Rollback(ctx, without, with, prov()); !errors.Is(err, knowledge.ErrInvalid) ||
+	if _, err := k.Rollback(ctx, without, with, prov(), reviewSnapshot(t, k, with)); !errors.Is(err, knowledge.ErrInvalid) ||
 		!strings.Contains(err.Error(), "records[rule.go.extra]: is a rule that is not in the active knowledge") {
 		t.Fatalf("rollback restoring an absent rule: %v", err)
 	}
@@ -144,7 +153,7 @@ func TestRollbackToAnIntermediateSnapshot(t *testing.T) {
 	ctx := context.Background()
 	m := knowledgetest.NewMemoryStore()
 	k := knowledge.New(m, knowledge.WithRecordValidator(&acceptAll{}))
-	s1, err := k.Publish(ctx, knowledge.Proposal{Changes: knowledgetest.CorpusProcedures(), Records: knowledgetest.CorpusRecordChanges(), Provenance: prov()})
+	s1, err := k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Changes: knowledgetest.CorpusProcedures(), Records: knowledgetest.CorpusRecordChanges(), Provenance: prov()}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +184,7 @@ func TestRollbackToAnIntermediateSnapshot(t *testing.T) {
 	if err := k.Activate(ctx, knowledge.Activation{Base: s1, Target: restored, Provenance: decision()}); err != nil {
 		t.Fatal(err)
 	}
-	back, err := k.Rollback(ctx, restored, weakened, prov())
+	back, err := k.Rollback(ctx, restored, weakened, prov(), reviewSnapshot(t, k, weakened))
 	if err != nil {
 		t.Fatalf("rollback to an intermediate snapshot: %v", err)
 	}

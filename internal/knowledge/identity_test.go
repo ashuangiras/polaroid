@@ -15,14 +15,14 @@ func TestFeedbackRefIdentity(t *testing.T) {
 	ctx := context.Background()
 	m := knowledgetest.NewMemoryStore()
 	k := knowledge.New(m)
-	s1, err := k.Publish(ctx, knowledge.Proposal{Changes: knowledgetest.Initial(), Provenance: prov()})
+	s1, err := k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Changes: knowledgetest.Initial(), Provenance: prov()}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	s2, err := k.Publish(ctx, knowledge.Proposal{Base: s1, Changes: []knowledge.Change{
+	s2, err := k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Base: s1, Changes: []knowledge.Change{
 		put(knowledgetest.Proc("go.module.verify", "Verify, without checks", "build=go.module.build")),
 		{Key: "go.module.checks"},
-	}, Provenance: prov()})
+	}, Provenance: prov()}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestOriginFollowsArrival(t *testing.T) {
 	ctx := context.Background()
 	m := knowledgetest.NewMemoryStore()
 	k := knowledge.New(m)
-	s1, err := k.Publish(ctx, knowledge.Proposal{Changes: knowledgetest.Initial(), Provenance: prov()})
+	s1, err := k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Changes: knowledgetest.Initial(), Provenance: prov()}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,11 @@ func TestOriginFollowsArrival(t *testing.T) {
 	if err := k.Activate(ctx, knowledge.Activation{Base: s1, Target: b, Provenance: decision()}); err != nil {
 		t.Fatal(err)
 	}
-	back, err := k.Rollback(ctx, b, s1, prov())
+	base, err := k.At(ctx, s1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := k.Rollback(ctx, b, s1, prov(), knowledgetest.ReviewCatalog(base))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +162,7 @@ func TestOriginFollowsArrival(t *testing.T) {
 func TestChildReadsUseTheDiscoveryToken(t *testing.T) {
 	ctx := context.Background()
 	k := knowledge.New(knowledgetest.NewMemoryStore())
-	if _, err := k.Publish(ctx, knowledge.Proposal{Changes: knowledgetest.Initial(), Provenance: prov()}); err != nil {
+	if _, err := k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Changes: knowledgetest.Initial(), Provenance: prov()})); err != nil {
 		t.Fatal(err)
 	}
 	found, err := k.Active(ctx)
@@ -170,7 +174,7 @@ func TestChildReadsUseTheDiscoveryToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := k.Publish(ctx, knowledge.Proposal{Base: token, Changes: []knowledge.Change{put(knowledgetest.Proc("go.module.build", "Build, changed meanwhile"))}, Provenance: prov()}); err != nil {
+	if _, err := k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Base: token, Changes: []knowledge.Change{put(knowledgetest.Proc("go.module.build", "Build, changed meanwhile"))}, Provenance: prov()})); err != nil {
 		t.Fatal(err)
 	}
 	for _, ref := range root.References {

@@ -76,6 +76,11 @@ func (t *tools) agentDiscover(ctx context.Context, in wire.KnowledgeDiscoverRequ
 			wire.KnowledgeToolInfo{Name: "propose_start", Description: "Start an interactive, field-by-field draft of a propose call for an existing Procedure's key: walks every content field, every time, including ones that already have values."},
 			wire.KnowledgeToolInfo{Name: "propose_advance", Description: "Answer a draft's next field (to append new values or confirm nothing further), or peek its current state unchanged; attempts the real commit once every field is answered."})
 	}
+	if in.Kind == wire.KindTools && t.fieldDrafter != nil {
+		out.Tools = append(out.Tools,
+			wire.KnowledgeToolInfo{Name: "propose_start", Description: "Start a field-complete review of a new or existing typed knowledge entity. Returns the full type-applicable field inventory and current values."},
+			wire.KnowledgeToolInfo{Name: "propose_advance", Description: "Apply one explicit field operation (keep, add, remove, replace or clear), or peek the complete draft. Automatically validates and publishes after every field is reviewed."})
+	}
 	return out, nil
 }
 
@@ -226,4 +231,42 @@ func (t *tools) agentProposeStart(ctx context.Context, in wire.DraftStartRequest
 
 func (t *tools) agentProposeAdvance(ctx context.Context, in wire.DraftAdvanceRequest) (any, error) {
 	return t.drafter.Advance(ctx, in)
+}
+
+// Agent mode v6 (ADR-0062): the v3 read and walkthrough tools, unchanged,
+// plus a field-complete proposal flow for every typed knowledge record.
+// It deliberately does not expose the retired v4 single-shot or v5
+// four-field proposal tools.
+const agentInstructionsV6 = agentInstructionsV3 + `
+7. To publish or update knowledge, use propose_start with its canonical key, record_type, whether the entity is new, proposer and rationale. It returns the complete ordered inventory of every authorable field for the selected type, with each current value and its allowed operations. For a Procedure, this includes both its guidance document and its typed Procedure record; for other types, it includes the typed record. IDs, keys, type and JSON-LD context are system-managed. contract and instructions are opaque JSON values. Answer propose_advance for the named next_entity and next_field with exactly one allowed operation: keep preserves an existing value; add or remove names list entries; replace supplies the full new value; clear removes an optional field. New and replacement content in grounded fields needs citations whose quotes occur verbatim in that content. Keep, remove and clear do not take citations. Every field must receive a decision, including fields that already have values. Each result returns the complete inventory and its current draft values. Once all fields are answered, Polaroid validates the full candidate and attempts publication; if a check fails, the draft stays open so you can correct an already-answered field. An unchanged review closes without creating a publication. Use propose_advance with close true to abandon a draft.`
+
+// AgentFieldDrafter is what agent mode v6 adds: full, type-specific
+// field-review proposals, expressed only in wire shapes.
+// internal/knowledgeops.FieldDrafter satisfies it.
+type AgentFieldDrafter interface {
+	Start(ctx context.Context, in wire.FieldDraftStartRequest) (wire.FieldDraftResult, error)
+	Advance(ctx context.Context, in wire.FieldDraftAdvanceRequest) (wire.FieldDraftResult, error)
+}
+
+func newAgentServerV6(agent AgentKnowledge, resolver AgentResolver, guide AgentGuide, drafter AgentFieldDrafter, logger *slog.Logger) *sdk.Server {
+	s := baseServer(agentInstructionsV6, logger)
+	t := &tools{agent: agent, resolver: resolver, guide: guide, fieldDrafter: drafter, logger: logger}
+	const read, write = true, false
+	add(s, t, "discover", discoverDescription, read, t.agentDiscover)
+	add(s, t, "read", "Get one procedure's executable guidance by its canonical key, at a snapshot (the active one by default): contract, instructions, and each reference's key, condition and mapped inputs, resolved one level.", read, t.agentRead)
+	add(s, t, "feedback", "Report a finding that changes what is known about the procedure at key, as served by snapshot, with a classification. Not for product defects, environment problems or transient failures.", write, t.agentFeedback)
+	add(s, t, "resolve", "Resolve what applies to a record (procedure, concept or claim) in your context, at a snapshot: obligations with derivation identifiers, specializations, verified and rejected exceptions, derived facts, conflicts, unknowns, whether the result is complete, evidence status, and with then, whether a second procedure can follow it. Deterministic for the same snapshot, context and time.", read, t.agentResolve)
+	add(s, t, "start", "Start a stateful walkthrough of goal's composed steps, pinned at the active snapshot. Returns {token, snapshot, plan}: keep the token to call advance across later turns or sessions. Pass expand true for the whole nested plan tree instead of one leaf at a time.", write, t.agentStart)
+	add(s, t, "advance", "Report an outcome (done, skipped, escalate or blocked, with an optional reason) for one of a walkthrough's composed steps, or peek its current plan unchanged when outcome is omitted. Returns the updated {token, snapshot, plan, status}. Pass close true to end the walkthrough immediately, whether or not it is complete; pass expand true as start's.", write, t.agentAdvance)
+	add(s, t, "propose_start", "Start a full field review for a new or existing knowledge entity. Specify key, record_type, new, proposer and rationale. Returns every authorable field and its current value; Procedure reviews include both the guidance document and typed record.", write, t.agentFieldProposeStart)
+	add(s, t, "propose_advance", "Answer exactly the next field with an allowed keep, add, remove, replace or clear operation, or peek unchanged. Returns the full field inventory; after the last decision, validates and publishes the candidate immediately.", write, t.agentFieldProposeAdvance)
+	return s
+}
+
+func (t *tools) agentFieldProposeStart(ctx context.Context, in wire.FieldDraftStartRequest) (any, error) {
+	return t.fieldDrafter.Start(ctx, in)
+}
+
+func (t *tools) agentFieldProposeAdvance(ctx context.Context, in wire.FieldDraftAdvanceRequest) (any, error) {
+	return t.fieldDrafter.Advance(ctx, in)
 }

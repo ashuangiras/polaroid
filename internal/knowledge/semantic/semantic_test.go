@@ -29,8 +29,8 @@ func prov() knowledge.Provenance {
 
 func publishCorpus(t *testing.T, k *knowledge.Kernel) knowledge.Snapshot {
 	t.Helper()
-	s, err := k.Publish(context.Background(), knowledge.Proposal{
-		Changes: knowledgetest.CorpusProcedures(), Records: knowledgetest.CorpusRecordChanges(), Provenance: prov()})
+	s, err := k.Publish(context.Background(), knowledgetest.WithFullReview(knowledge.Proposal{
+		Changes: knowledgetest.CorpusProcedures(), Records: knowledgetest.CorpusRecordChanges(), Provenance: prov()}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,8 +68,8 @@ func TestCorpusPublishesAndReloads(t *testing.T) {
 
 func TestKernelWithoutValidatorRefusesRecords(t *testing.T) {
 	store := knowledgetest.NewMemoryStore()
-	_, err := knowledge.New(store).Publish(context.Background(), knowledge.Proposal{
-		Changes: knowledgetest.CorpusProcedures(), Records: knowledgetest.CorpusRecordChanges(), Provenance: prov()})
+	_, err := knowledge.New(store).Publish(context.Background(), knowledgetest.WithFullReview(knowledge.Proposal{
+		Changes: knowledgetest.CorpusProcedures(), Records: knowledgetest.CorpusRecordChanges(), Provenance: prov()}))
 	if !errors.Is(err, knowledge.ErrInvalid) || !strings.Contains(err.Error(), "no semantic validator") {
 		t.Fatalf("publish: %v", err)
 	}

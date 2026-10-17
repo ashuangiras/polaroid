@@ -40,14 +40,16 @@ type api struct {
 	mux    *http.ServeMux
 }
 
-// NewHandler serves the operator knowledge API at /v1/knowledge/..., with
-// every request authenticated against token. An empty token refuses every
-// request: there is no way to disable authentication.
+// NewHandler serves the operator knowledge API at /v1 and its receipt-bearing
+// publication routes at /v2, with every request authenticated against token.
+// An empty token refuses every request: there is no way to disable authentication.
 func NewHandler(op *knowledgeops.Operator, token string, logger *slog.Logger) http.Handler {
 	a := &api{op: op, token: token, logger: logger, mux: http.NewServeMux()}
 	a.mux.HandleFunc("GET /v1/knowledge/status", a.status)
-	a.mux.HandleFunc("POST /v1/knowledge/publications", a.publish)
-	a.mux.HandleFunc("POST /v1/knowledge/rollbacks", a.rollback)
+	a.mux.HandleFunc("POST /v1/knowledge/publications", a.legacyPublish)
+	a.mux.HandleFunc("POST /v1/knowledge/rollbacks", a.legacyRollback)
+	a.mux.HandleFunc("POST /v2/knowledge/publications", a.publish)
+	a.mux.HandleFunc("POST /v2/knowledge/rollbacks", a.rollback)
 	a.mux.HandleFunc("POST /v1/knowledge/sources/{name}/fetch", a.fetch)
 	a.mux.HandleFunc("POST /v1/knowledge/sources/{name}/validation", a.validate)
 	a.mux.HandleFunc("POST /v1/knowledge/sources/{name}/activation", a.activate)
@@ -80,7 +82,7 @@ func (a *api) status(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) publish(w http.ResponseWriter, r *http.Request) {
-	var body wire.KnowledgePublishRequest
+	var body wire.KnowledgePublishV2Request
 	if !decode(w, r, &body) {
 		return
 	}
@@ -93,7 +95,7 @@ func (a *api) publish(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) rollback(w http.ResponseWriter, r *http.Request) {
-	var body wire.KnowledgeRollbackRequest
+	var body wire.KnowledgeRollbackV2Request
 	if !decode(w, r, &body) {
 		return
 	}
@@ -103,6 +105,26 @@ func (a *api) rollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.respond(w, r, http.StatusCreated, res)
+}
+
+func (a *api) legacyPublish(w http.ResponseWriter, r *http.Request) {
+	var body wire.KnowledgePublishRequest
+	if !decode(w, r, &body) {
+		return
+	}
+	writeError(w, http.StatusBadRequest, wire.ErrorDetail{
+		Code: "invalid_request", Message: "knowledge writes require a complete field-review receipt; use POST /v2/knowledge/publications",
+	})
+}
+
+func (a *api) legacyRollback(w http.ResponseWriter, r *http.Request) {
+	var body wire.KnowledgeRollbackRequest
+	if !decode(w, r, &body) {
+		return
+	}
+	writeError(w, http.StatusBadRequest, wire.ErrorDetail{
+		Code: "invalid_request", Message: "knowledge rollbacks require a complete field-review receipt; use POST /v2/knowledge/rollbacks",
+	})
 }
 
 func (a *api) fetch(w http.ResponseWriter, r *http.Request) {

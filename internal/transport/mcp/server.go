@@ -88,6 +88,13 @@ func NewAgentHandlerV5(agent AgentKnowledge, resolver AgentResolver, guide Agent
 	return handler(newAgentServerV5(agent, resolver, guide, proposer, drafter, logger), logger)
 }
 
+// NewAgentHandlerV6 returns agent mode v6 (ADR-0062): the v3 read and
+// walkthrough tools, with a complete field-review proposal flow covering
+// both Procedure guidance documents and all typed record kinds.
+func NewAgentHandlerV6(agent AgentKnowledge, resolver AgentResolver, guide AgentGuide, drafter AgentFieldDrafter, logger *slog.Logger) http.Handler {
+	return handler(newAgentServerV6(agent, resolver, guide, drafter, logger), logger)
+}
+
 func handler(server *sdk.Server, logger *slog.Logger) http.Handler {
 	h := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, &sdk.StreamableHTTPOptions{
 		Stateless:           true,
@@ -130,7 +137,9 @@ type tools struct {
 	proposer AgentProposer
 	// drafter is set only for agent mode v5 (ADR-0060).
 	drafter AgentDrafter
-	logger  *slog.Logger
+	// fieldDrafter is set only for agent mode v6 (ADR-0062).
+	fieldDrafter AgentFieldDrafter
+	logger       *slog.Logger
 }
 
 // Free-form JSON objects are advertised as objects; everything else is

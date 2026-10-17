@@ -29,10 +29,46 @@ func prov() knowledge.Provenance {
 
 func publish(t *testing.T, k *knowledge.Kernel, base knowledge.Snapshot, changes ...knowledge.Change) (knowledge.Snapshot, error) {
 	t.Helper()
-	return k.Publish(context.Background(), knowledge.Proposal{Base: base, Changes: changes, Provenance: prov()})
+	return k.Publish(context.Background(), knowledgetest.WithFullReview(knowledge.Proposal{Base: base, Changes: changes, Provenance: prov()}))
 }
 
 func put(p *knowledge.Procedure) knowledge.Change { return knowledge.Change{Key: p.Key, Procedure: p} }
+
+func TestKernelRequiresAndPersistsFieldReviewReceipt(t *testing.T) {
+	ctx := context.Background()
+	store := knowledgetest.NewMemoryStore()
+	k := knowledge.New(store)
+	proposal := knowledge.Proposal{Changes: []knowledge.Change{put(knowledgetest.Proc("go.module.build", "Build it"))}, Provenance: prov()}
+	if _, err := k.Publish(ctx, proposal); !errors.Is(err, knowledge.ErrInvalid) || !strings.Contains(err.Error(), "requires a complete field-review receipt") {
+		t.Fatalf("publish without review receipt = %v", err)
+	}
+	if active, _ := store.Active(ctx); active != "" {
+		t.Fatalf("refused publication changed active snapshot to %s", active)
+	}
+
+	proposal = knowledgetest.WithFullReview(proposal)
+	snapshot, err := k.Publish(ctx, proposal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	history, err := store.Log(ctx, snapshot, 1)
+	if err != nil || len(history) != 1 {
+		t.Fatalf("history = %v, %v", history, err)
+	}
+	var found bool
+	for _, trailer := range history[0].Trailers {
+		if trailer.Key == knowledge.TrailerFieldReview {
+			receipt, err := knowledge.DecodeFieldReview([]byte(trailer.Value))
+			if err != nil || receipt.Version != 1 || len(receipt.Entities) != 1 {
+				t.Fatalf("field review receipt = %#v, %v", receipt, err)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("publication did not persist the field-review trailer")
+	}
+}
 
 func TestDocumentsAreCanonical(t *testing.T) {
 	p := knowledgetest.Proc("go.module.verify", "Verify", "build=go.module.build")
@@ -241,8 +277,8 @@ func TestKernelValidateDoesNotCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate, err := k.Validate(ctx, knowledge.Proposal{Base: base,
-		Changes: []knowledge.Change{put(knowledgetest.Proc("go.module.extra", "Extra"))}, Provenance: prov()})
+	candidate, err := k.Validate(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Base: base,
+		Changes: []knowledge.Change{put(knowledgetest.Proc("go.module.extra", "Extra"))}, Provenance: prov()}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,8 +309,8 @@ func TestKernelValidateReportsPublishsOwnErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bad := knowledge.Proposal{Base: base,
-		Changes: []knowledge.Change{put(knowledgetest.Proc("go.module.missing-ref", "Bad", "b=go.module.gone"))}, Provenance: prov()}
+	bad := knowledgetest.WithFullReview(knowledge.Proposal{Base: base,
+		Changes: []knowledge.Change{put(knowledgetest.Proc("go.module.missing-ref", "Bad", "b=go.module.gone"))}, Provenance: prov()})
 	_, validateErr := k.Validate(ctx, bad)
 	_, publishErr := k.Publish(ctx, bad)
 	if validateErr == nil || publishErr == nil || validateErr.Error() != publishErr.Error() {

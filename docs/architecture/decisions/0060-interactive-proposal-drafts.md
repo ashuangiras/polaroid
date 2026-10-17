@@ -1,6 +1,6 @@
 # 0060. Interactive, field-by-field proposal construction: `propose_start`/`propose_advance`
 
-**Status:** Accepted (Grounded publication M3; amends [ADR-0059](0059-grounded-publication.md) Part 2 additively — `propose` itself is unchanged). Amended by [ADR-0061](0061-draft-every-field-every-time.md): `propose_start`/`propose_advance` walk every field on every draft, not only ones that start empty or unmarked.
+**Status:** Accepted (Grounded publication M3; amends [ADR-0059](0059-grounded-publication.md) Part 2 additively — `propose` itself is unchanged). Amended by [ADR-0061](0061-draft-every-field-every-time.md): `propose_start`/`propose_advance` walk every field on every draft, not only ones that start empty or unmarked. The broader field-complete contract and all-publication gate are defined by [ADR-0062](0062-field-complete-knowledge-publication.md); the v5 schema remains frozen, while writes through the four-field flow are rejected by the shared gate. The broader field-complete contract and all-publication gate are superseded by [ADR-0062](0062-field-complete-knowledge-publication.md); this four-field flow remains frozen at `/mcp/agent/v5`.
 **Date:** 2026-10-17
 
 ## Context

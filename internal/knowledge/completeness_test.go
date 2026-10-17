@@ -135,9 +135,9 @@ func TestCompletenessGaps(t *testing.T) {
 func TestCompletenessIsEnforced(t *testing.T) {
 	k := knowledge.New(knowledgetest.NewMemoryStore(), knowledge.WithRecordValidator(&acceptAll{}))
 	incomplete := &knowledge.Record{Type: knowledge.TypeDomain, Key: "domain.undefined", Label: "Undefined"}
-	s, err := k.Publish(context.Background(), knowledge.Proposal{
+	s, err := k.Publish(context.Background(), knowledgetest.WithFullReview(knowledge.Proposal{
 		Records: []knowledge.RecordChange{{Key: incomplete.Key, Record: incomplete}}, Provenance: prov(),
-	})
+	}))
 	var ve *knowledge.ValidationError
 	if !errors.As(err, &ve) || !strings.Contains(err.Error(), "records[domain.undefined].definition: is required for a Domain") {
 		t.Fatalf("a record missing definition must now be refused, got snapshot %q err %v", s, err)
@@ -147,10 +147,10 @@ func TestCompletenessIsEnforced(t *testing.T) {
 	}
 
 	noObligation := &knowledge.Record{Type: knowledge.TypeProcedure, Key: "proc.undefined", Label: "p", Definition: "has a definition, no obligation"}
-	_, err = k.Publish(context.Background(), knowledge.Proposal{
+	_, err = k.Publish(context.Background(), knowledgetest.WithFullReview(knowledge.Proposal{
 		Changes: []knowledge.Change{put(knowledgetest.SharedProc("proc.undefined", "p"))},
 		Records: []knowledge.RecordChange{{Key: noObligation.Key, Record: noObligation}}, Provenance: prov(),
-	})
+	}))
 	if !errors.As(err, &ve) || !strings.Contains(err.Error(),
 		"records[proc.undefined].requires: at least one of requires, preconditions, postconditions, or an inherited one via specializes, is required for a Procedure") {
 		t.Fatalf("a Procedure with no obligation source must now be refused, got %v", err)
@@ -187,9 +187,9 @@ func TestCompletenessDoesNotAffectReadingHistory(t *testing.T) {
 	// a new, unrelated, complete record is refused while domain.old's own
 	// gap is still part of the resulting catalog.
 	unrelated := &knowledge.Record{Type: knowledge.TypeDomain, Key: "domain.new", Label: "New", Definition: "d"}
-	_, err = k.Publish(context.Background(), knowledge.Proposal{
+	_, err = k.Publish(context.Background(), knowledgetest.WithFullReview(knowledge.Proposal{
 		Base: old, Records: []knowledge.RecordChange{{Key: unrelated.Key, Record: unrelated}}, Provenance: prov(),
-	})
+	}))
 	var ve *knowledge.ValidationError
 	if !errors.As(err, &ve) || !strings.Contains(err.Error(), "domain.old") {
 		t.Fatalf("a small, unrelated publish on top of an incomplete base must still be refused for the pre-existing gap: %v", err)

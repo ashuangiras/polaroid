@@ -484,8 +484,8 @@ check "a cross-site browser request: 403" equal "$LAST" 403
 
 ########################################################################
 section "Agent mode: Git-native knowledge (ADR-0048)" \
-	"\`/mcp/agent\` (ADR-0043, finalized on Git-native living knowledge by ADR-0048) serves only the three tools everyday procedural-knowledge use needs, named only by canonical key and an opaque snapshot token: no procedure version, binding or evidence-based selection anywhere. It shares no record with the legacy catalog above: the knowledge path starts empty. Publishing is an explicit, token-guarded operator operation at \`/v1/knowledge/*\`, never reachable from agent mode." \
-	"Point an MCP client at \`http://127.0.0.1:7417/mcp/agent\`; operate the knowledge path at \`/v1/knowledge/*\` with the token the daemon generated at \`<knowledge-dir>-operator-token\`."
+	"\`/mcp/agent\` (ADR-0043, finalized on Git-native living knowledge by ADR-0048) serves only the three tools everyday procedural-knowledge use needs, named only by canonical key and an opaque snapshot token: no procedure version, binding or evidence-based selection anywhere. It shares no record with the legacy catalog above: the knowledge path starts empty. Publishing is an explicit, token-guarded operator operation at \`/v2/knowledge/*\`, never reachable from agent mode, and requires a complete field-review receipt." \
+	"Point an MCP client at \`http://127.0.0.1:7417/mcp/agent\`; operate the knowledge path at \`/v2/knowledge/*\` with the token the daemon generated at \`<knowledge-dir>-operator-token\`."
 RUNS_BEFORE="$(tool list_executions '{}' | text)"
 TOKEN="$(cat "$WORK/home/.polaroid/data/knowledge-operator-token")"
 LAST="$(MCP_PATH=/mcp/agent post tools/list "" "" | jq -c '[.result.tools[].name] | sort')"
@@ -493,8 +493,8 @@ md '```text' 'tools/list at /mcp/agent' "$LAST" '```'
 check "agent mode lists exactly discover, feedback and read" equal "$LAST" '["discover","feedback","read"]'
 MCP_PATH=/mcp/agent step discover "{\"task\":\"tidy a go module\"}" '{empty}'
 check "discover before any knowledge is published is an explicit, well-formed empty result" json_has '. == {"empty":true}'
-PUB_BODY='{"base":"","changes":[{"key":"go.module.tidy","goal":"Tidy a Go module dependencies.","philosophy":"Keep dependencies minimal.","method":"Run go mod tidy.","contract":{"inputs":{"module":"path"}},"instructions":{"steps":["go mod tidy"]}}],"author":"operator.e2e","summary":"seed","rationale":"e2e fixture"}'
-show 'curl -sS -X POST "$URL/v1/knowledge/publications" -H "Content-Type: application/json" -H "Polaroid-Operator-Token: $TOKEN" --data-binary "$PUB_BODY" | jq -c .'
+PUB_BODY='{"base":"","changes":[{"key":"go.module.tidy","goal":"Tidy a Go module dependencies.","philosophy":"Keep dependencies minimal.","method":"Run go mod tidy.","contract":{"inputs":{"module":"path"}},"instructions":{"steps":["go mod tidy"]}}],"author":"operator.e2e","summary":"seed","rationale":"e2e fixture","review":{"version":1,"entities":[{"kind":"procedure","key":"go.module.tidy","fields":[{"field":"goal","operation":"replace","citations":[{"source":"e2e","quote":"Tidy a Go module dependencies."}]},{"field":"philosophy","operation":"replace","citations":[{"source":"e2e","quote":"Keep dependencies minimal."}]},{"field":"method","operation":"replace","citations":[{"source":"e2e","quote":"Run go mod tidy."}]},{"field":"applicability","operation":"clear"},{"field":"contract","operation":"replace","citations":[{"source":"e2e","quote":"path"}]},{"field":"instructions","operation":"replace","citations":[{"source":"e2e","quote":"go mod tidy"}]},{"field":"references","operation":"clear"}]}]}}'
+show 'curl -sS -X POST "$URL/v2/knowledge/publications" -H "Content-Type: application/json" -H "Polaroid-Operator-Token: $TOKEN" --data-binary "$PUB_BODY" | jq -c .'
 SNAP="$(jq -r .snapshot <<<"$LAST")"
 check "publishing through the operator surface returns a snapshot" test -n "$SNAP"
 show 'curl -sS "$URL/v1/knowledge/status" -H "Polaroid-Operator-Token: $TOKEN" | jq -c .'

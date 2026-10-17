@@ -31,7 +31,7 @@ func precedesFixture(t *testing.T, k *knowledge.Kernel, precedes map[string][]st
 		}
 		records = append(records, knowledge.RecordChange{Key: key, Record: r})
 	}
-	return k.Publish(context.Background(), knowledge.Proposal{Changes: changes, Records: records, Provenance: prov()})
+	return k.Publish(context.Background(), knowledgetest.WithFullReview(knowledge.Proposal{Changes: changes, Records: records, Provenance: prov()}))
 }
 
 func TestPrecedesAmongSiblingsAccepted(t *testing.T) {
@@ -63,11 +63,11 @@ func TestPrecedesTargetWrongTypeRejected(t *testing.T) {
 	k := knowledge.New(knowledgetest.NewMemoryStore(), knowledge.WithRecordValidator(&acceptAll{}))
 	concept := &knowledge.Record{Type: knowledge.TypeConcept, Key: "concept.not-a-procedure", Label: "x", Definition: "d"}
 	proc := &knowledge.Record{Type: knowledge.TypeProcedure, Key: "proc.bad-precedes", Label: "x", Definition: "d", Precedes: []string{"concept.not-a-procedure"}}
-	_, err := k.Publish(context.Background(), knowledge.Proposal{
+	_, err := k.Publish(context.Background(), knowledgetest.WithFullReview(knowledge.Proposal{
 		Changes:    []knowledge.Change{put(knowledgetest.SharedProc("proc.bad-precedes", "x"))},
 		Records:    []knowledge.RecordChange{{Key: concept.Key, Record: concept}, {Key: proc.Key, Record: proc}},
 		Provenance: prov(),
-	})
+	}))
 	if err == nil || !strings.Contains(err.Error(), "must name one of") {
 		t.Fatalf("precedes naming a Concept, not a Procedure, must be refused, got %v", err)
 	}

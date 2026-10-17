@@ -331,3 +331,50 @@ type KnowledgeRollbackRequest struct {
 type KnowledgeRollbackResult struct {
 	Snapshot string `json:"snapshot"`
 }
+
+// KnowledgeReviewReceipt is the versioned operator publish contract's
+// per-entity declaration of every field operation. The daemon checks it
+// against the base and candidate catalogs before publication.
+type KnowledgeReviewReceipt struct {
+	Version  int                     `json:"version"`
+	Entities []KnowledgeReviewEntity `json:"entities"`
+}
+
+type KnowledgeReviewEntity struct {
+	Kind   string                   `json:"kind"`
+	Key    string                   `json:"key"`
+	Type   string                   `json:"type,omitzero"`
+	Fields []KnowledgeReviewedField `json:"fields"`
+}
+
+type KnowledgeReviewedField struct {
+	Field     string            `json:"field"`
+	Operation string            `json:"operation"`
+	Value     jsontext.Value    `json:"value,omitzero"`
+	Citations []ProposeCitation `json:"citations,omitzero"`
+}
+
+// KnowledgePublishV2Request is the receipt-bearing operator publication
+// contract. The v1 request shape remains readable for compatibility, but
+// its publication route refuses writes and directs callers here.
+type KnowledgePublishV2Request struct {
+	Base       string                  `json:"base"`
+	Changes    []KnowledgeChange       `json:"changes"`
+	Records    []KnowledgeRecordChange `json:"records,omitzero"`
+	Author     string                  `json:"author"`
+	Summary    string                  `json:"summary"`
+	Rationale  string                  `json:"rationale"`
+	Finding    string                  `json:"finding,omitzero"`
+	Validation string                  `json:"validation,omitzero"`
+	Review     KnowledgeReviewReceipt  `json:"review"`
+}
+
+type KnowledgeRollbackV2Request struct {
+	Base       string                 `json:"base"`
+	To         string                 `json:"to"`
+	Author     string                 `json:"author"`
+	Summary    string                 `json:"summary"`
+	Rationale  string                 `json:"rationale"`
+	Validation string                 `json:"validation,omitzero"`
+	Review     KnowledgeReviewReceipt `json:"review"`
+}

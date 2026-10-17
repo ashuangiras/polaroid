@@ -100,7 +100,7 @@ func Run(t *testing.T, open func(t *testing.T, dir string) knowledge.Store) {
 	// 1. Publish three related procedures.
 	first := prov("Initial Go module procedures")
 	first.Finding = "feedback:01a1-initial"
-	s1, err := k.Publish(ctx, knowledge.Proposal{Changes: Initial(), Provenance: first})
+	s1, err := k.Publish(ctx, WithFullReview(knowledge.Proposal{Changes: Initial(), Provenance: first}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func Run(t *testing.T, open func(t *testing.T, dir string) knowledge.Store) {
 	better := Proc("go.module.checks", "Run gofmt, go vet and staticcheck on the module")
 	improve := prov("checks: add staticcheck")
 	improve.Finding, improve.Validation = "feedback:01a2-missed-lint", "gate passed at 1fb9ef2"
-	s2, err := k.Publish(ctx, knowledge.Proposal{Base: s1, Changes: []knowledge.Change{{Key: better.Key, Procedure: better}}, Provenance: improve})
+	s2, err := k.Publish(ctx, WithFullReview(knowledge.Proposal{Base: s1, Changes: []knowledge.Change{{Key: better.Key, Procedure: better}}, Provenance: improve}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,17 +165,17 @@ func Run(t *testing.T, open func(t *testing.T, dir string) knowledge.Store) {
 		"key mismatch": {{Key: "go.module.other", Procedure: Proc("go.module.build", "Build")}},
 		"unchanged":    {{Key: "go.module.build", Procedure: Proc("go.module.build", "Build the Go module")}},
 	} {
-		if _, err := k.Publish(ctx, knowledge.Proposal{Base: s2, Changes: changes, Provenance: prov(name)}); !errors.Is(err, knowledge.ErrInvalid) {
+		if _, err := k.Publish(ctx, WithFullReview(knowledge.Proposal{Base: s2, Changes: changes, Provenance: prov(name)})); !errors.Is(err, knowledge.ErrInvalid) {
 			t.Fatalf("%s: published or wrong error: %v", name, err)
 		} else {
 			t.Logf("%s: %v", name, err)
 		}
 	}
-	if _, err := k.Publish(ctx, knowledge.Proposal{Base: s2, Changes: Initial()[:1], Provenance: knowledge.Provenance{Author: "a"}}); !errors.Is(err, knowledge.ErrInvalid) {
+	if _, err := k.Publish(ctx, WithFullReview(knowledge.Proposal{Base: s2, Changes: Initial()[:1], Provenance: knowledge.Provenance{Author: "a"}})); !errors.Is(err, knowledge.ErrInvalid) {
 		t.Fatalf("publication without rationale: %v", err)
 	}
 	stale := Proc("go.module.build", "Build, stale edit")
-	if _, err := k.Publish(ctx, knowledge.Proposal{Base: s1, Changes: []knowledge.Change{{Key: stale.Key, Procedure: stale}}, Provenance: prov("stale")}); !errors.Is(err, knowledge.ErrStale) {
+	if _, err := k.Publish(ctx, WithFullReview(knowledge.Proposal{Base: s1, Changes: []knowledge.Change{{Key: stale.Key, Procedure: stale}}, Provenance: prov("stale")})); !errors.Is(err, knowledge.ErrStale) {
 		t.Fatalf("stale publication: %v", err)
 	}
 	if a, _ := k.Active(ctx); a.Snapshot() != s2 {
@@ -194,7 +194,7 @@ func Run(t *testing.T, open func(t *testing.T, dir string) knowledge.Store) {
 				kk = k2
 			}
 			p := Proc("go.module.build", fmt.Sprintf("Build the Go module, variant %d", i))
-			_, err := kk.Publish(ctx, knowledge.Proposal{Base: s2, Changes: []knowledge.Change{{Key: p.Key, Procedure: p}}, Provenance: prov("race")})
+			_, err := kk.Publish(ctx, WithFullReview(knowledge.Proposal{Base: s2, Changes: []knowledge.Change{{Key: p.Key, Procedure: p}}, Provenance: prov("race")}))
 			errs <- err
 		}()
 	}
@@ -217,7 +217,7 @@ func Run(t *testing.T, open func(t *testing.T, dir string) knowledge.Store) {
 
 	// 7. Roll back to the first snapshot by a new publication.
 	back := prov("Roll back to the initial procedures")
-	s4, err := k.Rollback(ctx, s3, s1, back)
+	s4, err := k.Rollback(ctx, s3, s1, back, ReviewCatalog(old))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +225,7 @@ func Run(t *testing.T, open func(t *testing.T, dir string) knowledge.Store) {
 	if s4 == s1 || cur.Snapshot() != s4 || Fingerprint(t, cur) != s1Print {
 		t.Fatalf("rollback: %s, active %s", s4, cur.Snapshot())
 	}
-	if _, err := k.Rollback(ctx, s4, s1, back); !errors.Is(err, knowledge.ErrInvalid) {
+	if _, err := k.Rollback(ctx, s4, s1, back, ReviewCatalog(old)); !errors.Is(err, knowledge.ErrInvalid) {
 		t.Fatalf("rollback to equal knowledge: %v", err)
 	}
 	if mid, err := k.At(ctx, s2); err != nil || !strings.Contains(Fingerprint(t, mid), "staticcheck") {

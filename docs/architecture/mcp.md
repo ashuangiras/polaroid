@@ -179,6 +179,8 @@ Requests can fail with these codes: `not_found` (an unknown `goal`, or an expire
 
 Requests can fail with these codes: `invalid_request` (a missing or malformed field, more than one or none of `existing_procedure`/`new_concept`/`new_claim`/`new_orchestration`, a missing or unverifiable citation, a key that does not exist or already exists where the opposite is required, a reference to an unknown or wrong-typed record, a completeness or non-vacuous-composition failure, or a redundant candidate), `not_found` (the active snapshot cannot be read).
 
+Since [ADR-0062](decisions/0062-field-complete-knowledge-publication.md), the frozen v4 request shape is refused because it cannot carry the required full field-review receipt. The tool schema and description remain unchanged; the `invalid_request` points callers to `/mcp/agent/v6`.
+
 ## Agent mode v5 (`/mcp/agent/v5`)
 
 **Implemented by [ADR-0060](decisions/0060-interactive-proposal-drafts.md), amended by [ADR-0061](decisions/0061-draft-every-field-every-time.md).** This is a separate, versioned endpoint; `/mcp/agent` through `/mcp/agent/v4` above are unchanged. It serves the same `discover`, `read`, `feedback`, `resolve`, `start`, `advance` and `propose` tools, with input schemas identical to v4's (a test compares them), plus two new tools that build an `existing_procedure` `propose` call interactively, field by field, instead of requiring an agent to assemble the whole call itself.
@@ -196,6 +198,24 @@ Requests can fail with these codes: `invalid_request` (a missing or malformed fi
 - **Scoped to existing Procedures only.** No equivalent exists yet for `new_concept`, `new_claim` or `new_orchestration`; use single-shot `propose` for those. Drafts are ephemeral, SQLite-backed state (mirroring walkthroughs), not visible to any operator surface and not reasoning-wired: `Compose` does not yet read the `*Complete` flags, so a composition pair already vacuous before a draft starts stays open to the same #173 check regardless of how the draft's fields were answered.
 
 Requests can fail with these codes: `invalid_request` (a missing or malformed field, an unknown `field` name, neither or both of `values`/`confirmed_absent`, a missing or unverifiable citation), `not_found` (an unknown or expired token, or a key that does not exist), plus `propose`'s own commit-time codes (a completeness or non-vacuous-composition failure, or a redundant candidate) when the auto-commit itself is attempted and fails.
+
+Since [ADR-0062](decisions/0062-field-complete-knowledge-publication.md), the frozen v5 four-field draft is refused because it cannot review every authorable field. Its tool schemas and descriptions remain unchanged; use `/mcp/agent/v6` instead.
+
+## Agent mode v6 (`/mcp/agent/v6`)
+
+**Implemented by [ADR-0062](decisions/0062-field-complete-knowledge-publication.md).** This is a separate endpoint with the v3 read, resolve and walkthrough tools, plus full field-review `propose_start` and `propose_advance`. It does not expose v4's single-shot `propose` or v5's four-field draft. The v1-v5 schemas remain unchanged.
+
+| Tool | Read-only | Arguments | Result |
+| --- | --- | --- | --- |
+| `propose_start` | no | `{key, record_type, new, proposer, rationale}`; `record_type` is `Domain`, `Concept`, `Claim`, `Rule`, `Procedure`, `Evidence` or `Exception`; `new` selects creation vs review of an existing entity | `{token, snapshot, key, status, next_entity, next_field, fields}` |
+| `propose_advance` | no | `{token, outcome?: {entity, field, operation, value?, citations?}, close?}`; omit `outcome` to peek without side effects | `{token?, snapshot?, key?, status, next_entity?, next_field?, fields?}` |
+
+- **The complete current state is returned together.** `propose_start` returns every applicable field, in deterministic order, with the published `value`, `present`, `required`, `grounded`, `set`, `new_entity`, and `allowed_operations`. For Procedure proposals, the inventory includes both the guidance document (`entity: "procedure"`) and typed Procedure record (`entity: "record"`); other types have the typed record only. The record key, type and JSON-LD context are system-managed, not editable fields. `contract` and `instructions` are opaque JSON values.
+- **Every field gets one explicit decision.** `propose_advance` accepts only the named `next_entity`/`next_field` and an allowed operation: `keep` preserves an existing value; `add` appends list entries; `remove` deletes named existing list entries; `replace` sets the whole value; `clear` empties an optional field. New entities cannot `keep` or `remove`; required fields cannot `clear`. `value` is any JSON value, matching the field's type. Add/remove receipts include the exact list delta.
+- **Grounding and candidate validation still apply.** New or replacement content in grounded fields needs `citations`, each quote present verbatim in the new content. Keep/remove/clear need none. The complete candidate is checked by the catalog, JSON-LD, SHACL, completeness, governance, reference and non-vacuous composition gates. Meaningful field changes are allowed even when they do not alter a Corpus Logic resolution; an unchanged review closes with status `unchanged` and creates no publication.
+- **Automatic commit and correction.** Once every field is answered, that same `propose_advance` call validates the receipt and attempts publication. A failed check leaves the draft open with its decisions intact; when all fields were already answered, a later call may correct any field and retry. Results include the full inventory and each field's current `draft_value`, `answered` and operation. A pure peek does not attempt a commit. `close: true` abandons the draft; after commit or close the token is not found. Draft events are ephemeral SQLite state (migration 15), not stored in knowledge.
+
+An unknown or incompatible `record_type`, key/type mismatch, missing citation, disallowed operation or invalid field value is `invalid_request`; unknown/expired/closed draft tokens are `not_found`; a concurrent advance rejected against a stale event count is `draft_conflict` (peek and retry); stale pinned snapshots conflict rather than merging. The final publish result returns the new snapshot and key.
 
 ## Resources
 

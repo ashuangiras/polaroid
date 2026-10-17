@@ -92,13 +92,15 @@ func TestKnowledgeSyncBetweenDaemons(t *testing.T) {
 	}
 
 	// Instance A publishes and pushes.
-	status, pub := op(baseA, tokenA, http.MethodPost, "/v1/knowledge/publications", map[string]any{
-		"base": "",
-		"changes": []map[string]any{{
-			"key": "go.module.tidy", "goal": "Tidy a module", "philosophy": "p", "method": "m",
-			"contract": map[string]any{}, "instructions": map[string]any{},
-		}},
-		"author": "alice", "summary": "seed", "rationale": "initial knowledge",
+	changes := []map[string]any{{
+		"key": "go.module.tidy", "goal": "Tidy a module", "philosophy": "p", "method": "m",
+		"contract": map[string]any{}, "instructions": map[string]any{},
+	}}
+	status, pub := op(baseA, tokenA, http.MethodPost, "/v2/knowledge/publications", map[string]any{
+		"base":    "",
+		"changes": changes,
+		"author":  "alice", "summary": "seed", "rationale": "initial knowledge",
+		"review": fullFieldReviewForPayload(t, changes, []any{}),
 	})
 	if status != http.StatusCreated {
 		t.Fatalf("A publish = %d %v", status, pub)

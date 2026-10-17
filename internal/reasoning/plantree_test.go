@@ -35,8 +35,8 @@ func publishTree(t *testing.T, specs []treeSpec) *knowledge.Catalog {
 			Type: knowledge.TypeProcedure, Key: s.Key, Label: s.Key, Definition: "d", Composes: s.Composes, Precedes: s.Precedes, Requires: []string{"test.obligation"},
 		}})
 	}
-	snap, err := k.Publish(context.Background(), knowledge.Proposal{Changes: changes, Records: records,
-		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "s", Rationale: "r"}})
+	snap, err := k.Publish(context.Background(), knowledgetest.WithFullReview(knowledge.Proposal{Changes: changes, Records: records,
+		Provenance: knowledge.Provenance{Author: "test.agent", Summary: "s", Rationale: "r"}}))
 	if err != nil {
 		t.Fatal(err)
 	}

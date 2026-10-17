@@ -81,12 +81,22 @@ func (in *instance) publish(t *testing.T, author, summary string, procs ...*know
 	for _, p := range procs {
 		changes = append(changes, knowledge.Change{Key: p.Key, Procedure: p})
 	}
-	s, err := in.k.Publish(context.Background(), knowledge.Proposal{Base: in.active(t), Changes: changes,
-		Provenance: knowledge.Provenance{Author: author, Summary: summary, Rationale: "Because " + summary + ".", Validation: "go test ./..."}})
+	s, err := in.k.Publish(context.Background(), knowledgetest.WithFullReview(knowledge.Proposal{Base: in.active(t), Changes: changes,
+		Provenance: knowledge.Provenance{Author: author, Summary: summary, Rationale: "Because " + summary + ".", Validation: "go test ./..."}}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return s
+}
+
+func reviewTrailer(t *testing.T, changes []knowledge.Change, records []knowledge.RecordChange) gitcore.Trailer {
+	t.Helper()
+	prop := knowledgetest.WithFullReview(knowledge.Proposal{Changes: changes, Records: records})
+	value, err := prop.Review.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return gitcore.Trailer{Key: knowledge.TrailerFieldReview, Value: string(value)}
 }
 
 func (in *instance) push(t *testing.T) gitcore.PushResult {
@@ -278,6 +288,38 @@ func trailer(ts []knowledge.Trailer, key string) string {
 
 // 13. Knowledge that is invalid, or from an unauthorised publisher or
 // source, is rejected and changes nothing.
+func TestPushRejectsLocalHistoryWithUnreviewedTransition(t *testing.T) {
+	ctx := context.Background()
+	remote := bareRemote(t)
+	a := newInstance(t, team(remote, "alice"))
+	key := "go.module.verify"
+	a.publish(t, "alice", "Create a procedure", knowledgetest.Proc(key, "Verify a Go module"))
+
+	cat, err := a.k.Active(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	procedure, err := cat.Get(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	procedure.Method = "Change without a field-review receipt"
+	document, err := knowledge.Encode(procedure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.repo.Publish(ctx, gitcore.Publication{
+		Expected: gitcore.Snapshot(cat.Snapshot()), Author: "alice", Subject: "unreviewed local change",
+		Body:    "legacy writer bypassed the knowledge kernel",
+		Changes: []gitcore.Change{{Path: knowledge.Path(key), Content: document}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.sync.Publish(ctx, "team", none); err == nil || !strings.Contains(err.Error(), "complete field-review receipt") {
+		t.Fatalf("push error = %v, want local history rejected for its missing field-review receipt", err)
+	}
+}
+
 func TestUntrustedKnowledgeIsRejected(t *testing.T) {
 	ctx := context.Background()
 	remote := bareRemote(t)
@@ -323,7 +365,8 @@ func TestUntrustedKnowledgeIsRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := a.repo.Publish(ctx, gitcore.Publication{Expected: gitcore.Snapshot(s2), Author: "alice", Subject: "broken", Body: "no kernel",
-		Changes: []gitcore.Change{{Path: knowledge.Path("go.module.verify"), Content: doc}}}); err != nil {
+		Trailers: []gitcore.Trailer{reviewTrailer(t, []knowledge.Change{{Key: "go.module.verify", Procedure: knowledgetest.Proc("go.module.verify", "Verify", "build=go.module.gone")}}, nil)},
+		Changes:  []gitcore.Change{{Path: knowledge.Path("go.module.verify"), Content: doc}}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.repo.Push(ctx, gitcore.Remote{Name: "team", URL: remote}, none); err != nil {
@@ -378,13 +421,13 @@ func TestFetchedRuleGovernance(t *testing.T) {
 		return &instance{repo: repo, sync: s, k: s.Kernel()}
 	}
 	a, b := open(), open()
-	s0, err := a.k.Publish(ctx, knowledge.Proposal{Changes: knowledgetest.CorpusProcedures(),
-		Provenance: knowledge.Provenance{Author: "alice", Summary: "procedures", Rationale: "Because."}})
+	s0, err := a.k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Changes: knowledgetest.CorpusProcedures(),
+		Provenance: knowledge.Provenance{Author: "alice", Summary: "procedures", Rationale: "Because."}}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	s1, err := a.k.Publish(ctx, knowledge.Proposal{Base: s0, Records: knowledgetest.CorpusRecordChanges(),
-		Provenance: knowledge.Provenance{Author: "alice", Summary: "corpus", Rationale: "Because."}})
+	s1, err := a.k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Base: s0, Records: knowledgetest.CorpusRecordChanges(),
+		Provenance: knowledge.Provenance{Author: "alice", Summary: "corpus", Rationale: "Because."}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,7 +449,8 @@ func TestFetchedRuleGovernance(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := a.repo.Publish(ctx, gitcore.Publication{Expected: gitcore.Snapshot(s1), Author: "alice", Subject: "weaken", Body: "no kernel",
-		Changes: []gitcore.Change{{Path: knowledge.RecordPath(rule.Type, rule.Key), Content: doc}}}); err != nil {
+		Trailers: []gitcore.Trailer{reviewTrailer(t, nil, []knowledge.RecordChange{{Key: rule.Key, Record: rule}})},
+		Changes:  []gitcore.Change{{Path: knowledge.RecordPath(rule.Type, rule.Key), Content: doc}}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.repo.Push(ctx, gitcore.Remote{Name: "team", URL: remote}, none); err != nil {
@@ -488,7 +532,7 @@ func TestRollbackSynchronises(t *testing.T) {
 		return knowledge.Provenance{Author: "alice", Summary: summary, Rationale: "Because " + summary + "."}
 	}
 	a, b := open(), open()
-	sA, err := a.k.Publish(ctx, knowledge.Proposal{Changes: knowledgetest.CorpusProcedures(), Records: knowledgetest.CorpusRecordChanges(), Provenance: pv("corpus")})
+	sA, err := a.k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Changes: knowledgetest.CorpusProcedures(), Records: knowledgetest.CorpusRecordChanges(), Provenance: pv("corpus")}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -506,7 +550,7 @@ func TestRollbackSynchronises(t *testing.T) {
 	}
 	vetB := vet.Clone()
 	vetB.Program, vetB.Revision = `obligation(P, "check.vet") :- record(P, "Procedure").`, 2
-	sB, err := a.k.Publish(ctx, knowledge.Proposal{Base: sA, Records: []knowledge.RecordChange{{Key: vetB.Key, Record: vetB}}, Provenance: pv("widen vet")})
+	sB, err := a.k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Base: sA, Records: []knowledge.RecordChange{{Key: vetB.Key, Record: vetB}}, Provenance: pv("widen vet")}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -514,7 +558,11 @@ func TestRollbackSynchronises(t *testing.T) {
 	if err := b.sync.Activate(ctx, b.fetchValidated(t, "team"), decision("operator.b")); err != nil {
 		t.Fatal(err)
 	}
-	sC, err := a.k.Rollback(ctx, sB, sA, pv("roll back the vet change"))
+	baseA, err := a.k.At(ctx, sA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sC, err := a.k.Rollback(ctx, sB, sA, pv("roll back the vet change"), knowledgetest.ReviewCatalog(baseA))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -583,7 +631,7 @@ func TestFetchedEdgesFromImportedHistory(t *testing.T) {
 		return knowledge.Provenance{Author: "alice", Summary: summary, Rationale: "Because " + summary + "."}
 	}
 	a, b := open(), open()
-	s1, err := a.k.Publish(ctx, knowledge.Proposal{Changes: knowledgetest.CorpusProcedures(), Records: knowledgetest.CorpusRecordChanges(), Provenance: pv("corpus")})
+	s1, err := a.k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Changes: knowledgetest.CorpusProcedures(), Records: knowledgetest.CorpusRecordChanges(), Provenance: pv("corpus")}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -597,11 +645,11 @@ func TestFetchedEdgesFromImportedHistory(t *testing.T) {
 	v2.Program, v2.Revision = `obligation(P, "check.vet") :- record(P, "Procedure").`, 2
 	v3.Program, v3.Revision = v2.Program, 3
 	v3.Statement = "Every procedure requires go vet, again."
-	p1, err := a.k.Publish(ctx, knowledge.Proposal{Base: s1, Records: []knowledge.RecordChange{{Key: v2.Key, Record: v2}}, Provenance: pv("widen vet")})
+	p1, err := a.k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Base: s1, Records: []knowledge.RecordChange{{Key: v2.Key, Record: v2}}, Provenance: pv("widen vet")}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.k.Publish(ctx, knowledge.Proposal{Base: p1, Records: []knowledge.RecordChange{{Key: v3.Key, Record: v3}}, Provenance: pv("cancel approvals")}); err != nil {
+	if _, err := a.k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Base: p1, Records: []knowledge.RecordChange{{Key: v3.Key, Record: v3}}, Provenance: pv("cancel approvals")})); err != nil {
 		t.Fatal(err)
 	}
 	a.push(t)
@@ -621,7 +669,8 @@ func TestFetchedEdgesFromImportedHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := a.repo.Publish(ctx, gitcore.Publication{Expected: removed, Author: "alice", Subject: "re-add", Body: "no kernel",
-		Changes: []gitcore.Change{{Path: path, Content: doc}}}); err != nil {
+		Trailers: []gitcore.Trailer{reviewTrailer(t, nil, []knowledge.RecordChange{{Key: v2.Key, Record: v2}})},
+		Changes:  []gitcore.Change{{Path: path, Content: doc}}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.repo.Push(ctx, gitcore.Remote{Name: "team", URL: remote}, none); err != nil {
@@ -667,8 +716,8 @@ func TestActivationIsOptimistic(t *testing.T) {
 		var actErr, pubErr error
 		wg.Go(func() { actErr = r.sync.Activate(ctx, c, decision("operator.r")) })
 		wg.Go(func() {
-			_, pubErr = r.k.Publish(ctx, knowledge.Proposal{Changes: []knowledge.Change{{Key: "team.local", Procedure: knowledgetest.Proc("team.local", "Local")}},
-				Provenance: knowledge.Provenance{Author: "bob", Summary: "local", Rationale: "racing"}})
+			_, pubErr = r.k.Publish(ctx, knowledgetest.WithFullReview(knowledge.Proposal{Changes: []knowledge.Change{{Key: "team.local", Procedure: knowledgetest.Proc("team.local", "Local")}},
+				Provenance: knowledge.Provenance{Author: "bob", Summary: "local", Rationale: "racing"}}))
 		})
 		wg.Wait()
 		if (actErr == nil) == (pubErr == nil) || !errors.Is(errors.Join(actErr, pubErr), knowledge.ErrStale) {

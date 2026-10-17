@@ -121,10 +121,12 @@ func TestCorpusAuthorizationAcceptance(t *testing.T) {
 		if procs == nil {
 			procs = []map[string]any{}
 		}
-		return op(http.MethodPost, "/v1/knowledge/publications", map[string]any{"base": base, "changes": procs, "records": records,
-			"author": "operator.test", "summary": "acceptance", "rationale": "acceptance"})
+		return op(http.MethodPost, "/v2/knowledge/publications", map[string]any{"base": base, "changes": procs, "records": records,
+			"author": "operator.test", "summary": "acceptance", "rationale": "acceptance",
+			"review": fullFieldReviewForPayload(t, procs, records)})
 	}
-	status, pub := publish("", docs(append(knowledgetest.CorpusRecords(), team, cond, domain)...), changes)
+	initialRecords := docs(append(knowledgetest.CorpusRecords(), team, cond, domain)...)
+	status, pub := publish("", initialRecords, changes)
 	if status != http.StatusCreated {
 		t.Fatalf("publish = %d %v", status, pub)
 	}
@@ -290,8 +292,9 @@ func TestCorpusAuthorizationAcceptance(t *testing.T) {
 		t.Fatalf("revise = %d %v", status, res)
 	}
 	expect("revised rule", domainArgs(), "exc.software.vet", "rejected", "approved for revision 1 of rule.go.vet, which is now at revision 2")
-	status, res = op(http.MethodPost, "/v1/knowledge/rollbacks", map[string]any{"base": res["snapshot"], "to": head,
-		"author": "operator.test", "summary": "undo", "rationale": "acceptance"})
+	status, res = op(http.MethodPost, "/v2/knowledge/rollbacks", map[string]any{"base": res["snapshot"], "to": head,
+		"author": "operator.test", "summary": "undo", "rationale": "acceptance",
+		"review": fullFieldReviewForPayload(t, changes, initialRecords)})
 	if status != http.StatusCreated {
 		t.Fatalf("rollback = %d %v", status, res)
 	}
