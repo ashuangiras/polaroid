@@ -217,6 +217,24 @@ Since [ADR-0062](decisions/0062-field-complete-knowledge-publication.md), the fr
 
 An unknown or incompatible `record_type`, key/type mismatch, missing citation, disallowed operation or invalid field value is `invalid_request`; unknown/expired/closed draft tokens are `not_found`; a concurrent advance rejected against a stale event count is `draft_conflict` (peek and retry); stale pinned snapshots conflict rather than merging. The final publish result returns the new snapshot and key.
 
+## Agent mode v7 (`/mcp/agent/v7`)
+
+**Implemented by [ADR-0063](decisions/0063-dynamic-walkthrough-children.md).** V7 has the v6 tools and their contracts, plus a versioned `start` shape and `attach_child`. `/mcp/agent/v1` through `/mcp/agent/v6` remain unchanged.
+
+| Tool | Read-only | Arguments | Result |
+| --- | --- | --- | --- |
+| `start` | no | `goal`; `snapshot`, `repository`, `context`, `allow_dynamic_children`, `expand` and `assertions` optional | `{token, snapshot, plan, status, resolution}` |
+| `attach_child` | no | `token`, `key` | The updated `{token, snapshot, plan, status, resolution}` for the parent walkthrough |
+| `advance` | no | `token`; optional `outcome` (`{key or path, status, reason, note}`), `context`, `close`, `expand` and `assertions`, with the same shapes and semantics as v6 | Same as v6 |
+
+`start` accepts `snapshot` to pin the exact state returned by an earlier `discover`/`read`; if omitted, it pins the active snapshot. With `allow_dynamic_children: true`, `goal` must be a Procedure applicable to the supplied repository. A parent with no selected child starts `in_progress`, even if it has no static `composes` steps, and waits for `attach_child`.
+
+`attach_child` adds one Procedure that exists and applies to the repository in the parent's pinned snapshot. Its composed subtree must not overlap any node already in the plan, so leaves remain unambiguous by path. It is runtime walkthrough state only: it does not write a `composes` relationship or publish knowledge. Use it after discovering and reading the candidate. It can be called again at any point while the token is open, including when the previous result said `complete`; a new child reopens the parent. An unknown key (including one published after the pinned snapshot) is `not_found`; a non-Procedure, duplicate/overlapping, self-referential or cycle-forming attachment is `invalid_request`; and an inapplicable Procedure is `not_applicable`. Attaching to a static walkthrough is `invalid_request`. Start a new parent at a newer snapshot to use later-published knowledge.
+
+The returned plan combines the goal's catalog `composes` steps with runtime-attached children, using the existing `precedes` ordering and deterministic key tie-break. Nested `composes` inside a selected child remain ordinary plan descendants and are advanced by their full `path`. A dynamic parent becomes `complete` only after at least one dynamic child has been attached and every leaf in the combined plan is `done` or `skipped`. `escalate`, `blocked`, or any outstanding leaf keeps it `in_progress`; attaching another child reopens a completed but unclosed walk. `close` and TTL expiry still end the walkthrough, after which later calls are `not_found`.
+
+V7's agent instructions describe this sequence: discover/read the root, start it in dynamic-child mode at that snapshot, discover/read the task candidate, attach it, execute its guidance with normal tools, and `advance` its leaves. When more applicable task procedures are found during the work, attach them to the same open parent.
+
 ## Resources
 
 All resources are read-only and returned as `application/json`, with the same body as the matching tool.

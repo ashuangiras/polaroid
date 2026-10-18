@@ -265,6 +265,36 @@ func newKnowledgeHarnessV6(t *testing.T) *knowledgeHarness {
 	return &knowledgeHarness{harness: h, kernel: kernel}
 }
 
+func newKnowledgeHarnessV7(t *testing.T) *knowledgeHarness {
+	t.Helper()
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "polaroid.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	repo, err := gitcore.Open(filepath.Join(t.TempDir(), "knowledge"), gitcore.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sem, err := semantic.New(semantic.DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := datalog.Evaluator{}
+	kernel := knowledge.New(gitstore.New(repo), knowledge.WithRecordValidator(sem), knowledge.WithRecordValidator(reasoning.RuleValidator{Evaluator: ev}))
+	agent := knowledgeops.NewAgent(kernel, memory.NewService(store))
+	resolver := knowledgeops.NewResolver(kernel, ev, policy.Trust{})
+	guide := knowledgeops.NewGuide(kernel, memory.NewWalkthroughs(store), ev, policy.Trust{})
+	drafter := knowledgeops.NewFieldDrafter(kernel, knowledgeops.NewProposer(kernel, ev, policy.Trust{}), memory.NewFieldDrafts(store))
+	logs := &syncBuffer{}
+	srv := httptest.NewServer(mcptransport.NewAgentHandlerV7(agent, resolver, guide, drafter, slog.New(slog.NewTextHandler(logs, nil))))
+	t.Cleanup(srv.Close)
+	h := &harness{url: srv.URL, store: store, logs: logs}
+	h.session = h.connect(t, "")
+	return &knowledgeHarness{harness: h, kernel: kernel}
+}
+
 func decodeJSON(t *testing.T, text string) map[string]any {
 	t.Helper()
 	var m map[string]any
@@ -272,6 +302,20 @@ func decodeJSON(t *testing.T, text string) map[string]any {
 		t.Fatalf("%v: %s", err, text)
 	}
 	return m
+}
+
+func hasCandidate(discovery map[string]any, key string) bool {
+	candidates, ok := discovery["candidates"].([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range candidates {
+		candidate, ok := item.(map[string]any)
+		if ok && candidate["key"] == key {
+			return true
+		}
+	}
+	return false
 }
 
 func TestAgentModeAdvertisesOnlyItsTools(t *testing.T) {
@@ -529,6 +573,39 @@ func planFixture(t *testing.T, agent *knowledgeHarness) knowledge.Snapshot {
 		t.Fatal(err)
 	}
 	return s
+}
+
+func dynamicWalkthroughFixture(t *testing.T, agent *knowledgeHarness) knowledge.Snapshot {
+	t.Helper()
+	local := knowledgetest.SharedProc("dynamic.local", "A procedure local to another repository.")
+	local.Applicability = knowledge.Applicability{Scope: knowledge.ScopeLocal, Repository: "github.com/other/app"}
+	procs := []*knowledge.Procedure{
+		knowledgetest.SharedProc("polaroid.using", "Use Polaroid knowledge for repository work."),
+		knowledgetest.SharedProc("gate.check.test", "Run this module's Go tests."),
+		knowledgetest.SharedProc("gate.check.test.cached", "Run the cache-enabled test packages."),
+		knowledgetest.SharedProc("gate.check.test.fresh", "Run the always-fresh test packages."),
+		knowledgetest.SharedProc("dynamic.late", "A later task-specific child."),
+		knowledgetest.SharedProc("dynamic.cycle", "A child whose static composition reaches its parent."),
+		local,
+	}
+	records := []*knowledge.Record{
+		{Type: knowledge.TypeConcept, Key: "concept.repository-task-context", Label: "Repository task context", Definition: "An identified task and its repository context."},
+		{Type: knowledge.TypeConcept, Key: "dynamic.test-obligation", Label: "Test obligation", Definition: "The test workflow has an explicit obligation."},
+		{Type: knowledge.TypeConcept, Key: "dynamic.local-obligation", Label: "Local obligation", Definition: "A local procedure requirement."},
+		{Type: knowledge.TypeConcept, Key: "dynamic.not-procedure", Label: "Not a Procedure", Definition: "This record cannot be attached as a Procedure child."},
+		{Type: knowledge.TypeProcedure, Key: "polaroid.using", Label: "Using Polaroid", Definition: "Guide an agent through the Polaroid knowledge workflow.", Preconditions: []string{"concept.repository-task-context"}},
+		{Type: knowledge.TypeProcedure, Key: "gate.check.test", Label: "Go tests", Definition: "Run the test procedure.", Requires: []string{"dynamic.test-obligation"}, Composes: []string{"gate.check.test.cached", "gate.check.test.fresh"}},
+		{Type: knowledge.TypeProcedure, Key: "gate.check.test.cached", Label: "Cached test set", Definition: "Run the cache-enabled packages.", Requires: []string{"dynamic.test-obligation"}, Precedes: []string{"gate.check.test.fresh"}},
+		{Type: knowledge.TypeProcedure, Key: "gate.check.test.fresh", Label: "Fresh test set", Definition: "Run the always-fresh packages.", Requires: []string{"dynamic.test-obligation"}},
+		{Type: knowledge.TypeProcedure, Key: "dynamic.late", Label: "Late child", Definition: "A child attached after the parent starts.", Requires: []string{"dynamic.test-obligation"}},
+		{Type: knowledge.TypeProcedure, Key: "dynamic.cycle", Label: "Cycle child", Definition: "Its static child is the dynamic parent.", Requires: []string{"dynamic.test-obligation"}, Composes: []string{"polaroid.using"}},
+		{Type: knowledge.TypeProcedure, Key: "dynamic.local", Label: "Other repository only", Definition: "A procedure outside this repository.", Requires: []string{"dynamic.local-obligation"}},
+	}
+	snapshot, err := agent.publishRecords(t, procs, records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
 }
 
 func TestResolvePlanOrderedByPrecedes(t *testing.T) {
@@ -911,6 +988,168 @@ func TestWalkthroughStartPinsSnapshotAndReturnsPlan(t *testing.T) {
 	peek := decodeJSON(t, agent.ok(t, "advance", `{"token":"`+token+`"}`))
 	if peek["snapshot"] != string(snap) {
 		t.Fatalf("advance after a later publish must keep the pinned snapshot: %v, want %s", peek["snapshot"], snap)
+	}
+}
+
+func TestAgentV7DynamicChildCompletesAndCanReopenParentFlow(t *testing.T) {
+	agent := newKnowledgeHarnessV7(t)
+	snapshot := dynamicWalkthroughFixture(t, agent)
+	const repository = "github.com/ashuangiras/polaroid"
+
+	rootDiscovery := decodeJSON(t, agent.ok(t, "discover", `{"task":"polaroid.using: run Go tests","repository":"`+repository+`"}`))
+	if !hasCandidate(rootDiscovery, "polaroid.using") {
+		t.Fatalf("root was not discovered: %v", rootDiscovery)
+	}
+	root := decodeJSON(t, agent.ok(t, "read", `{"key":"polaroid.using","repository":"`+repository+`","snapshot":"`+string(snapshot)+`"}`))
+	if root["scope"] != "shared" {
+		t.Fatalf("root scope = %v, want shared", root["scope"])
+	}
+	resolvedRoot := decodeJSON(t, agent.ok(t, "resolve", `{"goal":"polaroid.using","snapshot":"`+string(snapshot)+`","context":{"repository":"`+repository+`"}}`))
+	if resolvedRoot["complete"] != true {
+		t.Fatalf("root resolution = %v", resolvedRoot)
+	}
+
+	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"polaroid.using","snapshot":"`+string(snapshot)+`","repository":"`+repository+`","allow_dynamic_children":true,"context":{"task":"run Go tests"}}`))
+	if start["status"] != "in_progress" {
+		t.Fatalf("dynamic parent without a child = %v, want in_progress", start)
+	}
+	if plan, ok := start["plan"].([]any); ok && len(plan) != 0 {
+		t.Fatalf("dynamic parent unexpectedly has plan steps before a child is attached: %v", plan)
+	}
+	token := start["token"].(string)
+
+	childDiscovery := decodeJSON(t, agent.ok(t, "discover", `{"task":"Run this module's Go tests, including cached and always-fresh packages","repository":"`+repository+`","snapshot":"`+string(snapshot)+`"}`))
+	if !hasCandidate(childDiscovery, "gate.check.test") {
+		t.Fatalf("test procedure was not discovered: %v", childDiscovery)
+	}
+	child := decodeJSON(t, agent.ok(t, "read", `{"key":"gate.check.test","repository":"`+repository+`","snapshot":"`+string(snapshot)+`","full":true}`))
+	if child["key"] != "gate.check.test" {
+		t.Fatalf("child guidance = %v", child)
+	}
+
+	attached := decodeJSON(t, agent.ok(t, "attach_child", `{"token":"`+token+`","key":"gate.check.test"}`))
+	plan := attached["plan"].([]any)
+	rootStep := plan[0].(map[string]any)
+	if rootStep["key"] != "gate.check.test" || rootStep["status"] != "next" {
+		t.Fatalf("attached child plan = %v", plan)
+	}
+	path := rootStep["path"].([]any)
+	if len(path) != 2 || path[0] != "gate.check.test" || path[1] != "gate.check.test.cached" {
+		t.Fatalf("first child path = %v, want [gate.check.test gate.check.test.cached]", path)
+	}
+	agent.fail(t, "attach_child", `{"token":"`+token+`","key":"gate.check.test.cached"}`, "invalid_request")
+	unchanged := decodeJSON(t, agent.ok(t, "advance", `{"token":"`+token+`"}`))
+	if plan := unchanged["plan"].([]any); len(plan) != 1 || plan[0].(map[string]any)["key"] != "gate.check.test" {
+		t.Fatalf("attaching an already nested step changed the parent plan: %v", plan)
+	}
+
+	first := decodeJSON(t, agent.ok(t, "advance", `{"token":"`+token+`","outcome":{"path":["gate.check.test","gate.check.test.cached"],"status":"done"}}`))
+	if first["status"] != "in_progress" {
+		t.Fatalf("parent status after first nested step = %v, want in_progress", first)
+	}
+	next := first["plan"].([]any)[0].(map[string]any)["path"].([]any)
+	if len(next) != 2 || next[1] != "gate.check.test.fresh" {
+		t.Fatalf("next child path = %v, want fresh test step", next)
+	}
+	completed := decodeJSON(t, agent.ok(t, "advance", `{"token":"`+token+`","outcome":{"path":["gate.check.test","gate.check.test.fresh"],"status":"done"}}`))
+	if completed["status"] != "complete" {
+		t.Fatalf("parent after all child steps = %v, want complete", completed)
+	}
+
+	reopened := decodeJSON(t, agent.ok(t, "attach_child", `{"token":"`+token+`","key":"dynamic.late"}`))
+	if reopened["status"] != "in_progress" {
+		t.Fatalf("attaching after complete did not reopen parent: %v", reopened)
+	}
+	latePlan := reopened["plan"].([]any)
+	var late map[string]any
+	for _, item := range latePlan {
+		entry := item.(map[string]any)
+		if entry["key"] == "dynamic.late" {
+			late = entry
+		}
+	}
+	if late == nil || late["status"] != "next" {
+		t.Fatalf("late child plan = %v", latePlan)
+	}
+	final := decodeJSON(t, agent.ok(t, "advance", `{"token":"`+token+`","outcome":{"key":"dynamic.late","status":"done"}}`))
+	if final["status"] != "complete" {
+		t.Fatalf("parent after late child = %v, want complete", final)
+	}
+	closed := decodeJSON(t, agent.ok(t, "advance", `{"token":"`+token+`","close":true}`))
+	if closed["status"] != "complete" {
+		t.Fatalf("closed completed parent = %v", closed)
+	}
+}
+
+func TestAgentV7DynamicChildValidationAndPinnedSnapshot(t *testing.T) {
+	agent := newKnowledgeHarnessV7(t)
+	snapshot := dynamicWalkthroughFixture(t, agent)
+	const repository = "github.com/ashuangiras/polaroid"
+	static := decodeJSON(t, agent.ok(t, "start", `{"goal":"polaroid.using","snapshot":"`+string(snapshot)+`","repository":"`+repository+`"}`))
+	if static["status"] != "complete" {
+		t.Fatalf("ordinary v7 start of a leaf = %v, want complete", static)
+	}
+	agent.fail(t, "attach_child", `{"token":"`+static["token"].(string)+`","key":"dynamic.late"}`, "invalid_request")
+
+	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"polaroid.using","snapshot":"`+string(snapshot)+`","repository":"`+repository+`","allow_dynamic_children":true}`))
+	token := start["token"].(string)
+
+	agent.fail(t, "attach_child", `{"token":"`+token+`","key":"missing.procedure"}`, "not_found")
+	agent.fail(t, "attach_child", `{"token":"`+token+`","key":"dynamic.not-procedure"}`, "invalid_request")
+	agent.fail(t, "attach_child", `{"token":"`+token+`","key":"dynamic.local"}`, "not_applicable")
+	agent.fail(t, "attach_child", `{"token":"`+token+`","key":"dynamic.cycle"}`, "invalid_request")
+
+	agent.ok(t, "attach_child", `{"token":"`+token+`","key":"dynamic.late"}`)
+	agent.fail(t, "attach_child", `{"token":"`+token+`","key":"dynamic.late"}`, "invalid_request")
+
+	later := []*knowledge.Procedure{knowledgetest.SharedProc("dynamic.after-snapshot", "Published after the parent started.")}
+	laterRecords := []*knowledge.Record{{Type: knowledge.TypeProcedure, Key: "dynamic.after-snapshot", Label: "Later", Definition: "Not in the pinned snapshot.", Requires: []string{"dynamic.test-obligation"}}}
+	if _, err := agent.publishRecords(t, later, laterRecords); err != nil {
+		t.Fatal(err)
+	}
+	agent.fail(t, "attach_child", `{"token":"`+token+`","key":"dynamic.after-snapshot"}`, "not_found")
+	agent.ok(t, "advance", `{"token":"`+token+`","close":true}`)
+	agent.fail(t, "attach_child", `{"token":"`+token+`","key":"dynamic.late"}`, "not_found")
+}
+
+func TestAgentV7PreservesV6ToolsAndAdvertisesDynamicAttachment(t *testing.T) {
+	v6, v7 := newKnowledgeHarnessV6(t), newKnowledgeHarnessV7(t)
+	schemas := func(h *knowledgeHarness) map[string]string {
+		t.Helper()
+		out := map[string]string{}
+		for tool, err := range h.session.Tools(context.Background(), nil) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(tool.InputSchema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out[tool.Name] = string(encoded)
+		}
+		return out
+	}
+	v6Schemas, v7Schemas := schemas(v6), schemas(v7)
+	for _, name := range []string{"discover", "read", "feedback", "resolve", "advance", "propose_start", "propose_advance"} {
+		if v6Schemas[name] == "" || v6Schemas[name] != v7Schemas[name] {
+			t.Fatalf("%s schema changed between v6 and v7:\nv6: %s\nv7: %s", name, v6Schemas[name], v7Schemas[name])
+		}
+	}
+	if v6Schemas["attach_child"] != "" || v7Schemas["attach_child"] == "" {
+		t.Fatalf("attach_child schemas v6=%q v7=%q", v6Schemas["attach_child"], v7Schemas["attach_child"])
+	}
+	if strings.Contains(v6Schemas["start"], `"allow_dynamic_children"`) || strings.Contains(v6Schemas["start"], `"snapshot"`) {
+		t.Fatalf("v6 start schema unexpectedly includes v7 arguments: %s", v6Schemas["start"])
+	}
+	if !strings.Contains(v7Schemas["start"], `"allow_dynamic_children"`) || !strings.Contains(v7Schemas["start"], `"snapshot"`) {
+		t.Fatalf("v7 start schema lacks dynamic mode or snapshot: %s", v7Schemas["start"])
+	}
+	if v7Schemas["start"] == v6Schemas["start"] {
+		t.Fatal("v7 start schema must add dynamic-parent arguments without changing v6")
+	}
+	tools := v7.ok(t, "discover", `{"kind":"tools"}`)
+	if !strings.Contains(tools, `"attach_child"`) {
+		t.Fatalf("v7 discover(kind=tools) does not advertise attach_child: %s", tools)
 	}
 }
 

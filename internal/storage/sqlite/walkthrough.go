@@ -4,30 +4,47 @@ import (
 	"context"
 	"database/sql"
 	json "encoding/json/v2"
+	"errors"
 	"fmt"
+
+	sqlitelib "modernc.org/sqlite/lib"
 
 	"github.com/ashuangiras/polaroid/internal/memory"
 )
 
 // walkthroughColumns is shared by WalkthroughEvents and
 // AllWalkthroughEvents, which scan the same row shape.
-const walkthroughColumns = "token, goal, snapshot, repository, outcome_key, outcome_status, reason, note, context, created_at"
+const walkthroughColumns = "token, goal, snapshot, repository, outcome_key, outcome_status, reason, note, context, created_at, allow_dynamic_children, dynamic_child_key"
 
-// AppendWalkthroughEvent implements memory.WalkthroughStore. Unlike every
-// other write in this package, it needs no existence or conflict check:
-// Walkthroughs.Advance already read the token's events first and decides
-// whether to proceed.
+// AppendWalkthroughEvent implements memory.WalkthroughStore. Advance and
+// AttachChild read the token's events before appending; dynamic-child
+// writes also recheck parent mode and per-token uniqueness in this
+// transaction so concurrent attachments cannot duplicate a child.
 func (s *Store) AppendWalkthroughEvent(ctx context.Context, ev memory.WalkthroughEvent) error {
+	if ev.DynamicChild != "" && (ev.Goal != "" || ev.Outcome != nil || ev.AllowDynamicChildren) {
+		return memory.ErrInvalidDynamicChild
+	}
+	if ev.AllowDynamicChildren && ev.Goal == "" {
+		return memory.ErrInvalidDynamicChild
+	}
 	ctxJSON, err := encodeWalkthroughContext(ev.Context)
 	if err != nil {
 		return err
 	}
 	var goal, snapshot, repository, outcomeKey, outcomeStatus, reason, note any
+	var dynamicMode int
+	var dynamicChild any
 	if ev.Goal != "" {
 		goal, snapshot = ev.Goal, ev.Snapshot
+		if ev.AllowDynamicChildren {
+			dynamicMode = 1
+		}
 		if ev.Repository != "" {
 			repository = ev.Repository
 		}
+	}
+	if ev.DynamicChild != "" {
+		dynamicChild = ev.DynamicChild
 	}
 	if ev.Outcome != nil {
 		outcomeKey, outcomeStatus = ev.Outcome.Key, string(ev.Outcome.Status)
@@ -39,11 +56,29 @@ func (s *Store) AppendWalkthroughEvent(ctx context.Context, ev memory.Walkthroug
 		}
 	}
 	return s.write(ctx, func(tx *sql.Tx) error {
+		if ev.DynamicChild != "" {
+			var enabled int
+			err := tx.QueryRowContext(ctx, `SELECT allow_dynamic_children FROM walkthrough_events
+				WHERE token = ? AND goal IS NOT NULL ORDER BY id LIMIT 1`, ev.Token).Scan(&enabled)
+			if errors.Is(err, sql.ErrNoRows) {
+				return memory.ErrNotFound
+			}
+			if err != nil {
+				return fmt.Errorf("read dynamic walkthrough parent: %w", err)
+			}
+			if enabled != 1 {
+				return memory.ErrDynamicChildrenDisabled
+			}
+		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO walkthrough_events
-			(token, goal, snapshot, repository, outcome_key, outcome_status, reason, note, context, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			ev.Token, goal, snapshot, repository, outcomeKey, outcomeStatus, reason, note, ctxJSON, formatTime(ev.CreatedAt))
+			(token, goal, snapshot, repository, outcome_key, outcome_status, reason, note, context, created_at, allow_dynamic_children, dynamic_child_key)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			ev.Token, goal, snapshot, repository, outcomeKey, outcomeStatus, reason, note, ctxJSON,
+			formatTime(ev.CreatedAt), dynamicMode, dynamicChild)
 		if err != nil {
+			if ev.DynamicChild != "" && resultCode(err) == sqlitelib.SQLITE_CONSTRAINT_UNIQUE {
+				return memory.ErrDynamicChildExists
+			}
 			return fmt.Errorf("insert walkthrough event: %w", err)
 		}
 		return nil
@@ -56,11 +91,16 @@ func (s *Store) AppendWalkthroughEvent(ctx context.Context, ev memory.Walkthroug
 func scanWalkthroughEvent(rows *sql.Rows) (memory.WalkthroughEvent, error) {
 	var token string
 	var goal, snapshot, repository, outcomeKey, outcomeStatus, reason, note sql.NullString
+	var dynamicMode int
+	var dynamicChild sql.NullString
 	var ctxJSON, created string
-	if err := rows.Scan(&token, &goal, &snapshot, &repository, &outcomeKey, &outcomeStatus, &reason, &note, &ctxJSON, &created); err != nil {
+	if err := rows.Scan(&token, &goal, &snapshot, &repository, &outcomeKey, &outcomeStatus, &reason, &note, &ctxJSON, &created, &dynamicMode, &dynamicChild); err != nil {
 		return memory.WalkthroughEvent{}, fmt.Errorf("scan walkthrough event: %w", err)
 	}
-	ev := memory.WalkthroughEvent{Token: token, Goal: goal.String, Snapshot: snapshot.String, Repository: repository.String}
+	ev := memory.WalkthroughEvent{
+		Token: token, Goal: goal.String, Snapshot: snapshot.String, Repository: repository.String,
+		AllowDynamicChildren: dynamicMode == 1, DynamicChild: dynamicChild.String,
+	}
 	if outcomeKey.Valid {
 		ev.Outcome = &memory.WalkthroughOutcome{Key: outcomeKey.String, Status: memory.WalkthroughOutcomeStatus(outcomeStatus.String), Reason: reason.String, Note: note.String}
 	}

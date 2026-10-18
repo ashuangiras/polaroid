@@ -6,6 +6,7 @@ import (
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -272,6 +273,77 @@ func TestOpenRefusesNewerSchema(t *testing.T) {
 		t.Fatal("Open accepted a database with a newer schema")
 	} else if !strings.Contains(err.Error(), "newer than this build supports") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestMigration16AddsDynamicWalkthroughState(t *testing.T) {
+	ctx := context.Background()
+	path := dbPath(t)
+	raw, err := sql.Open("sqlite", path+"?_foreign_keys=on")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := filepath.Glob("migrations/*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied := 0
+	for _, name := range files {
+		if strings.HasPrefix(filepath.Base(name), "0016_") {
+			break
+		}
+		content, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := raw.ExecContext(ctx, string(content)); err != nil {
+			t.Fatalf("apply %s: %v", name, err)
+		}
+		applied++
+	}
+	if applied != 15 {
+		t.Fatalf("applied migrations = %d, want 15", applied)
+	}
+	if _, err := raw.ExecContext(ctx, `PRAGMA user_version = 15`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(ctx, `INSERT INTO walkthrough_events
+		(token, goal, snapshot, repository, context, created_at)
+		VALUES ('old-token', 'old.root', 'old-snapshot', 'github.com/a/b', '{}', '2026-10-18T00:00:00.000000000Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store := openStore(t, path)
+	old, err := store.WalkthroughEvents(ctx, "old-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(old) != 1 || old[0].AllowDynamicChildren || old[0].DynamicChild != "" {
+		t.Fatalf("pre-migration walkthrough = %+v", old)
+	}
+	walkthroughs := memory.NewWalkthroughs(store)
+	dynamic, err := walkthroughs.StartWithDynamicChildren(ctx, "new.root", "new-snapshot", "github.com/a/b", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dynamic, err = walkthroughs.AttachChild(ctx, dynamic.Token, "new.child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened := openStore(t, path)
+	got, err := memory.NewWalkthroughs(reopened).State(ctx, dynamic.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.AllowDynamicChildren || len(got.DynamicChildren) != 1 || got.DynamicChildren[0] != "new.child" {
+		t.Fatalf("reopened dynamic walkthrough = %+v", got)
 	}
 }
 

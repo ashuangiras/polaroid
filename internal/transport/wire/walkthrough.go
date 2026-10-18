@@ -22,6 +22,25 @@ type WalkthroughStartRequest struct {
 	Assertions []KnowledgeAssertion `json:"assertions,omitzero" jsonschema:"signed context assertions, the same meaning as resolve's: establish trusted context for this call's own resolution only (ADR-0058), never stored or inherited by a later advance"`
 }
 
+// WalkthroughStartRequestV7 starts a v7 walkthrough, optionally allowing
+// task-specific Procedure children to be attached at runtime.
+type WalkthroughStartRequestV7 struct {
+	Goal                 string               `json:"goal" jsonschema:"the key of the procedure to walk through"`
+	Snapshot             string               `json:"snapshot,omitzero" jsonschema:"the snapshot returned by discover/read; omit to pin the active snapshot"`
+	Repository           string               `json:"repository,omitzero" jsonschema:"your repository identifier; stored with the walkthrough, not checked against anything"`
+	Context              map[string]string    `json:"context,omitzero" jsonschema:"facts about your situation as name and value strings; stored with the walkthrough"`
+	AllowDynamicChildren bool                 `json:"allow_dynamic_children,omitzero" jsonschema:"keep the parent walkthrough in progress while it accepts task-specific Procedure children via attach_child; selected children are runtime-only and do not alter the corpus"`
+	Expand               bool                 `json:"expand,omitzero" jsonschema:"include the whole nested plan tree (ADR-0056) instead of discovering depth one leaf at a time"`
+	Assertions           []KnowledgeAssertion `json:"assertions,omitzero" jsonschema:"signed context assertions, the same call-scoped meaning as resolve's"`
+}
+
+// WalkthroughAttachChildRequest attaches one dynamically discovered
+// Procedure to an open v7 parent walkthrough.
+type WalkthroughAttachChildRequest struct {
+	Token string `json:"token" jsonschema:"the v7 walkthrough token"`
+	Key   string `json:"key" jsonschema:"a Procedure key visible at the walkthrough's pinned snapshot"`
+}
+
 // WalkthroughOutcomeArg is one leaf's reported outcome, given to advance:
 // exactly one of Key or Path is required (ADR-0054). Key is shorthand
 // for a one-element Path, for a leaf that is one of the goal's immediate

@@ -182,6 +182,7 @@ func TestWalkthroughsAgainstRealStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	st, err = w.Advance(ctx, st.Token, &memory.WalkthroughOutcome{Key: "step.a", Status: memory.WalkthroughDone}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -199,6 +200,44 @@ func TestWalkthroughsAgainstRealStore(t *testing.T) {
 	}
 	if _, err := w.State(ctx, st.Token); !errors.Is(err, memory.ErrNotFound) {
 		t.Fatalf("a closed token must be ErrNotFound on any later call, got %v", err)
+	}
+}
+
+func TestDynamicWalkthroughChildrenPersistAcrossRestart(t *testing.T) {
+	path := dbPath(t)
+	store := openStore(t, path)
+	ctx := context.Background()
+	walkthroughs := memory.NewWalkthroughs(store)
+
+	state, err := walkthroughs.StartWithDynamicChildren(ctx, "root", "snap1", "github.com/a/b", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = walkthroughs.AttachChild(ctx, state.Token, "child.first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.AllowDynamicChildren || len(state.DynamicChildren) != 1 || state.DynamicChildren[0] != "child.first" {
+		t.Fatalf("attached state = %+v", state)
+	}
+
+	duplicate := memory.WalkthroughEvent{
+		Token: state.Token, DynamicChild: "child.first", CreatedAt: created.Add(time.Minute),
+	}
+	if err := store.AppendWalkthroughEvent(ctx, duplicate); !errors.Is(err, memory.ErrDynamicChildExists) {
+		t.Fatalf("duplicate dynamic child error = %v, want ErrDynamicChildExists", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened := openStore(t, path)
+	got, err := memory.NewWalkthroughs(reopened).State(ctx, state.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.AllowDynamicChildren || len(got.DynamicChildren) != 1 || got.DynamicChildren[0] != "child.first" {
+		t.Fatalf("reopened state = %+v", got)
 	}
 }
 

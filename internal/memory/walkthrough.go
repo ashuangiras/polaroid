@@ -40,6 +40,12 @@ func validWalkthroughStatus(s WalkthroughOutcomeStatus) bool {
 // is not one of done, skipped, escalate or blocked.
 var ErrInvalidOutcome = errors.New("invalid outcome")
 
+var (
+	ErrDynamicChildrenDisabled = errors.New("walkthrough does not accept dynamic children")
+	ErrDynamicChildExists      = errors.New("dynamic child is already attached")
+	ErrInvalidDynamicChild     = errors.New("invalid dynamic child")
+)
+
 // WalkthroughOutcome is one leaf's reported outcome, given to Advance.
 // Reason is free text specific to a blocked report (ADR-0056, for example
 // "precondition check.vet's required tool is not installed"), though
@@ -52,39 +58,43 @@ type WalkthroughOutcome struct {
 }
 
 // WalkthroughEvent is one row of a walkthrough's append-only event log:
-// either the creating event (Goal and Snapshot set; Outcome nil) or a
-// later event (Outcome set when an outcome was reported; nil for a pure
-// peek). Context is whatever facts were given with this event, if any.
+// either the creating event (Goal and Snapshot set) or a later event
+// recording an outcome, a dynamic child, or a pure peek. Context is
+// whatever facts were given with this event, if any.
 type WalkthroughEvent struct {
-	Token      string
-	Goal       string
-	Snapshot   string
-	Repository string
-	Outcome    *WalkthroughOutcome
-	Context    map[string]string
-	CreatedAt  time.Time
+	Token                string
+	Goal                 string
+	Snapshot             string
+	Repository           string
+	AllowDynamicChildren bool
+	DynamicChild         string
+	Outcome              *WalkthroughOutcome
+	Context              map[string]string
+	CreatedAt            time.Time
 }
 
 // WalkthroughState is a token's current, folded state (ADR-0053): Goal,
-// Snapshot and Repository from its creating event; Statuses from the
-// outcome last reported per key (a later report for the same key
-// overrides an earlier one: a fold, not a union, and not "latest row
-// wins" the way other append-only tables in this package work); Reasons
-// and Notes folded the same way, by key (ADR-0056); Context folded the
-// same way, by name; CreatedAt is the creating event's own time, used to
-// order an operator's list_walkthroughs; ExpiresAt is the latest event's
-// time plus the TTL.
+// Snapshot, Repository and dynamic-child mode from its creating event;
+// DynamicChildren in attachment order; Statuses from the outcome last
+// reported per key (a later report for the same key overrides an earlier
+// one: a fold, not a union, and not "latest row wins" the way other
+// append-only tables in this package work); Reasons and Notes folded the
+// same way, by key (ADR-0056); Context folded the same way, by name;
+// CreatedAt is the creating event's own time, used to order an operator's
+// list_walkthroughs; ExpiresAt is the latest event's time plus the TTL.
 type WalkthroughState struct {
-	Token      string
-	Goal       string
-	Snapshot   string
-	Repository string
-	Statuses   map[string]WalkthroughOutcomeStatus
-	Reasons    map[string]string
-	Notes      map[string]string
-	Context    map[string]string
-	CreatedAt  time.Time
-	ExpiresAt  time.Time
+	Token                string
+	Goal                 string
+	Snapshot             string
+	Repository           string
+	AllowDynamicChildren bool
+	DynamicChildren      []string
+	Statuses             map[string]WalkthroughOutcomeStatus
+	Reasons              map[string]string
+	Notes                map[string]string
+	Context              map[string]string
+	CreatedAt            time.Time
+	ExpiresAt            time.Time
 }
 
 // WalkthroughActive, WalkthroughBlockedList and WalkthroughEscalated are
@@ -181,11 +191,48 @@ func NewWalkthroughs(store WalkthroughStore) *Walkthroughs {
 // this package uses), and returns its initial state: no outcomes
 // reported yet.
 func (w *Walkthroughs) Start(ctx context.Context, goal, snapshot, repository string, context_ map[string]string) (WalkthroughState, error) {
-	ev := WalkthroughEvent{Token: uuid.NewV7().String(), Goal: goal, Snapshot: snapshot, Repository: repository, Context: context_, CreatedAt: w.now()}
+	return w.start(ctx, goal, snapshot, repository, context_, false)
+}
+
+// StartWithDynamicChildren creates a walkthrough that may receive runtime
+// child procedures after it starts (ADR-0063).
+func (w *Walkthroughs) StartWithDynamicChildren(ctx context.Context, goal, snapshot, repository string, context_ map[string]string) (WalkthroughState, error) {
+	return w.start(ctx, goal, snapshot, repository, context_, true)
+}
+
+func (w *Walkthroughs) start(ctx context.Context, goal, snapshot, repository string, context_ map[string]string, allowDynamicChildren bool) (WalkthroughState, error) {
+	ev := WalkthroughEvent{
+		Token: uuid.NewV7().String(), Goal: goal, Snapshot: snapshot, Repository: repository,
+		AllowDynamicChildren: allowDynamicChildren, Context: context_, CreatedAt: w.now(),
+	}
 	if err := w.store.AppendWalkthroughEvent(ctx, ev); err != nil {
 		return WalkthroughState{}, err
 	}
 	return foldWalkthrough([]WalkthroughEvent{ev}, w.ttl), nil
+}
+
+// AttachChild adds one runtime-selected Procedure to an open dynamic
+// walkthrough. Knowledgeops validates the child against the pinned catalog;
+// this layer owns only the per-token append-only state.
+func (w *Walkthroughs) AttachChild(ctx context.Context, token, key string) (WalkthroughState, error) {
+	if key == "" {
+		return WalkthroughState{}, ErrInvalidDynamicChild
+	}
+	events, state, err := w.loadState(ctx, token)
+	if err != nil {
+		return WalkthroughState{}, err
+	}
+	if !state.AllowDynamicChildren {
+		return WalkthroughState{}, ErrDynamicChildrenDisabled
+	}
+	if slices.Contains(state.DynamicChildren, key) {
+		return WalkthroughState{}, ErrDynamicChildExists
+	}
+	ev := WalkthroughEvent{Token: token, DynamicChild: key, CreatedAt: w.now()}
+	if err := w.store.AppendWalkthroughEvent(ctx, ev); err != nil {
+		return WalkthroughState{}, err
+	}
+	return foldWalkthrough(append(events, ev), w.ttl), nil
 }
 
 // State returns token's current, folded state, without appending an
@@ -252,15 +299,20 @@ func (w *Walkthroughs) loadState(ctx context.Context, token string) ([]Walkthrou
 }
 
 // foldWalkthrough derives a WalkthroughState from a token's complete
-// event log, oldest first: Goal/Snapshot/Repository from the creating
-// event, Statuses and Context folded per key (the latest event naming a
-// key decides its current value), ExpiresAt from the latest event's time.
+// event log, oldest first: Goal/Snapshot/Repository and dynamic-child
+// mode from the creating event; DynamicChildren in attachment order;
+// Statuses, Reasons and Notes folded per key; Context folded per name;
+// ExpiresAt from the latest event's time.
 func foldWalkthrough(events []WalkthroughEvent, ttl time.Duration) WalkthroughState {
 	st := WalkthroughState{Statuses: map[string]WalkthroughOutcomeStatus{}, Reasons: map[string]string{}, Notes: map[string]string{}, Context: map[string]string{}}
 	for _, ev := range events {
 		if ev.Goal != "" {
 			st.Token, st.Goal, st.Snapshot, st.Repository = ev.Token, ev.Goal, ev.Snapshot, ev.Repository
+			st.AllowDynamicChildren = ev.AllowDynamicChildren
 			st.CreatedAt = ev.CreatedAt
+		}
+		if ev.DynamicChild != "" {
+			st.DynamicChildren = append(st.DynamicChildren, ev.DynamicChild)
 		}
 		if ev.Outcome != nil {
 			st.Statuses[ev.Outcome.Key] = ev.Outcome.Status

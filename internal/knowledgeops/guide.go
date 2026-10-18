@@ -50,6 +50,52 @@ func NewGuide(kernel *knowledge.Kernel, walkthroughs *memory.Walkthroughs, ev re
 	return &Guide{kernel: kernel, walkthroughs: walkthroughs, ev: ev, trust: trust, now: time.Now}
 }
 
+// StartV7 starts a walkthrough that may accept dynamically discovered
+// Procedure children, pinned at the supplied snapshot or the active one.
+func (g *Guide) StartV7(ctx context.Context, in wire.WalkthroughStartRequestV7) (wire.WalkthroughResult, error) {
+	if in.Goal == "" {
+		return wire.WalkthroughResult{}, requiredField("goal")
+	}
+	cat, err := g.catalogAt(ctx, in.Snapshot)
+	if err != nil {
+		return wire.WalkthroughResult{}, classify(err)
+	}
+	goal, err := cat.Record(in.Goal)
+	if err != nil {
+		return wire.WalkthroughResult{}, classify(err)
+	}
+	if in.AllowDynamicChildren {
+		if goal.Type != knowledge.TypeProcedure {
+			return wire.WalkthroughResult{}, invalidField("goal", "must be a Procedure when dynamic children are enabled")
+		}
+		doc, err := cat.Get(in.Goal)
+		if err != nil {
+			return wire.WalkthroughResult{}, classify(err)
+		}
+		if !doc.Applicability.ApplicableIn(in.Repository) {
+			return wire.WalkthroughResult{}, classify(knowledge.ErrNotApplicable)
+		}
+	}
+	plan, err := planFor(cat, goal, noOutcomesYet, in.Expand)
+	if err != nil {
+		return wire.WalkthroughResult{}, classify(err)
+	}
+	var state memory.WalkthroughState
+	if in.AllowDynamicChildren {
+		state, err = g.walkthroughs.StartWithDynamicChildren(ctx, in.Goal, string(cat.Snapshot()), in.Repository, in.Context)
+	} else {
+		state, err = g.walkthroughs.Start(ctx, in.Goal, string(cat.Snapshot()), in.Repository, in.Context)
+	}
+	if err != nil {
+		return wire.WalkthroughResult{}, classify(err)
+	}
+	resolution, err := g.resolveNextLeaf(ctx, cat, plan, state.Context, in.Assertions)
+	if err != nil {
+		return wire.WalkthroughResult{}, err
+	}
+	return newWalkthroughResultForState(state, plan, resolution), nil
+}
+
 // Start resolves in.Goal at the active snapshot, pins it for the new
 // walkthrough's lifetime, and returns {token, snapshot, plan} with
 // nothing reported yet. A goal without composed children is not an
@@ -95,12 +141,26 @@ func (g *Guide) Start(ctx context.Context, in wire.WalkthroughStartRequest) (wir
 // and reflected in the returned result; a later call with the same
 // token is then not_found, the same as an expired one.
 func (g *Guide) Advance(ctx context.Context, in wire.WalkthroughAdvanceRequest) (wire.WalkthroughResult, error) {
+	return g.advance(ctx, in, false)
+}
+
+// AdvanceV7 advances either a static walkthrough or a v7 dynamic-parent
+// walkthrough. Earlier endpoints keep using Advance and cannot operate
+// on tokens created with dynamic children.
+func (g *Guide) AdvanceV7(ctx context.Context, in wire.WalkthroughAdvanceRequest) (wire.WalkthroughResult, error) {
+	return g.advance(ctx, in, true)
+}
+
+func (g *Guide) advance(ctx context.Context, in wire.WalkthroughAdvanceRequest, allowDynamicChildren bool) (wire.WalkthroughResult, error) {
 	if in.Token == "" {
 		return wire.WalkthroughResult{}, requiredField("token")
 	}
 	state, err := g.walkthroughs.State(ctx, in.Token)
 	if err != nil {
 		return wire.WalkthroughResult{}, classify(err)
+	}
+	if state.AllowDynamicChildren && !allowDynamicChildren {
+		return wire.WalkthroughResult{}, invalidField("token", "dynamic-child walkthroughs require /mcp/agent/v7")
 	}
 	cat, err := g.kernel.At(ctx, knowledge.Snapshot(state.Snapshot))
 	if err != nil {
@@ -110,7 +170,8 @@ func (g *Guide) Advance(ctx context.Context, in wire.WalkthroughAdvanceRequest) 
 	if err != nil {
 		return wire.WalkthroughResult{}, classify(err)
 	}
-	outcome, err := decodeWalkthroughOutcome(cat, goal, in.Outcome)
+	walkGoal := withDynamicChildren(goal, state.DynamicChildren)
+	outcome, err := decodeWalkthroughOutcome(cat, walkGoal, in.Outcome)
 	if err != nil {
 		return wire.WalkthroughResult{}, err
 	}
@@ -118,7 +179,8 @@ func (g *Guide) Advance(ctx context.Context, in wire.WalkthroughAdvanceRequest) 
 	if err != nil {
 		return wire.WalkthroughResult{}, classify(err)
 	}
-	plan, err := planFor(cat, goal, leafStatusFrom(state.Statuses), in.Expand)
+	walkGoal = withDynamicChildren(goal, state.DynamicChildren)
+	plan, err := planFor(cat, walkGoal, leafStatusFrom(state.Statuses), in.Expand)
 	if err != nil {
 		return wire.WalkthroughResult{}, classify(err)
 	}
@@ -126,13 +188,149 @@ func (g *Guide) Advance(ctx context.Context, in wire.WalkthroughAdvanceRequest) 
 	if err != nil {
 		return wire.WalkthroughResult{}, err
 	}
-	result := newWalkthroughResult(state, plan, resolution)
+	result := newWalkthroughResultForState(state, plan, resolution)
 	if in.Close {
 		if err := g.walkthroughs.Close(ctx, in.Token); err != nil {
 			return wire.WalkthroughResult{}, classify(err)
 		}
 	}
 	return result, nil
+}
+
+// AttachChild appends a dynamically selected Procedure to an active v7
+// walkthrough and recomputes the parent plan from its pinned snapshot.
+func (g *Guide) AttachChild(ctx context.Context, in wire.WalkthroughAttachChildRequest) (wire.WalkthroughResult, error) {
+	if in.Token == "" {
+		return wire.WalkthroughResult{}, requiredField("token")
+	}
+	if in.Key == "" {
+		return wire.WalkthroughResult{}, requiredField("key")
+	}
+	state, err := g.walkthroughs.State(ctx, in.Token)
+	if err != nil {
+		return wire.WalkthroughResult{}, classify(err)
+	}
+	if !state.AllowDynamicChildren {
+		return wire.WalkthroughResult{}, classify(memory.ErrDynamicChildrenDisabled)
+	}
+	cat, err := g.kernel.At(ctx, knowledge.Snapshot(state.Snapshot))
+	if err != nil {
+		return wire.WalkthroughResult{}, classify(err)
+	}
+	goal, err := cat.Record(state.Goal)
+	if err != nil {
+		return wire.WalkthroughResult{}, classify(err)
+	}
+	child, err := cat.Record(in.Key)
+	if err != nil {
+		return wire.WalkthroughResult{}, classify(err)
+	}
+	if child.Type != knowledge.TypeProcedure {
+		return wire.WalkthroughResult{}, invalidField("key", "must identify a Procedure record")
+	}
+	childDoc, err := cat.Get(in.Key)
+	if err != nil {
+		return wire.WalkthroughResult{}, classify(err)
+	}
+	if !childDoc.Applicability.ApplicableIn(state.Repository) {
+		return wire.WalkthroughResult{}, classify(knowledge.ErrNotApplicable)
+	}
+	cyclic, err := compositionReaches(cat, in.Key, goal.Key, map[string]bool{})
+	if err != nil {
+		return wire.WalkthroughResult{}, classify(err)
+	}
+	if cyclic {
+		return wire.WalkthroughResult{}, invalidField("key", "would create a cycle in the walkthrough plan")
+	}
+	existingKeys, err := composedKeys(cat, withDynamicChildren(goal, state.DynamicChildren))
+	if err != nil {
+		return wire.WalkthroughResult{}, classify(err)
+	}
+	childKeys, err := composedKeys(cat, child)
+	if err != nil {
+		return wire.WalkthroughResult{}, classify(err)
+	}
+	for key := range childKeys {
+		if _, exists := existingKeys[key]; exists {
+			return wire.WalkthroughResult{}, invalidField("key", "would duplicate a Procedure already present in the walkthrough plan")
+		}
+	}
+	state, err = g.walkthroughs.AttachChild(ctx, in.Token, in.Key)
+	if err != nil {
+		return wire.WalkthroughResult{}, classify(err)
+	}
+	walkGoal := withDynamicChildren(goal, state.DynamicChildren)
+	plan, err := planFor(cat, walkGoal, leafStatusFrom(state.Statuses), false)
+	if err != nil {
+		return wire.WalkthroughResult{}, classify(err)
+	}
+	resolution, err := g.resolveNextLeaf(ctx, cat, plan, state.Context, nil)
+	if err != nil {
+		return wire.WalkthroughResult{}, err
+	}
+	return newWalkthroughResultForState(state, plan, resolution), nil
+}
+
+func (g *Guide) catalogAt(ctx context.Context, snapshot string) (*knowledge.Catalog, error) {
+	if snapshot == "" {
+		return g.kernel.Active(ctx)
+	}
+	return g.kernel.At(ctx, knowledge.Snapshot(snapshot))
+}
+
+func withDynamicChildren(goal *knowledge.Record, children []string) *knowledge.Record {
+	if len(children) == 0 {
+		return goal
+	}
+	copy := *goal
+	copy.Composes = append(slices.Clone(goal.Composes), children...)
+	return &copy
+}
+
+func compositionReaches(cat *knowledge.Catalog, from, target string, visited map[string]bool) (bool, error) {
+	if from == target {
+		return true, nil
+	}
+	if visited[from] {
+		return false, nil
+	}
+	visited[from] = true
+	record, err := cat.Record(from)
+	if err != nil {
+		return false, err
+	}
+	for _, child := range record.Composes {
+		reaches, err := compositionReaches(cat, child, target, visited)
+		if err != nil || reaches {
+			return reaches, err
+		}
+	}
+	return false, nil
+}
+
+func composedKeys(cat *knowledge.Catalog, root *knowledge.Record) (map[string]struct{}, error) {
+	keys := make(map[string]struct{})
+	var visit func(*knowledge.Record) error
+	visit = func(record *knowledge.Record) error {
+		if _, visited := keys[record.Key]; visited {
+			return nil
+		}
+		keys[record.Key] = struct{}{}
+		for _, key := range record.Composes {
+			child, err := cat.Record(key)
+			if err != nil {
+				return err
+			}
+			if err := visit(child); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := visit(root); err != nil {
+		return nil, err
+	}
+	return keys, nil
 }
 
 // pathSeparator joins a multi-level outcome's path into a single string,
@@ -239,6 +437,14 @@ func leafStatusFrom(statuses map[string]memory.WalkthroughOutcomeStatus) func([]
 func newWalkthroughResult(st memory.WalkthroughState, plan []reasoning.PlanEntry, resolution *wire.KnowledgeResolution) wire.WalkthroughResult {
 	out := wire.WalkthroughResult{Token: st.Token, Snapshot: st.Snapshot, Status: walkthroughStatus(plan), Resolution: resolution}
 	out.Plan = newPlanEntries(plan)
+	return out
+}
+
+func newWalkthroughResultForState(st memory.WalkthroughState, plan []reasoning.PlanEntry, resolution *wire.KnowledgeResolution) wire.WalkthroughResult {
+	out := newWalkthroughResult(st, plan, resolution)
+	if st.AllowDynamicChildren && len(st.DynamicChildren) == 0 {
+		out.Status = "in_progress"
+	}
 	return out
 }
 

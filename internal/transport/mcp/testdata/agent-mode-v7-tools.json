@@ -1,0 +1,35 @@
+{
+  "start": {
+    "read_only": false,
+    "required": ["goal"],
+    "arguments": {
+      "allow_dynamic_children": "boolean",
+      "assertions": "null|array[object{facts:object,key!:string,reference!:string,repository!:string,signature!:string,valid_from!:string,valid_until!:string}]",
+      "context": "object",
+      "expand": "boolean",
+      "goal": "string",
+      "repository": "string",
+      "snapshot": "string"
+    }
+  },
+  "attach_child": {
+    "read_only": false,
+    "required": ["key", "token"],
+    "arguments": {
+      "key": "string",
+      "token": "string"
+    }
+  },
+  "advance": {
+    "read_only": false,
+    "required": ["token"],
+    "arguments": {
+      "assertions": "null|array[object{facts:object,key!:string,reference!:string,repository!:string,signature!:string,valid_from!:string,valid_until!:string}]",
+      "close": "boolean",
+      "context": "object",
+      "expand": "boolean",
+      "outcome": "null|object{key:string,note:string,path:null|array[string],reason:string,status!:string}",
+      "token": "string"
+    }
+  }
+}

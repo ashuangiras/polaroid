@@ -43,6 +43,12 @@ func classify(err error) error {
 		return wire.NewKnowledgeError(http.StatusNotFound, wire.ErrorDetail{Code: "not_found", Message: err.Error()})
 	case errors.Is(err, memory.ErrInvalidOutcome):
 		return wire.NewKnowledgeError(http.StatusBadRequest, wire.ErrorDetail{Code: "invalid_request", Message: err.Error()})
+	case errors.Is(err, memory.ErrDynamicChildrenDisabled):
+		return invalidField("token", "walkthrough was not started with dynamic children enabled")
+	case errors.Is(err, memory.ErrDynamicChildExists):
+		return invalidField("key", "is already attached to this walkthrough")
+	case errors.Is(err, memory.ErrInvalidDynamicChild):
+		return invalidField("key", "must not be empty")
 	case errors.Is(err, memory.ErrFieldDraftConflict):
 		return wire.NewKnowledgeError(http.StatusConflict, wire.ErrorDetail{
 			Code: "draft_conflict", Message: "the field-review draft changed concurrently; peek its current state before retrying",

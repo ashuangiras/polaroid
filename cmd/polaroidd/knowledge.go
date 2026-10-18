@@ -138,8 +138,9 @@ func loadTrust(path string) (policy.Trust, error) {
 // missing), loads the trust policy at sourcesPath (empty if the file does
 // not exist: no source is contacted), the exception trust material at
 // authoritiesPath (empty if missing), and loads or creates the operator
-// token at tokenPath. walkthroughs backs /mcp/agent/v3's stateful start
-// and advance (ADR-0053); drafts backs /mcp/agent/v5's stateful
+// token at tokenPath. walkthroughs backs /mcp/agent/v3-v7's stateful
+// start and advance (ADR-0053), including v7's runtime-selected child
+// attachments; drafts backs /mcp/agent/v5's stateful
 // propose_start and propose_advance (ADR-0060): both new, per-agent
 // storage, not Git-native knowledge, usually the same underlying
 // *sqlite.Store satisfying the interfaces. The v5 Drafter is a compatibility

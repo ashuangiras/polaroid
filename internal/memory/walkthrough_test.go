@@ -108,6 +108,7 @@ func TestWalkthroughsStartAndAdvance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if st.Goal != "goal.key" || st.Snapshot != "snap1" || len(st.Statuses) != 0 {
 		t.Fatalf("start state = %+v", st)
 	}
@@ -130,6 +131,54 @@ func TestWalkthroughsStartAndAdvance(t *testing.T) {
 	st, err = w.Advance(ctx, st.Token, &WalkthroughOutcome{Key: "step.a", Status: WalkthroughDone}, nil)
 	if err != nil || st.Statuses["step.a"] != WalkthroughDone {
 		t.Fatalf("done must override the earlier escalate: %+v, %v", st, err)
+	}
+}
+
+func TestDynamicWalkthroughChildrenFoldInAttachmentOrder(t *testing.T) {
+	store := newFakeWalkthroughStore()
+	now := time.Now()
+	w := &Walkthroughs{store: store, now: func() time.Time { return now }, ttl: time.Hour}
+	ctx := context.Background()
+
+	st, err := w.StartWithDynamicChildren(ctx, "root", "snapshot-1", "github.com/a/b", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.AllowDynamicChildren || len(st.DynamicChildren) != 0 {
+		t.Fatalf("initial dynamic state = %+v", st)
+	}
+
+	st, err = w.AttachChild(ctx, st.Token, "child.first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err = w.Advance(ctx, st.Token, &WalkthroughOutcome{Key: "child.first", Status: WalkthroughDone}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err = w.AttachChild(ctx, st.Token, "child.second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"child.first", "child.second"}; !slices.Equal(st.DynamicChildren, want) {
+		t.Fatalf("dynamic children = %v, want attachment order %v", st.DynamicChildren, want)
+	}
+	if st.Statuses["child.first"] != WalkthroughDone {
+		t.Fatalf("late attachment lost the earlier child outcome: %v", st.Statuses)
+	}
+	if _, err := w.AttachChild(ctx, st.Token, "child.first"); !errors.Is(err, ErrDynamicChildExists) {
+		t.Fatalf("duplicate child error = %v, want ErrDynamicChildExists", err)
+	}
+}
+
+func TestStaticWalkthroughRejectsDynamicChild(t *testing.T) {
+	w := NewWalkthroughs(newFakeWalkthroughStore())
+	st, err := w.Start(context.Background(), "root", "snapshot-1", "github.com/a/b", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.AttachChild(context.Background(), st.Token, "child"); !errors.Is(err, ErrDynamicChildrenDisabled) {
+		t.Fatalf("attach to static walkthrough error = %v, want ErrDynamicChildrenDisabled", err)
 	}
 }
 
