@@ -2,6 +2,16 @@
 
 This page is a snapshot of the repository's current state, replaced at every handoff. It is not a work log or an issue tracker. Work items live in [GitHub issues](https://github.com/ashuangiras/polaroid/issues).
 
+**[#190](https://github.com/ashuangiras/polaroid/issues/190): advisory default Polaroid workflow for agents, as of 2026-10-18.**
+
+- **Published to the Git-native corpus:** Concept `concept.repository-task-context` and shared Procedure `polaroid.using`, using field-complete v6 proposals. The Procedure uses that Concept as its formal precondition; its typed `composes` and document `references` are empty, so it dynamically discovers task procedures rather than composing every procedure into one plan. Active snapshot: `e0c8fcc0b4b7f54ae9780b25baacbdbf1cf79004`; stats: 42 Concepts, 5 Domains, 33 typed Procedures, 4 Rules, and 35 procedure documents, all declared shared.
+- **Live verification at that snapshot:** `discover` returned `polaroid.using` first for a task containing its key (score 32); `read` returned it with `scope: shared`; `resolve` returned complete results for both `polaroid.using` and `concept.repository-task-context`. The procedure states the workflow is advisory, not an MCP-enforced gate, and requires owner approval before a proposal's publishing step.
+- **Workspace guidance:** `.github/copilot-instructions.md` now makes the root discovery/read the default Copilot entry, then directs agents to discover/read task-specific procedures at the pinned snapshot. It follows the endpoint configured in `.vscode/mcp.json`, accounts for optional tools by endpoint version, and preserves the legacy-server and operator boundaries.
+- **Scope and compatibility:** no MCP endpoint, schema, program behavior, or database contract changed. The shared corpus publication is active locally and was not pushed to a remote. The pre-existing local `.vscode/mcp.json` modification remains untouched and unstaged.
+- **Documentation-scope checks (not full commit verification):** `make docs-check` passed (1025 relative links and anchors in 92 files); `git diff --check` passed; reader grep found no build, test, script or workflow reader for either changed Markdown file.
+- **Not run:** Go tests, build, vulnerability scan, demo, end-to-end suites or hosted CI. This change contains only agent guidance and a status handoff; the matching gate is `verify-docs`.
+- **Next:** commit the two in-scope files, open the PR for review, and keep merge pending until reviewed.
+
 **[#185](https://github.com/ashuangiras/polaroid/issues/185) implemented and merged as [PR #186](https://github.com/ashuangiras/polaroid/pull/186): field-complete knowledge publication (ADR-0062), as of 2026-10-17.**
 
 - **Field inventory and guided authoring:** `/mcp/agent/v6` returns every authorable field and current value for all seven typed record kinds and Procedure guidance documents; Procedure proposals cover both layers. `propose_advance` supports `keep`, `add`, `remove`, `replace` and `clear`, citation checks, stale/concurrent conflict handling, correctable failures and no-op closure.
