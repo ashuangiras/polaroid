@@ -67,6 +67,12 @@ func (t *tools) agentDiscover(ctx context.Context, in wire.KnowledgeDiscoverRequ
 			wire.KnowledgeToolInfo{Name: "start", Description: "Start a stateful walkthrough of a procedure's composed steps, pinned at the active snapshot."},
 			wire.KnowledgeToolInfo{Name: "advance", Description: "Report an outcome for one of a walkthrough's composed steps, or peek its current plan unchanged."})
 	}
+	if in.Kind == wire.KindTools && t.guideV7 != nil {
+		out.Tools = append(out.Tools,
+			wire.KnowledgeToolInfo{Name: "start", Description: "Start a pinned walkthrough; allow_dynamic_children keeps a parent open while it awaits task-specific child Procedures."},
+			wire.KnowledgeToolInfo{Name: "attach_child", Description: "Attach a Procedure visible at the walkthrough's pinned snapshot to an open dynamic-parent walkthrough; this is runtime state, not a corpus composition."},
+			wire.KnowledgeToolInfo{Name: "advance", Description: "Report an outcome for a static or dynamically attached walkthrough step, or peek the plan unchanged."})
+	}
 	if in.Kind == wire.KindTools && t.proposer != nil {
 		out.Tools = append(out.Tools, wire.KnowledgeToolInfo{Name: "propose",
 			Description: "Propose new, citation-grounded knowledge: committed immediately if it passes citation, completeness, non-vacuous composition and novelty checks."})
@@ -135,6 +141,14 @@ type AgentGuide interface {
 	Advance(ctx context.Context, in wire.WalkthroughAdvanceRequest) (wire.WalkthroughResult, error)
 }
 
+// AgentGuideV7 adds runtime-selected child attachment to the existing
+// stateful walkthrough operations without changing earlier endpoint contracts.
+type AgentGuideV7 interface {
+	StartV7(ctx context.Context, in wire.WalkthroughStartRequestV7) (wire.WalkthroughResult, error)
+	AttachChild(ctx context.Context, in wire.WalkthroughAttachChildRequest) (wire.WalkthroughResult, error)
+	AdvanceV7(ctx context.Context, in wire.WalkthroughAdvanceRequest) (wire.WalkthroughResult, error)
+}
+
 func newAgentServerV3(agent AgentKnowledge, resolver AgentResolver, guide AgentGuide, logger *slog.Logger) *sdk.Server {
 	s := baseServer(agentInstructionsV3, logger)
 	t := &tools{agent: agent, resolver: resolver, guide: guide, logger: logger}
@@ -154,6 +168,18 @@ func (t *tools) agentStart(ctx context.Context, in wire.WalkthroughStartRequest)
 
 func (t *tools) agentAdvance(ctx context.Context, in wire.WalkthroughAdvanceRequest) (any, error) {
 	return t.guide.Advance(ctx, in)
+}
+
+func (t *tools) agentStartV7(ctx context.Context, in wire.WalkthroughStartRequestV7) (any, error) {
+	return t.guideV7.StartV7(ctx, in)
+}
+
+func (t *tools) agentAttachChildV7(ctx context.Context, in wire.WalkthroughAttachChildRequest) (any, error) {
+	return t.guideV7.AttachChild(ctx, in)
+}
+
+func (t *tools) agentAdvanceV7(ctx context.Context, in wire.WalkthroughAdvanceRequest) (any, error) {
+	return t.guideV7.AdvanceV7(ctx, in)
 }
 
 // Agent mode v4 (ADR-0059 Parts 2-3): the v3 tools, unchanged, plus
@@ -258,6 +284,27 @@ func newAgentServerV6(agent AgentKnowledge, resolver AgentResolver, guide AgentG
 	add(s, t, "resolve", "Resolve what applies to a record (procedure, concept or claim) in your context, at a snapshot: obligations with derivation identifiers, specializations, verified and rejected exceptions, derived facts, conflicts, unknowns, whether the result is complete, evidence status, and with then, whether a second procedure can follow it. Deterministic for the same snapshot, context and time.", read, t.agentResolve)
 	add(s, t, "start", "Start a stateful walkthrough of goal's composed steps, pinned at the active snapshot. Returns {token, snapshot, plan}: keep the token to call advance across later turns or sessions. Pass expand true for the whole nested plan tree instead of one leaf at a time.", write, t.agentStart)
 	add(s, t, "advance", "Report an outcome (done, skipped, escalate or blocked, with an optional reason) for one of a walkthrough's composed steps, or peek its current plan unchanged when outcome is omitted. Returns the updated {token, snapshot, plan, status}. Pass close true to end the walkthrough immediately, whether or not it is complete; pass expand true as start's.", write, t.agentAdvance)
+	add(s, t, "propose_start", "Start a full field review for a new or existing knowledge entity. Specify key, record_type, new, proposer and rationale. Returns every authorable field and its current value; Procedure reviews include both the guidance document and typed record.", write, t.agentFieldProposeStart)
+	add(s, t, "propose_advance", "Answer exactly the next field with an allowed keep, add, remove, replace or clear operation, or peek unchanged. Returns the full field inventory; after the last decision, validates and publishes the candidate immediately.", write, t.agentFieldProposeAdvance)
+	return s
+}
+
+// Agent mode v7 retains v6's knowledge and field-review tools and adds
+// runtime-selected child walkthroughs; all earlier endpoint schemas stay fixed.
+const agentInstructionsV7 = agentInstructionsV6 + `
+8. For a task that uses a parent Procedure and a task-specific child, start the parent with allow_dynamic_children true at the snapshot you discovered and read. Discover and read the task Procedure at that same snapshot, attach it to the parent's token, and use advance to complete its leaves. You may attach another applicable Procedure at any time before closing the parent. A dynamic child is runtime progress only; it does not publish a composes relationship. The parent remains in_progress while waiting for its first child and becomes complete only when it has at least one attached child and every plan leaf is done or skipped. A complete walkthrough can be reopened by attaching another child while its token is still open.`
+
+func newAgentServerV7(agent AgentKnowledge, resolver AgentResolver, guide AgentGuideV7, drafter AgentFieldDrafter, logger *slog.Logger) *sdk.Server {
+	s := baseServer(agentInstructionsV7, logger)
+	t := &tools{agent: agent, resolver: resolver, guideV7: guide, fieldDrafter: drafter, logger: logger}
+	const read, write = true, false
+	add(s, t, "discover", discoverDescription, read, t.agentDiscover)
+	add(s, t, "read", "Get one procedure's executable guidance by its canonical key, at a snapshot (the active one by default): contract, instructions, and each reference's key, condition and mapped inputs, resolved one level.", read, t.agentRead)
+	add(s, t, "feedback", "Report a finding that changes what is known about the procedure at key, as served by snapshot, with a classification. Not for product defects, environment problems or transient failures.", write, t.agentFeedback)
+	add(s, t, "resolve", "Resolve what applies to a record (procedure, concept or claim) in your context, at a snapshot: obligations with derivation identifiers, specializations, verified and rejected exceptions, derived facts, conflicts, unknowns, whether the result is complete, evidence status, and with then, whether a second procedure can follow it. Deterministic for the same snapshot, context and time.", read, t.agentResolve)
+	add(s, t, "start", "Start a walkthrough pinned to the active snapshot or the supplied snapshot. Set allow_dynamic_children to keep a parent in_progress while it awaits task-specific child Procedures; attach them later with attach_child.", write, t.agentStartV7)
+	add(s, t, "attach_child", "Attach one Procedure visible at the walkthrough's pinned snapshot to an open dynamic-parent walkthrough. Children are runtime-only; attaching after complete reopens the parent.", write, t.agentAttachChildV7)
+	add(s, t, "advance", "Report done, skipped, escalate or blocked for a static or dynamically attached leaf, or peek the plan unchanged. Close to abandon the parent.", write, t.agentAdvanceV7)
 	add(s, t, "propose_start", "Start a full field review for a new or existing knowledge entity. Specify key, record_type, new, proposer and rationale. Returns every authorable field and its current value; Procedure reviews include both the guidance document and typed record.", write, t.agentFieldProposeStart)
 	add(s, t, "propose_advance", "Answer exactly the next field with an allowed keep, add, remove, replace or clear operation, or peek unchanged. Returns the full field inventory; after the last decision, validates and publishes the candidate immediately.", write, t.agentFieldProposeAdvance)
 	return s

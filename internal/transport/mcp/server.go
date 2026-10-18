@@ -95,6 +95,12 @@ func NewAgentHandlerV6(agent AgentKnowledge, resolver AgentResolver, guide Agent
 	return handler(newAgentServerV6(agent, resolver, guide, drafter, logger), logger)
 }
 
+// NewAgentHandlerV7 adds runtime-selected child walkthroughs while keeping
+// every earlier agent endpoint and its tool schemas unchanged.
+func NewAgentHandlerV7(agent AgentKnowledge, resolver AgentResolver, guide AgentGuideV7, drafter AgentFieldDrafter, logger *slog.Logger) http.Handler {
+	return handler(newAgentServerV7(agent, resolver, guide, drafter, logger), logger)
+}
+
 func handler(server *sdk.Server, logger *slog.Logger) http.Handler {
 	h := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, &sdk.StreamableHTTPOptions{
 		Stateless:           true,
@@ -133,6 +139,8 @@ type tools struct {
 	resolver AgentResolver
 	// guide is set only for agent mode v3, v4 and v5 (ADR-0053).
 	guide AgentGuide
+	// guideV7 is set only for agent mode v7's runtime-selected children.
+	guideV7 AgentGuideV7
 	// proposer is set only for agent mode v4 and v5 (ADR-0059).
 	proposer AgentProposer
 	// drafter is set only for agent mode v5 (ADR-0060).

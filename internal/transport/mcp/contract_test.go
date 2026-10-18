@@ -234,3 +234,16 @@ func TestAgentModeContractIsDocumented(t *testing.T) {
 	doc := toolsDocumentedUnder(t, "\n## Agent mode (`/mcp/agent`)\n")
 	checkContractDocumented(t, contract, doc, nil)
 }
+
+func TestAgentModeV7ContractIsDocumented(t *testing.T) {
+	contract := loadContract(t, "testdata/agent-mode-v7-tools.json")
+	agent := newKnowledgeHarnessV7(t)
+	served := toolsOf(t, agent.session)
+	additions := make(map[string]toolContract, len(contract))
+	for name := range contract {
+		additions[name] = served[name]
+	}
+	checkToolContract(t, contract, additions)
+	doc := toolsDocumentedUnder(t, "\n## Agent mode v7 (`/mcp/agent/v7`)\n")
+	checkContractDocumented(t, contract, doc, nil)
+}

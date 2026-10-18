@@ -67,6 +67,25 @@ func TestKnowledgeAcceptance(t *testing.T) {
 	if !hasFullProposalStart || !hasFullProposalAdvance {
 		t.Fatalf("v6 endpoint tools = %v, want full proposal tools", v6Tools.Tools)
 	}
+	v7Client := sdk.NewClient(&sdk.Implementation{Name: "acceptance-test-v7", Version: "v0"}, nil)
+	v7Session, err := v7Client.Connect(ctx, &sdk.StreamableClientTransport{Endpoint: base + "/mcp/agent/v7", DisableStandaloneSSE: true, MaxRetries: -1}, nil)
+	if err != nil {
+		t.Fatalf("connect agent mode v7: %v", err)
+	}
+	t.Cleanup(func() { _ = v7Session.Close() })
+	v7Tools, err := v7Session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("list v7 tools: %v", err)
+	}
+	var hasDynamicStart, hasAttachChild, hasAdvance bool
+	for _, tool := range v7Tools.Tools {
+		hasDynamicStart = hasDynamicStart || tool.Name == "start"
+		hasAttachChild = hasAttachChild || tool.Name == "attach_child"
+		hasAdvance = hasAdvance || tool.Name == "advance"
+	}
+	if !hasDynamicStart || !hasAttachChild || !hasAdvance {
+		t.Fatalf("v7 endpoint tools = %v, want start/attach_child/advance", v7Tools.Tools)
+	}
 
 	callTool := func(name string, args map[string]any) map[string]any {
 		t.Helper()
