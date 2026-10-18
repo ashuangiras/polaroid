@@ -864,7 +864,7 @@ section "Catalog statistics, read-only" \
 	"One request summarizes the whole catalog (ADR-0036): record counts (identities apart from their revisions and relationship records), procedures by lifecycle and scope, executions by recorded outcome and by evidence status, toil items by latest status, logical payload bytes (UTF-8 bytes of the stored JSON text: count, total, mean, max), and database pages and file sizes. Counts and payloads are one snapshot; file sizes are read just after it. It takes no parameters, writes nothing and names no path." \
 	"\`bin/polaroid statistics\`, or \`curl http://127.0.0.1:7417/v1/statistics\`; MCP \`get_catalog_statistics\`."
 show 'bin/polaroid statistics | jq -c "{statistics_version, records: (.records | {procedures, procedure_versions, executions, execution_invalidations}), executions: .executions | {by_outcome, by_evidence_status}, storage: .storage | {schema_version, files: (.files | map_values(.present))}}"'
-check "version 1, schema 15, with the database, WAL and shared-memory files present" json_has '.statistics_version == 1 and .storage.schema_version == 15 and .storage.files == {database: true, wal: true, shm: true}'
+check "version 1, schema 16, with the database, WAL and shared-memory files present" json_has '.statistics_version == 1 and .storage.schema_version == 16 and .storage.files == {database: true, wal: true, shm: true}'
 STATS="$(bin/polaroid statistics)"
 check "executions and invalidations match the execution lists" equal "$(jq -c '[.records.executions, .executions.by_evidence_status.invalidated]' <<<"$STATS")" "$(jq -sc '[(.[0].executions | length), (.[1].executions | length)]' <(bin/polaroid executions) <(bin/polaroid executions evidence_status=invalidated))"
 LAST="$STATS"
@@ -895,11 +895,11 @@ check "the refused writes stored nothing" equal "$(bin/polaroid executions | jq 
 
 ########################################################################
 section "The database enforces immutability itself" \
-	"Even a client that bypasses polaroidd cannot rewrite history: schema triggers reject UPDATE/DELETE of procedures, versions, bindings, binding revisions, references, executions and execution links and decisions, feedback reports, repositories, repository identifiers and procedure origins, gaps in numbering, and pins to missing versions. toil items, revisions and their links, execution invalidations, procedure lifecycle events, feedback resolutions, walkthroughs, legacy drafts and field-complete drafts are stored in append-only event tables; \`PRAGMA user_version\` records the schema version (15 migrations)." \
+	"Even a client that bypasses polaroidd cannot rewrite history: schema triggers reject UPDATE/DELETE of procedures, versions, bindings, binding revisions, references, executions and execution links and decisions, feedback reports, repositories, repository identifiers and procedure origins, gaps in numbering, and pins to missing versions. toil items, revisions and their links, execution invalidations, procedure lifecycle events, feedback resolutions, walkthroughs, legacy drafts and field-complete drafts are stored in append-only event tables; \`PRAGMA user_version\` records the schema version (16 migrations)." \
 	"Open the database with \`sqlite3 polaroid.db\` and try the statements below."
 SNAP_BEFORE="$(digest "/v1/procedures/$ID")$(digest "/v1/bindings/$BA")$(digest "/v1/bindings/$BB")$(digest "/v1/toil-items/$TOIL")"
 show 'sqlite3 "$DB" "PRAGMA user_version; SELECT name FROM sqlite_master WHERE type = '"'"'table'"'"' ORDER BY name;"'
-check "schema version is 15 with procedure, binding, reference, execution, execution-link, decision, feedback, repository, toil, lifecycle and draft tables" equal "$(head -n1 <<<"$LAST")" 15
+check "schema version is 16 with procedure, binding, reference, execution, execution-link, decision, feedback, repository, toil, lifecycle and draft tables" equal "$(head -n1 <<<"$LAST")" 16
 check "the procedure_lifecycle_events table exists" out_has "procedure_lifecycle_events"
 check "the execution_invalidations table exists" out_has "execution_invalidations"
 check "the toil_revisions table exists" out_has "toil_revisions"
@@ -981,7 +981,7 @@ show 'bin/polaroid bind <<<"$(bind_req scratch "{\"pin\": 1}" legacy old-1)" | j
 check "bindings work on the upgraded database" json_has '.procedure_id == "old-1"'
 stop_daemon
 show 'sqlite3 "$WORK/v1.db" "PRAGMA user_version"'
-check "schema version is now 15" equal "$LAST" 15
+check "schema version is now 16" equal "$LAST" 16
 show 'cp "$DB" "$WORK/newer.db" && sqlite3 "$WORK/newer.db" "PRAGMA user_version = 99" && HOME="$WORK/home" bin/polaroidd -addr 127.0.0.1:0 -db "$WORK/newer.db"'
 check "newer schema refused with exit 1" rc_is 1
 check "error says the schema is newer than this build supports" out_has "newer than this build supports"
