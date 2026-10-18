@@ -10,7 +10,8 @@ This page is a snapshot of the repository's current state, replaced at every han
 - **Scope and compatibility:** no MCP endpoint, schema, program behavior, or database contract changed. The shared corpus publication is active locally and was not pushed to a remote. The pre-existing local `.vscode/mcp.json` modification remains untouched and unstaged.
 - **Documentation-scope checks (not full commit verification):** `make docs-check` passed (1025 relative links and anchors in 92 files); `git diff --check` passed; reader grep found no build, test, script or workflow reader for either changed Markdown file.
 - **Not run:** Go tests, build, vulnerability scan, demo, end-to-end suites or hosted CI. This change contains only agent guidance and a status handoff; the matching gate is `verify-docs`.
-- **Next:** commit the two in-scope files, open the PR for review, and keep merge pending until reviewed.
+- **Binding evidence:** the `verify-docs` execution will be recorded against the final commit at scope `docs`; this is not full verification of the commit.
+- **Next:** review and merge the PR for #190; there are no other blockers.
 
 **[#185](https://github.com/ashuangiras/polaroid/issues/185) implemented and merged as [PR #186](https://github.com/ashuangiras/polaroid/pull/186): field-complete knowledge publication (ADR-0062), as of 2026-10-17.**
 
