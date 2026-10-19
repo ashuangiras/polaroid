@@ -45,6 +45,10 @@ func classify(err error) error {
 		return wire.NewKnowledgeError(http.StatusBadRequest, wire.ErrorDetail{Code: "invalid_request", Message: err.Error()})
 	case errors.Is(err, memory.ErrDynamicChildrenDisabled):
 		return invalidField("token", "walkthrough was not started with dynamic children enabled")
+	case errors.Is(err, memory.ErrDynamicChildrenChanged):
+		return wire.NewKnowledgeError(http.StatusConflict, wire.ErrorDetail{
+			Code: "walkthrough_conflict", Message: "the walkthrough's child set changed concurrently; peek its current plan before retrying",
+		})
 	case errors.Is(err, memory.ErrDynamicChildExists):
 		return invalidField("key", "is already attached to this walkthrough")
 	case errors.Is(err, memory.ErrInvalidDynamicChild):

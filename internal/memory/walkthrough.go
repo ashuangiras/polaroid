@@ -42,6 +42,7 @@ var ErrInvalidOutcome = errors.New("invalid outcome")
 
 var (
 	ErrDynamicChildrenDisabled = errors.New("walkthrough does not accept dynamic children")
+	ErrDynamicChildrenChanged  = errors.New("walkthrough dynamic children changed concurrently")
 	ErrDynamicChildExists      = errors.New("dynamic child is already attached")
 	ErrInvalidDynamicChild     = errors.New("invalid dynamic child")
 )
@@ -62,15 +63,16 @@ type WalkthroughOutcome struct {
 // recording an outcome, a dynamic child, or a pure peek. Context is
 // whatever facts were given with this event, if any.
 type WalkthroughEvent struct {
-	Token                string
-	Goal                 string
-	Snapshot             string
-	Repository           string
-	AllowDynamicChildren bool
-	DynamicChild         string
-	Outcome              *WalkthroughOutcome
-	Context              map[string]string
-	CreatedAt            time.Time
+	Token                   string
+	Goal                    string
+	Snapshot                string
+	Repository              string
+	AllowDynamicChildren    bool
+	DynamicChild            string
+	ExpectedDynamicChildren []string
+	Outcome                 *WalkthroughOutcome
+	Context                 map[string]string
+	CreatedAt               time.Time
 }
 
 // WalkthroughState is a token's current, folded state (ADR-0053): Goal,
@@ -144,7 +146,9 @@ func (st WalkthroughState) Status() string {
 // list_walkthroughs, ADR-0056), and delete every trace of a token. Only
 // *sqlite.Store implements it; Walkthroughs is its only caller.
 type WalkthroughStore interface {
-	// AppendWalkthroughEvent stores ev.
+	// AppendWalkthroughEvent stores ev. For a dynamic-child event, it
+	// atomically compares ExpectedDynamicChildren with the current child
+	// list and returns ErrDynamicChildrenChanged if the list has changed.
 	AppendWalkthroughEvent(ctx context.Context, ev WalkthroughEvent) error
 	// WalkthroughEvents returns every event for token, oldest first, or
 	// ErrNotFound if none exists (never created, or already deleted).
@@ -228,7 +232,11 @@ func (w *Walkthroughs) AttachChild(ctx context.Context, token, key string) (Walk
 	if slices.Contains(state.DynamicChildren, key) {
 		return WalkthroughState{}, ErrDynamicChildExists
 	}
-	ev := WalkthroughEvent{Token: token, DynamicChild: key, CreatedAt: w.now()}
+	ev := WalkthroughEvent{
+		Token: token, DynamicChild: key,
+		ExpectedDynamicChildren: slices.Clone(state.DynamicChildren),
+		CreatedAt:               w.now(),
+	}
 	if err := w.store.AppendWalkthroughEvent(ctx, ev); err != nil {
 		return WalkthroughState{}, err
 	}

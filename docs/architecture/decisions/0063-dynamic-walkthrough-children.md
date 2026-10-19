@@ -19,6 +19,8 @@ The live Copilot Chat trials for issue #190 confirmed both sides of the gap: an 
 
 Attachments are allowed at any time before the walkthrough is closed or expires, including after `status` was `complete`. Adding a child to a previously complete but still open parent makes it `in_progress` again. The token's existing sliding TTL and `close` semantics remain in force.
 
+**Concurrent attachments resolve as an explicit conflict.** Each attachment is based on the dynamic-child set the caller observed. Storage compares that set and appends the child in one transaction. If another attachment changed the set first, Polaroid returns HTTP 409 `walkthrough_conflict`; the caller must peek the current plan and retry. It does not silently merge competing plans whose composed subtrees may overlap.
+
 **The runtime plan includes static and dynamic children.** Static `composes` edges retain their existing semantics; dynamically attached Procedures join the root's runtime sibling set. The combined plan uses the existing `precedes` topological ordering and deterministic key tie-break. A dynamic child may itself have static composed descendants, addressed by the existing full `path` form in `advance`. The parent is `complete` only after at least one dynamic child has been attached and every leaf in the combined plan is `done` or `skipped`; `escalate`, `blocked`, or an outstanding leaf keeps it in progress. In dynamic-parent mode, an empty plan alone is never enough to complete the parent.
 
 **The pinned snapshot is authoritative for late additions.** A dynamically attached child must exist and apply in the snapshot pinned by `start`. A procedure published after that snapshot cannot be attached to the existing walk; the agent must start a new parent at a newer snapshot. This avoids mixing knowledge states inside one plan.
@@ -30,6 +32,7 @@ Attachments are allowed at any time before the walkthrough is closed or expires,
 ## Consequences
 
 - The v7 `start`/`attach_child`/`advance` sequence can report a parent complete only after its dynamically selected child work completes, and can reopen it when new child work is added.
+- Concurrent stale child attachments return `walkthrough_conflict`, never a silently merged plan.
 - A selected child is not a permanent corpus relationship and will not appear in later `resolve` plans unless it is separately published as `composes`.
 - The walkthrough table gains runtime columns. A database opened by v7 migrates from schema 15 to 16; an older binary refuses the newer schema and cannot be used to roll back the database. Recover by upgrading to a compatible build, not by editing migration history.
 - No dependency, task-specific server branch, or change to typed record contracts is introduced.

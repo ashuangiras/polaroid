@@ -222,7 +222,8 @@ func TestDynamicWalkthroughChildrenPersistAcrossRestart(t *testing.T) {
 	}
 
 	duplicate := memory.WalkthroughEvent{
-		Token: state.Token, DynamicChild: "child.first", CreatedAt: created.Add(time.Minute),
+		Token: state.Token, DynamicChild: "child.first",
+		ExpectedDynamicChildren: []string{"child.first"}, CreatedAt: created.Add(time.Minute),
 	}
 	if err := store.AppendWalkthroughEvent(ctx, duplicate); !errors.Is(err, memory.ErrDynamicChildExists) {
 		t.Fatalf("duplicate dynamic child error = %v, want ErrDynamicChildExists", err)
@@ -238,6 +239,38 @@ func TestDynamicWalkthroughChildrenPersistAcrossRestart(t *testing.T) {
 	}
 	if !got.AllowDynamicChildren || len(got.DynamicChildren) != 1 || got.DynamicChildren[0] != "child.first" {
 		t.Fatalf("reopened state = %+v", got)
+	}
+}
+
+func TestDynamicWalkthroughChildAppendRejectsStaleChildSet(t *testing.T) {
+	store := openStore(t, dbPath(t))
+	ctx := context.Background()
+	token := "wt-dynamic-stale"
+	root := walkthroughEvent(token, "root", "snap1", 0)
+	root.AllowDynamicChildren = true
+	if err := store.AppendWalkthroughEvent(ctx, root); err != nil {
+		t.Fatal(err)
+	}
+
+	first := memory.WalkthroughEvent{
+		Token: token, DynamicChild: "child.first", CreatedAt: created.Add(time.Minute),
+	}
+	if err := store.AppendWalkthroughEvent(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	stale := memory.WalkthroughEvent{
+		Token: token, DynamicChild: "child.second", CreatedAt: created.Add(2 * time.Minute),
+	}
+	if err := store.AppendWalkthroughEvent(ctx, stale); !errors.Is(err, memory.ErrDynamicChildrenChanged) {
+		t.Fatalf("stale child-set error = %v, want ErrDynamicChildrenChanged", err)
+	}
+
+	events, err := store.WalkthroughEvents(ctx, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[1].DynamicChild != "child.first" {
+		t.Fatalf("events after stale attachment = %+v", events)
 	}
 }
 

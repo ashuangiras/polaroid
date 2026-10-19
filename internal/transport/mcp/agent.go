@@ -70,7 +70,7 @@ func (t *tools) agentDiscover(ctx context.Context, in wire.KnowledgeDiscoverRequ
 	if in.Kind == wire.KindTools && t.guideV7 != nil {
 		out.Tools = append(out.Tools,
 			wire.KnowledgeToolInfo{Name: "start", Description: "Start a pinned walkthrough; allow_dynamic_children keeps a parent open while it awaits task-specific child Procedures."},
-			wire.KnowledgeToolInfo{Name: "attach_child", Description: "Attach a Procedure visible at the walkthrough's pinned snapshot to an open dynamic-parent walkthrough; this is runtime state, not a corpus composition."},
+			wire.KnowledgeToolInfo{Name: "attach_child", Description: "Attach a Procedure visible at the walkthrough's pinned snapshot to an open dynamic-parent walkthrough; this is runtime state, not a corpus composition. A concurrent child-set change returns walkthrough_conflict; peek and retry."},
 			wire.KnowledgeToolInfo{Name: "advance", Description: "Report an outcome for a static or dynamically attached walkthrough step, or peek the plan unchanged."})
 	}
 	if in.Kind == wire.KindTools && t.proposer != nil {
@@ -303,7 +303,7 @@ func newAgentServerV7(agent AgentKnowledge, resolver AgentResolver, guide AgentG
 	add(s, t, "feedback", "Report a finding that changes what is known about the procedure at key, as served by snapshot, with a classification. Not for product defects, environment problems or transient failures.", write, t.agentFeedback)
 	add(s, t, "resolve", "Resolve what applies to a record (procedure, concept or claim) in your context, at a snapshot: obligations with derivation identifiers, specializations, verified and rejected exceptions, derived facts, conflicts, unknowns, whether the result is complete, evidence status, and with then, whether a second procedure can follow it. Deterministic for the same snapshot, context and time.", read, t.agentResolve)
 	add(s, t, "start", "Start a walkthrough pinned to the active snapshot or the supplied snapshot. Set allow_dynamic_children to keep a parent in_progress while it awaits task-specific child Procedures; attach them later with attach_child.", write, t.agentStartV7)
-	add(s, t, "attach_child", "Attach one Procedure visible at the walkthrough's pinned snapshot to an open dynamic-parent walkthrough. Children are runtime-only; attaching after complete reopens the parent.", write, t.agentAttachChildV7)
+	add(s, t, "attach_child", "Attach one Procedure visible at the walkthrough's pinned snapshot to an open dynamic-parent walkthrough. Children are runtime-only; attaching after complete reopens the parent. A concurrent child-set change returns walkthrough_conflict; peek and retry.", write, t.agentAttachChildV7)
 	add(s, t, "advance", "Report done, skipped, escalate or blocked for a static or dynamically attached leaf, or peek the plan unchanged. Close to abandon the parent.", write, t.agentAdvanceV7)
 	add(s, t, "propose_start", "Start a full field review for a new or existing knowledge entity. Specify key, record_type, new, proposer and rationale. Returns every authorable field and its current value; Procedure reviews include both the guidance document and typed record.", write, t.agentFieldProposeStart)
 	add(s, t, "propose_advance", "Answer exactly the next field with an allowed keep, add, remove, replace or clear operation, or peek unchanged. Returns the full field inventory; after the last decision, validates and publishes the candidate immediately.", write, t.agentFieldProposeAdvance)
