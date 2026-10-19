@@ -70,26 +70,9 @@ func (s *Store) AppendWalkthroughEvent(ctx context.Context, ev memory.Walkthroug
 			if enabled != 1 {
 				return memory.ErrDynamicChildrenDisabled
 			}
-			rows, err := tx.QueryContext(ctx, `SELECT dynamic_child_key FROM walkthrough_events
-				WHERE token = ? AND dynamic_child_key IS NOT NULL ORDER BY id`, ev.Token)
+			children, err := dynamicChildren(ctx, tx, ev.Token)
 			if err != nil {
-				return fmt.Errorf("read attached walkthrough children: %w", err)
-			}
-			children := make([]string, 0)
-			for rows.Next() {
-				var key string
-				if err := rows.Scan(&key); err != nil {
-					_ = rows.Close()
-					return fmt.Errorf("scan attached walkthrough child: %w", err)
-				}
-				children = append(children, key)
-			}
-			if err := rows.Err(); err != nil {
-				_ = rows.Close()
-				return fmt.Errorf("read attached walkthrough children: %w", err)
-			}
-			if err := rows.Close(); err != nil {
-				return fmt.Errorf("close attached walkthrough children: %w", err)
+				return err
 			}
 			if !slices.Equal(children, ev.ExpectedDynamicChildren) {
 				return memory.ErrDynamicChildrenChanged
@@ -108,6 +91,27 @@ func (s *Store) AppendWalkthroughEvent(ctx context.Context, ev memory.Walkthroug
 		}
 		return nil
 	})
+}
+
+func dynamicChildren(ctx context.Context, tx *sql.Tx, token string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT dynamic_child_key FROM walkthrough_events
+		WHERE token = ? AND dynamic_child_key IS NOT NULL ORDER BY id`, token)
+	if err != nil {
+		return nil, fmt.Errorf("read attached walkthrough children: %w", err)
+	}
+	defer rows.Close()
+	var children []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, fmt.Errorf("scan attached walkthrough child: %w", err)
+		}
+		children = append(children, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read attached walkthrough children: %w", err)
+	}
+	return children, nil
 }
 
 // scanWalkthroughEvent scans one row of walkthroughColumns, with token
