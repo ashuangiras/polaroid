@@ -31,6 +31,10 @@ Within Git-native knowledge, seven agent-facing MCP endpoints exist, all under t
 
 **Connect to `/mcp/agent/v7` for the current agent interface.** It includes discovery, reading, resolution, dynamic child walkthroughs and field-complete authoring. Use `/mcp/agent/v6` when the installed service has not yet been upgraded; all earlier endpoint contracts remain available and unchanged.
 
+### Session-close capture in Polaroid's own repository
+
+When the repository is `github.com/ashuangiras/polaroid`, the shared `polaroid.using` workflow requires attaching the local `polaroid.session-close-capture` Procedure immediately after starting its v7 dynamic parent, at the same pinned snapshot. Keep that child pending while completing task-specific children and verification. At close, it reviews the session for reusable, evidence-backed knowledge, checks existing records before creating or revising them, and uses the full-field proposal flow. It completes as a no-op when no supported reusable learning exists; it must not publish filler. The capture child is the only workflow with standing authorization to publish locally without per-change confirmation, and only after proposal validation succeeds. This authorization does not apply to other proposal calls, does not perform remote sync, and does not stop a non-compliant client from ignoring or abandoning the MCP walkthrough.
+
 ## Set up for a repository
 
 **There is no per-repository registration step in Git-native knowledge.** Unlike the legacy catalog's `register_repository`/alias system, a repository here is just a string: a procedure's or a context assertion's `repository` is compared by exact equality against what you pass as `repository` to `discover`, `read`, `resolve` or `feedback`. Pick one canonical form and use it consistently across every call and every record — the host/owner/repo form already used elsewhere in Polaroid, for example `github.com/ashuangiras/polaroid`, is a sensible default.
@@ -50,7 +54,7 @@ Within Git-native knowledge, seven agent-facing MCP endpoints exist, all under t
 
    Do not also add an entry for `/mcp`: a new agent has no use for the legacy catalog, and adding it only invites reaching for the wrong tool.
 3. **Check readiness.** An agent's `discover` tells you whether anything has been published yet: an empty catalog is a normal, well-formed state (`{"empty": true}`), not an error, and agents should treat it as "nothing to discover yet," not a failure. (`polaroid knowledge-status`, below, is the operator's equivalent check, and also reports whether a remote source is configured.)
-4. **If this repository's procedures or rules do not exist yet, publish them with the `polaroid` CLI** (see "Storing knowledge" below) — there is no MCP tool for this, by design (storing is an explicit, approved operator action, never something an agent triggers on its own). There is nothing else to configure. A remote for exchanging knowledge between instances is optional and separate; see [knowledge-remotes.md](../development/knowledge-remotes.md) if you need it.
+4. **If this repository's procedures or rules do not exist yet, publish them through the approved authoring path** (see "Storing knowledge" below). Normally an operator publishes only after the owner approves that exact change. The sole exception is the local `polaroid.session-close-capture` procedure for `github.com/ashuangiras/polaroid`: the owner has authorized that procedure to publish locally after the full field-review and catalog validation pass. It cannot push/sync to a remote. There is nothing else to configure. A remote for exchanging knowledge between instances is optional and separate; see [knowledge-remotes.md](../development/knowledge-remotes.md) if you need it.
 
 ## Retrieving knowledge
 
