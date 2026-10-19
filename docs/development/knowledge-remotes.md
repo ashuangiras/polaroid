@@ -52,7 +52,7 @@ A fetch from a public or local remote needs no credentials: `polaroid knowledge-
    - `author` is one of the remote's `publishers`.
    - `summary` and `rationale` are both required; validation on other instances rejects a publication without a rationale.
    - Add `finding` when the change addresses a feedback report.
-2. **Approve.** The owner approves the change before an operator publishes it. Publishing never happens automatically, not even on feedback.
+2. **Approve.** The owner approves the change before an operator publishes it. The sole narrow exception is `polaroid.session-close-capture` for `github.com/ashuangiras/polaroid`, which has standing authorization to publish locally after its complete field review and validation pass. That does not authorize a remote push; every sync remains a separate explicit operator action.
 3. **Publish locally:** `polaroid knowledge-publish FILE`. The kernel validates the complete catalog before the active ref moves.
 4. **Review what will leave the machine:**
 
