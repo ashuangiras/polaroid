@@ -15,3 +15,11 @@ func TestClassifyFieldDraftConflict(t *testing.T) {
 		t.Fatalf("classified error = %#v, want HTTP 409 draft_conflict", err)
 	}
 }
+
+func TestClassifyDynamicChildrenChanged(t *testing.T) {
+	err := classify(memory.ErrDynamicChildrenChanged)
+	var knowledgeError *wire.KnowledgeError
+	if !errors.As(err, &knowledgeError) || knowledgeError.Status != 409 || knowledgeError.Detail.Code != "walkthrough_conflict" {
+		t.Fatalf("classified error = %#v, want HTTP 409 walkthrough_conflict", err)
+	}
+}

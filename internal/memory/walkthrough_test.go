@@ -61,6 +61,17 @@ func newFakeWalkthroughStore() *fakeWalkthroughStore {
 }
 
 func (f *fakeWalkthroughStore) AppendWalkthroughEvent(_ context.Context, ev WalkthroughEvent) error {
+	if ev.DynamicChild != "" {
+		var children []string
+		for _, event := range f.events[ev.Token] {
+			if event.DynamicChild != "" {
+				children = append(children, event.DynamicChild)
+			}
+		}
+		if !slices.Equal(children, ev.ExpectedDynamicChildren) {
+			return ErrDynamicChildrenChanged
+		}
+	}
 	f.events[ev.Token] = append(f.events[ev.Token], ev)
 	return nil
 }
@@ -179,6 +190,27 @@ func TestStaticWalkthroughRejectsDynamicChild(t *testing.T) {
 	}
 	if _, err := w.AttachChild(context.Background(), st.Token, "child"); !errors.Is(err, ErrDynamicChildrenDisabled) {
 		t.Fatalf("attach to static walkthrough error = %v, want ErrDynamicChildrenDisabled", err)
+	}
+}
+
+func TestWalkthroughsAttachDetectsStaleChildSet(t *testing.T) {
+	store := newFakeWalkthroughStore()
+	w := NewWalkthroughs(store)
+	st, err := w.StartWithDynamicChildren(context.Background(), "root", "snapshot-1", "github.com/a/b", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err = w.AttachChild(context.Background(), st.Token, "child.first")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stale := WalkthroughEvent{
+		Token: st.Token, DynamicChild: "child.second",
+		ExpectedDynamicChildren: nil, CreatedAt: time.Now(),
+	}
+	if err := store.AppendWalkthroughEvent(context.Background(), stale); !errors.Is(err, ErrDynamicChildrenChanged) {
+		t.Fatalf("stale child-set error = %v, want ErrDynamicChildrenChanged", err)
 	}
 }
 

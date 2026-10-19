@@ -6,6 +6,7 @@ import (
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
+	"slices"
 
 	sqlitelib "modernc.org/sqlite/lib"
 
@@ -68,6 +69,30 @@ func (s *Store) AppendWalkthroughEvent(ctx context.Context, ev memory.Walkthroug
 			}
 			if enabled != 1 {
 				return memory.ErrDynamicChildrenDisabled
+			}
+			rows, err := tx.QueryContext(ctx, `SELECT dynamic_child_key FROM walkthrough_events
+				WHERE token = ? AND dynamic_child_key IS NOT NULL ORDER BY id`, ev.Token)
+			if err != nil {
+				return fmt.Errorf("read attached walkthrough children: %w", err)
+			}
+			children := make([]string, 0)
+			for rows.Next() {
+				var key string
+				if err := rows.Scan(&key); err != nil {
+					_ = rows.Close()
+					return fmt.Errorf("scan attached walkthrough child: %w", err)
+				}
+				children = append(children, key)
+			}
+			if err := rows.Err(); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("read attached walkthrough children: %w", err)
+			}
+			if err := rows.Close(); err != nil {
+				return fmt.Errorf("close attached walkthrough children: %w", err)
+			}
+			if !slices.Equal(children, ev.ExpectedDynamicChildren) {
+				return memory.ErrDynamicChildrenChanged
 			}
 		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO walkthrough_events
