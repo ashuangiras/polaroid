@@ -90,7 +90,7 @@ ci: check vuln demo e2e e2e-mcp ## Everything CI runs (end-to-end interop checks
 e2e: binaries ## End-to-end report of every feature against a real daemon (bin/e2e/REPORT.md)
 	./scripts/e2e.sh
 
-e2e-mcp: binaries ## End-to-end report of /mcp; E2E_INTEROP=0 skips the independent clients (bin/e2e/MCP-REPORT.md)
+e2e-mcp: binaries ## End-to-end report of /mcp/agent/v8; E2E_INTEROP=0 skips the independent clients (bin/e2e/MCP-REPORT.md)
 	E2E_INTEROP=$(E2E_INTEROP) ./scripts/e2e-mcp.sh
 
 lifecycle: ## Install, run and uninstall an isolated managed service with the REAL launchd or systemd user manager (exit 77: none reachable)
