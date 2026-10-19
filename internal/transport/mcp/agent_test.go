@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/json/jsontext"
+	"fmt"
 	"log/slog"
 	"net/http/httptest"
 	"path/filepath"
@@ -25,6 +26,7 @@ import (
 	"github.com/ashuangiras/polaroid/internal/reasoning/policy"
 	"github.com/ashuangiras/polaroid/internal/storage/sqlite"
 	mcptransport "github.com/ashuangiras/polaroid/internal/transport/mcp"
+	"github.com/ashuangiras/polaroid/internal/transport/wire"
 )
 
 // ADR-0043, finalized for Git-native knowledge by ADR-0048: the agent-mode
@@ -272,6 +274,7 @@ func newKnowledgeHarnessV7(t *testing.T) *knowledgeHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	t.Cleanup(func() { _ = store.Close() })
 	repo, err := gitcore.Open(filepath.Join(t.TempDir(), "knowledge"), gitcore.Options{})
 	if err != nil {
@@ -293,6 +296,35 @@ func newKnowledgeHarnessV7(t *testing.T) *knowledgeHarness {
 	h := &harness{url: srv.URL, store: store, logs: logs}
 	h.session = h.connect(t, "")
 	return &knowledgeHarness{harness: h, kernel: kernel}
+}
+
+func newKnowledgeHarnessV8(t *testing.T) (*knowledgeHarness, *knowledgeops.FieldDrafter) {
+	t.Helper()
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "polaroid.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	repo, err := gitcore.Open(filepath.Join(t.TempDir(), "knowledge"), gitcore.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := datalog.Evaluator{}
+	sem, err := semantic.New(semantic.DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kernel := knowledge.New(gitstore.New(repo), knowledge.WithRecordValidator(sem), knowledge.WithRecordValidator(reasoning.RuleValidator{Evaluator: ev}))
+	guide := knowledgeops.NewGuide(kernel, memory.NewWalkthroughs(store), ev, policy.Trust{})
+	drafter := knowledgeops.NewFieldDrafter(kernel, knowledgeops.NewProposer(kernel, ev, policy.Trust{}), memory.NewFieldDrafts(store), guide)
+	logs := &syncBuffer{}
+	srv := httptest.NewServer(mcptransport.NewAgentHandlerV8(knowledgeops.NewAgent(kernel, memory.NewService(store)),
+		knowledgeops.NewResolver(kernel, ev, policy.Trust{}), guide, drafter, slog.New(slog.NewTextHandler(logs, nil))))
+	t.Cleanup(srv.Close)
+	h := &harness{url: srv.URL, store: store, logs: logs}
+	h.session = h.connect(t, "")
+	return &knowledgeHarness{harness: h, kernel: kernel}, drafter
 }
 
 func decodeJSON(t *testing.T, text string) map[string]any {
@@ -839,20 +871,28 @@ func TestAgentV4AndV5SchemasMatch(t *testing.T) {
 	}
 }
 
-func TestAgentV6FieldCompleteProposalOverRealTransport(t *testing.T) {
-	agent := newKnowledgeHarnessV6(t)
+func TestAgentV8FieldCompleteProposalOverRealTransport(t *testing.T) {
+	agent, drafter := newKnowledgeHarnessV8(t)
 	draftFixture(t, agent)
 	start := decodeJSON(t, agent.ok(t, "propose_start", `{"key":"draft.producer","record_type":"Procedure","proposer":"test.agent","rationale":"ground the producer's outcome"}`))
 	fields, ok := start["fields"].([]any)
 	if !ok || len(fields) != len(knowledge.ProcedureDocumentFieldSpecs())+len(knowledge.RecordFieldSpecs(knowledge.TypeProcedure)) {
-		t.Fatalf("v6 propose_start fields = %v", start["fields"])
+		t.Fatalf("v8 propose_start fields = %v", start["fields"])
 	}
 	if start["next_entity"] != "procedure" || start["next_field"] != "goal" {
-		t.Fatalf("v6 first field = %v.%v, want procedure.goal", start["next_entity"], start["next_field"])
+		t.Fatalf("v8 first field = %v.%v, want procedure.goal", start["next_entity"], start["next_field"])
 	}
-	tools := agent.ok(t, "discover", `{"kind":"tools"}`)
-	if !strings.Contains(tools, `"propose_start"`) || !strings.Contains(tools, `"propose_advance"`) {
-		t.Fatalf("v6 discover(kind=tools) did not list full-review tools: %s", tools)
+	toolNames := map[string]bool{}
+	for tool, err := range agent.session.Tools(context.Background(), nil) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		toolNames[tool.Name] = true
+	}
+	for _, name := range []string{"propose_start", "propose_advance", "propose_publish_capture"} {
+		if !toolNames[name] {
+			t.Fatalf("v8 missing tool %s: %v", name, toolNames)
+		}
 	}
 
 	token := start["token"].(string)
@@ -871,8 +911,26 @@ func TestAgentV6FieldCompleteProposalOverRealTransport(t *testing.T) {
 		}
 		result = decodeJSON(t, agent.ok(t, "propose_advance", string(args)))
 	}
-	if result["status"] != "complete" || result["key"] != "draft.producer" || result["snapshot"] == "" {
-		t.Fatalf("v6 final proposal result = %v", result)
+	if result["status"] != "ready" || result["key"] != "draft.producer" || result["candidate_hash"] == "" {
+		t.Fatalf("v8 final proposal result = %v", result)
+	}
+	before, err := agent.kernel.Active(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before.Snapshot()) != start["snapshot"] {
+		t.Fatal("final field answer published without authorization")
+	}
+	if _, err := drafter.PublishCapture(context.Background(), wire.FieldDraftPublishRequest{
+		Token: token, CandidateHash: result["candidate_hash"].(string),
+	}); err == nil {
+		t.Fatal("ordinary draft published as capture")
+	}
+	published, err := drafter.PublishApproved(context.Background(), wire.FieldDraftPublishRequest{
+		Token: token, CandidateHash: result["candidate_hash"].(string),
+	})
+	if err != nil || published.Status != "complete" {
+		t.Fatalf("operator approval: %+v, %v", published, err)
 	}
 	cat, err := agent.kernel.Active(context.Background())
 	if err != nil {
@@ -883,8 +941,120 @@ func TestAgentV6FieldCompleteProposalOverRealTransport(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(record.Postconditions) != 1 || record.Postconditions[0] != "draft.some-precondition" {
-		t.Fatalf("v6 published postconditions = %v", record.Postconditions)
+		t.Fatalf("v8 published postconditions = %v", record.Postconditions)
 	}
+}
+
+func TestAgentV6V7ProposalWritesRefused(t *testing.T) {
+	for _, setup := range []struct {
+		name string
+		open func(*testing.T) *knowledgeHarness
+	}{{"v6", newKnowledgeHarnessV6}, {"v7", newKnowledgeHarnessV7}} {
+		t.Run(setup.name, func(t *testing.T) {
+			agent := setup.open(t)
+			for _, tool := range []string{"propose_start", "propose_advance"} {
+				err := agent.fail(t, tool, `{}`, "invalid_request")
+				if !strings.Contains(err.Message, "/mcp/agent/v8") {
+					t.Fatalf("%s: %v", tool, err)
+				}
+			}
+		})
+	}
+}
+
+func TestAgentV8CaptureAuthorizationAndReplay(t *testing.T) {
+	agent, _ := newKnowledgeHarnessV8(t)
+	draftFixture(t, agent)
+	root := knowledgetest.SharedProc("polaroid.using", "guide repository work")
+	capture := knowledgetest.SharedProc("polaroid.session-close-capture", "capture verified learning")
+	capture.Applicability = knowledge.Applicability{Scope: knowledge.ScopeLocal, Repository: "github.com/ashuangiras/polaroid"}
+	task := knowledgetest.SharedProc("task.verified", "verify work")
+	if _, err := agent.publishRecords(t, []*knowledge.Procedure{root, capture, task}, []*knowledge.Record{
+		{Type: knowledge.TypeProcedure, Key: root.Key, Label: "root", Definition: "d", Requires: []string{"test.obligation"}},
+		{Type: knowledge.TypeProcedure, Key: capture.Key, Label: "capture", Definition: "d", Requires: []string{"test.obligation"}},
+		{Type: knowledge.TypeProcedure, Key: task.Key, Label: "task", Definition: "d", Requires: []string{"test.obligation"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"polaroid.using","repository":"github.com/ashuangiras/polaroid","allow_dynamic_children":true}`))
+	walk := start["token"].(string)
+	agent.ok(t, "attach_child", fmt.Sprintf(`{"token":%q,"key":"polaroid.session-close-capture"}`, walk))
+	agent.ok(t, "attach_child", fmt.Sprintf(`{"token":%q,"key":"task.verified"}`, walk))
+	startDraft := func(parent string) map[string]any {
+		t.Helper()
+		return decodeJSON(t, agent.ok(t, "propose_start", fmt.Sprintf(
+			`{"key":"draft.some-precondition","record_type":"Concept","proposer":"test.agent","rationale":"verified learning","walkthrough_token":%q}`, parent)))
+	}
+	review := func(draft map[string]any, definition string) map[string]any {
+		t.Helper()
+		for _, value := range draft["fields"].([]any) {
+			field := value.(map[string]any)
+			outcome := map[string]any{"entity": field["entity"], "field": field["field"], "operation": "keep"}
+			if field["field"] == "definition" {
+				outcome["operation"], outcome["value"] = "replace", definition
+				outcome["citations"] = []map[string]string{{"source": "test", "quote": definition}}
+			}
+			arg, err := json.Marshal(map[string]any{"token": draft["token"], "outcome": outcome})
+			if err != nil {
+				t.Fatal(err)
+			}
+			draft = decodeJSON(t, agent.ok(t, "propose_advance", string(arg)))
+		}
+		return draft
+	}
+	agent.fail(t, "propose_start", `{"key":"draft.some-precondition","record_type":"Concept","proposer":"agent","rationale":"r","walkthrough_token":"fabricated"}`, "not_found")
+	wrongRepo := decodeJSON(t, agent.ok(t, "start", `{"goal":"polaroid.using","repository":"github.com/another/repo","allow_dynamic_children":true}`))
+	agent.fail(t, "propose_start", fmt.Sprintf(
+		`{"key":"draft.some-precondition","record_type":"Concept","proposer":"agent","rationale":"r","walkthrough_token":%q}`, wrongRepo["token"]), "invalid_request")
+	wrongChild := decodeJSON(t, agent.ok(t, "start", `{"goal":"polaroid.using","repository":"github.com/ashuangiras/polaroid","allow_dynamic_children":true}`))
+	agent.ok(t, "attach_child", fmt.Sprintf(`{"token":%q,"key":"task.verified"}`, wrongChild["token"]))
+	agent.fail(t, "propose_start", fmt.Sprintf(
+		`{"key":"draft.some-precondition","record_type":"Concept","proposer":"agent","rationale":"r","walkthrough_token":%q}`, wrongChild["token"]), "invalid_request")
+	wrongGoal := decodeJSON(t, agent.ok(t, "start", `{"goal":"draft.parent","repository":"github.com/ashuangiras/polaroid","allow_dynamic_children":true}`))
+	agent.ok(t, "attach_child", fmt.Sprintf(`{"token":%q,"key":"polaroid.session-close-capture"}`, wrongGoal["token"]))
+	agent.fail(t, "propose_start", fmt.Sprintf(
+		`{"key":"draft.some-precondition","record_type":"Concept","proposer":"agent","rationale":"r","walkthrough_token":%q}`, wrongGoal["token"]), "invalid_request")
+	draft := review(startDraft(walk), "a verified concept")
+	stale := review(startDraft(walk), "a stale concept")
+	token := draft["token"].(string)
+	if draft["status"] != "ready" || draft["candidate_hash"] == "" {
+		t.Fatalf("draft = %v", draft)
+	}
+	request := fmt.Sprintf(`{"token":%q,"candidate_hash":%q}`, token, draft["candidate_hash"])
+	before, err := agent.kernel.Active(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent.fail(t, "propose_publish_capture", request, "invalid_request")
+	wrong := fmt.Sprintf(`{"token":%q,"candidate_hash":"%s"}`, token, strings.Repeat("0", 64))
+	agent.ok(t, "advance", fmt.Sprintf(`{"token":%q,"outcome":{"key":"task.verified","status":"done"}}`, walk))
+	agent.fail(t, "propose_publish_capture", wrong, "invalid_request")
+	current, err := agent.kernel.Active(context.Background())
+	if err != nil || current.Snapshot() != before.Snapshot() {
+		t.Fatalf("unauthorized attempts moved snapshot: %v", err)
+	}
+	published := decodeJSON(t, agent.ok(t, "propose_publish_capture", request))
+	if published["status"] != "complete" || published["snapshot"] == draft["snapshot"] {
+		t.Fatalf("capture = %v", published)
+	}
+	agent.fail(t, "propose_publish_capture", request, "not_found")
+	second := review(startDraft(walk), "second verified concept")
+	secondResult := decodeJSON(t, agent.ok(t, "propose_publish_capture",
+		fmt.Sprintf(`{"token":%q,"candidate_hash":%q}`, second["token"], second["candidate_hash"])))
+	if secondResult["status"] != "complete" || secondResult["snapshot"] == published["snapshot"] {
+		t.Fatalf("sequential capture = %v", secondResult)
+	}
+	agent.fail(t, "propose_publish_capture", fmt.Sprintf(`{"token":%q,"candidate_hash":%q}`, stale["token"], stale["candidate_hash"]), "stale_snapshot")
+	skippedParent := decodeJSON(t, agent.ok(t, "start", `{"goal":"polaroid.using","repository":"github.com/ashuangiras/polaroid","allow_dynamic_children":true}`))
+	agent.ok(t, "attach_child", fmt.Sprintf(`{"token":%q,"key":"polaroid.session-close-capture"}`, skippedParent["token"]))
+	agent.ok(t, "attach_child", fmt.Sprintf(`{"token":%q,"key":"task.verified"}`, skippedParent["token"]))
+	skipped := review(startDraft(skippedParent["token"].(string)), "skipped candidate")
+	agent.ok(t, "advance", fmt.Sprintf(`{"token":%q,"outcome":{"key":"task.verified","status":"done"}}`, skippedParent["token"]))
+	agent.ok(t, "advance", fmt.Sprintf(`{"token":%q,"outcome":{"key":"polaroid.session-close-capture","status":"skipped"}}`, skippedParent["token"]))
+	agent.fail(t, "propose_publish_capture", fmt.Sprintf(`{"token":%q,"candidate_hash":%q}`, skipped["token"], skipped["candidate_hash"]), "invalid_request")
+	pending := review(startDraft(walk), "another verified concept")
+	agent.ok(t, "advance", fmt.Sprintf(`{"token":%q,"close":true}`, walk))
+	agent.fail(t, "propose_publish_capture", fmt.Sprintf(`{"token":%q,"candidate_hash":%q}`, pending["token"], pending["candidate_hash"]), "not_found")
 }
 
 // draftFixture publishes the same vacuous producer/consumer shape

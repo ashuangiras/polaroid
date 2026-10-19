@@ -215,7 +215,7 @@ Since [ADR-0062](decisions/0062-field-complete-knowledge-publication.md), the fr
 - **Grounding and candidate validation still apply.** New or replacement content in grounded fields needs `citations`, each quote present verbatim in the new content. Keep/remove/clear need none. The complete candidate is checked by the catalog, JSON-LD, SHACL, completeness, governance, reference and non-vacuous composition gates. Meaningful field changes are allowed even when they do not alter a Corpus Logic resolution; an unchanged review closes with status `unchanged` and creates no publication.
 - **Automatic commit and correction.** Once every field is answered, that same `propose_advance` call validates the receipt and attempts publication. A failed check leaves the draft open with its decisions intact; when all fields were already answered, a later call may correct any field and retry. Results include the full inventory and each field's current `draft_value`, `answered` and operation. A pure peek does not attempt a commit. `close: true` abandons the draft; after commit or close the token is not found. Draft events are ephemeral SQLite state (migration 15), not stored in knowledge.
 
-An unknown or incompatible `record_type`, key/type mismatch, missing citation, disallowed operation or invalid field value is `invalid_request`; unknown/expired/closed draft tokens are `not_found`; a concurrent advance rejected against a stale event count is `draft_conflict` (peek and retry); stale pinned snapshots conflict rather than merging. The final publish result returns the new snapshot and key.
+An unknown or incompatible `record_type`, key/type mismatch, missing citation, disallowed operation or invalid field value is `invalid_request`; unknown/expired/closed draft tokens are `not_found`; a concurrent advance rejected against a stale event count is `draft_conflict` (peek and retry); stale pinned snapshots conflict rather than merging. The original automatic final-field publication contract describes v6 before [ADR-0065](decisions/0065-capture-publication-authorization.md). On current servers v6 proposal writes are refused with migration guidance to v8; the tool input schemas are unchanged.
 
 ## Agent mode v7 (`/mcp/agent/v7`)
 
@@ -234,6 +234,20 @@ An unknown or incompatible `record_type`, key/type mismatch, missing citation, d
 The returned plan combines the goal's catalog `composes` steps with runtime-attached children, using the existing `precedes` ordering and deterministic key tie-break. Nested `composes` inside a selected child remain ordinary plan descendants and are advanced by their full `path`. A dynamic parent becomes `complete` only after at least one dynamic child has been attached and every leaf in the combined plan is `done` or `skipped`. `escalate`, `blocked`, or any outstanding leaf keeps it `in_progress`; attaching another child reopens a completed but unclosed walk. `close` and TTL expiry still end the walkthrough, after which later calls are `not_found`.
 
 V7's agent instructions describe this sequence: discover/read the root, start it in dynamic-child mode at that snapshot, discover/read the task candidate, attach it, execute its guidance with normal tools, and `advance` its leaves. When more applicable task procedures are found during the work, attach them to the same open parent.
+
+On servers implementing [ADR-0065](decisions/0065-capture-publication-authorization.md), v7 `propose_start` and `propose_advance` refuse writes and direct clients to v8. Walkthrough and read operations, including runtime child attachment, retain their v7 contract.
+
+## Agent mode v8 (`/mcp/agent/v8`)
+
+V8 keeps v7 discovery, reads, resolution and dynamic walkthroughs, and separates field review from publication. Earlier proposal tool schemas remain unchanged but v6/v7 writes refuse with `invalid_request` and an actionable v8 migration message.
+
+| Tool | Read-only | Arguments | Result |
+| --- | --- | --- | --- |
+| `propose_start` | no | v6 fields plus optional `walkthrough_token`, an open v7/v8 `polaroid.using` parent for local capture | Full field inventory, `{token, snapshot, key, status: "in_progress"}` |
+| `propose_advance` | no | v6 field outcome or peek/close | Inventory while in progress; after the final decision `{token, snapshot, key, status: "ready", candidate_hash, fields}` without publication; unchanged reviews close as `unchanged` |
+| `propose_publish_capture` | no | `{token, candidate_hash}` | `{snapshot, key, status: "complete"}` on successful local publication; draft consumed |
+
+The capture binding is persisted with the draft. At publication the server checks the original parent's repository, pinned local capture Procedure, live token and progress: capture must be the active final step, all other leaves must be done or skipped, and at least one task child must be attached. A caller-provided token, name, rationale or hash does not itself grant authorization. An ordinary draft remains ready until an authenticated operator reviews and approves it through the [operator draft routes](http-api.md#git-native-knowledge-operator-api). Both publication paths revalidate the exact candidate and its receipt against the active snapshot. A changed draft requires a new hash; a stale base returns `stale_snapshot`; expired or consumed tokens return `not_found`. Neither path pushes to remotes.
 
 ## Resources
 

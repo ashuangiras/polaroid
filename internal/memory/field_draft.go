@@ -35,28 +35,30 @@ func (a FieldDraftAnswer) valid() bool {
 }
 
 type FieldDraftEvent struct {
-	Token      string
-	Key        string
-	Snapshot   string
-	RecordType string
-	New        bool
-	Proposer   string
-	Rationale  string
-	Answer     *FieldDraftAnswer
-	CreatedAt  time.Time
+	Token            string
+	Key              string
+	Snapshot         string
+	WalkthroughToken string
+	RecordType       string
+	New              bool
+	Proposer         string
+	Rationale        string
+	Answer           *FieldDraftAnswer
+	CreatedAt        time.Time
 }
 
 type FieldDraftState struct {
-	Token      string
-	Key        string
-	Snapshot   string
-	RecordType string
-	New        bool
-	Proposer   string
-	Rationale  string
-	Answers    map[string]FieldDraftAnswer
-	CreatedAt  time.Time
-	ExpiresAt  time.Time
+	Token            string
+	Key              string
+	Snapshot         string
+	WalkthroughToken string
+	RecordType       string
+	New              bool
+	Proposer         string
+	Rationale        string
+	Answers          map[string]FieldDraftAnswer
+	CreatedAt        time.Time
+	ExpiresAt        time.Time
 }
 
 type FieldDraftStore interface {
@@ -77,10 +79,14 @@ func NewFieldDrafts(store FieldDraftStore) *FieldDrafts {
 	return &FieldDrafts{store: store, now: timestamp, ttl: DraftTTL}
 }
 
-func (d *FieldDrafts) Start(ctx context.Context, key, snapshot, recordType string, isNew bool, proposer, rationale string) (FieldDraftState, error) {
+func (d *FieldDrafts) Start(ctx context.Context, key, snapshot, recordType string, isNew bool, proposer, rationale string, walkthroughToken ...string) (FieldDraftState, error) {
+	var boundToken string
+	if len(walkthroughToken) > 0 {
+		boundToken = walkthroughToken[0]
+	}
 	ev := FieldDraftEvent{
 		Token: uuid.NewV7().String(), Key: key, Snapshot: snapshot, RecordType: recordType,
-		New: isNew, Proposer: proposer, Rationale: rationale, CreatedAt: d.now(),
+		New: isNew, Proposer: proposer, Rationale: rationale, WalkthroughToken: boundToken, CreatedAt: d.now(),
 	}
 	if err := d.store.AppendFieldDraftEvent(ctx, ev, 0); err != nil {
 		return FieldDraftState{}, err
@@ -140,6 +146,7 @@ func foldFieldDraft(events []FieldDraftEvent, ttl time.Duration) FieldDraftState
 		if ev.Key != "" {
 			state.Key, state.Snapshot, state.RecordType, state.New = ev.Key, ev.Snapshot, ev.RecordType, ev.New
 			state.Proposer, state.Rationale = ev.Proposer, ev.Rationale
+			state.WalkthroughToken = ev.WalkthroughToken
 		}
 		if ev.Answer != nil {
 			state.Answers[fieldDraftAnswerKey(ev.Answer.Entity, ev.Answer.Field)] = *cloneFieldDraftAnswer(ev.Answer)

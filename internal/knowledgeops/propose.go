@@ -36,24 +36,31 @@ func (p *Proposer) Propose(_ context.Context, _ wire.ProposeRequest) (wire.Propo
 // through the shared kernel gate. Meaningful guidance changes need not alter
 // Corpus Logic resolution; exact no-ops are refused by the kernel.
 func (p *Proposer) ProposeReviewed(ctx context.Context, prop knowledge.Proposal, key string, compositionKeys []string) (wire.ProposeResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, ProposeTimeout)
-	defer cancel()
-	candidate, err := p.kernel.Validate(ctx, prop)
-	if err != nil {
-		return wire.ProposeResult{}, classify(err)
-	}
-	for _, touched := range slices.Compact(slices.Clone(compositionKeys)) {
-		if problems, err := p.checkOwnComposition(ctx, candidate, touched); err != nil {
-			return wire.ProposeResult{}, err
-		} else if len(problems) > 0 {
-			return wire.ProposeResult{}, classify(&knowledge.ValidationError{Problems: problems})
-		}
+	if err := p.ValidateReviewed(ctx, prop, compositionKeys); err != nil {
+		return wire.ProposeResult{}, err
 	}
 	snap, err := p.kernel.Publish(ctx, prop)
 	if err != nil {
 		return wire.ProposeResult{}, classify(err)
 	}
 	return wire.ProposeResult{Snapshot: string(snap), Key: key}, nil
+}
+
+func (p *Proposer) ValidateReviewed(ctx context.Context, prop knowledge.Proposal, compositionKeys []string) error {
+	ctx, cancel := context.WithTimeout(ctx, ProposeTimeout)
+	defer cancel()
+	candidate, err := p.kernel.Validate(ctx, prop)
+	if err != nil {
+		return classify(err)
+	}
+	for _, touched := range slices.Compact(slices.Clone(compositionKeys)) {
+		if problems, err := p.checkOwnComposition(ctx, candidate, touched); err != nil {
+			return err
+		} else if len(problems) > 0 {
+			return classify(&knowledge.ValidationError{Problems: problems})
+		}
+	}
+	return nil
 }
 
 func (p *Proposer) checkOwnComposition(ctx context.Context, candidate *knowledge.Catalog, key string) ([]knowledge.Problem, error) {

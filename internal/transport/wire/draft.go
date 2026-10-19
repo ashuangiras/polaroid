@@ -104,27 +104,46 @@ type FieldDraftAdvanceRequest struct {
 }
 
 type FieldDraftFieldInfo struct {
-	Entity            string         `json:"entity"`
-	Field             string         `json:"field"`
-	Kind              string         `json:"kind"`
-	Value             jsontext.Value `json:"value"`
-	Present           bool           `json:"present"`
-	Required          bool           `json:"required"`
-	Grounded          bool           `json:"grounded"`
-	Set               bool           `json:"set"`
-	NewEntity         bool           `json:"new_entity"`
-	Answered          bool           `json:"answered"`
-	Operation         string         `json:"operation,omitzero"`
-	DraftValue        jsontext.Value `json:"draft_value,omitzero"`
-	AllowedOperations []string       `json:"allowed_operations"`
+	Entity            string            `json:"entity"`
+	Field             string            `json:"field"`
+	Kind              string            `json:"kind"`
+	Value             jsontext.Value    `json:"value"`
+	Present           bool              `json:"present"`
+	Required          bool              `json:"required"`
+	Grounded          bool              `json:"grounded"`
+	Set               bool              `json:"set"`
+	NewEntity         bool              `json:"new_entity"`
+	Answered          bool              `json:"answered"`
+	Operation         string            `json:"operation,omitzero"`
+	DraftValue        jsontext.Value    `json:"draft_value,omitzero"`
+	AnswerValue       jsontext.Value    `json:"answer_value,omitzero"`
+	Citations         []ProposeCitation `json:"citations,omitzero"`
+	AllowedOperations []string          `json:"allowed_operations"`
 }
 
 type FieldDraftResult struct {
-	Token      string                `json:"token,omitzero"`
-	Snapshot   string                `json:"snapshot,omitzero"`
-	Key        string                `json:"key,omitzero"`
-	Status     string                `json:"status"`
-	NextEntity string                `json:"next_entity,omitzero"`
-	NextField  string                `json:"next_field,omitzero"`
-	Fields     []FieldDraftFieldInfo `json:"fields,omitzero"`
+	Token         string                `json:"token,omitzero"`
+	Snapshot      string                `json:"snapshot,omitzero"`
+	Key           string                `json:"key,omitzero"`
+	Status        string                `json:"status"`
+	NextEntity    string                `json:"next_entity,omitzero"`
+	NextField     string                `json:"next_field,omitzero"`
+	Fields        []FieldDraftFieldInfo `json:"fields,omitzero"`
+	CandidateHash string                `json:"candidate_hash,omitzero"`
+	Proposer      string                `json:"proposer,omitzero"`
+	Rationale     string                `json:"rationale,omitzero"`
+}
+
+type FieldDraftStartRequestV8 struct {
+	Key              string `json:"key" jsonschema:"the stable canonical key"`
+	RecordType       string `json:"record_type" jsonschema:"Domain, Concept, Claim, Rule, Procedure, Evidence or Exception"`
+	New              bool   `json:"new,omitzero" jsonschema:"true to create this entity"`
+	Proposer         string `json:"proposer" jsonschema:"proposal attribution, not authorization"`
+	Rationale        string `json:"rationale" jsonschema:"why this complete field state is correct"`
+	WalkthroughToken string `json:"walkthrough_token,omitzero" jsonschema:"open v7 or v8 polaroid.using walkthrough; required for capture publication, omitted for operator approval"`
+}
+
+type FieldDraftPublishRequest struct {
+	Token         string `json:"token" jsonschema:"the reviewed draft token"`
+	CandidateHash string `json:"candidate_hash" jsonschema:"the exact validated candidate hash returned by propose_advance"`
 }

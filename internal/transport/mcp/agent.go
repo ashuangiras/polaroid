@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"log/slog"
+	"net/http"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -264,7 +265,7 @@ func (t *tools) agentProposeAdvance(ctx context.Context, in wire.DraftAdvanceReq
 // It deliberately does not expose the retired v4 single-shot or v5
 // four-field proposal tools.
 const agentInstructionsV6 = agentInstructionsV3 + `
-7. To publish or update knowledge, use propose_start with its canonical key, record_type, whether the entity is new, proposer and rationale. It returns the complete ordered inventory of every authorable field for the selected type, with each current value and its allowed operations. For a Procedure, this includes both its guidance document and its typed Procedure record; for other types, it includes the typed record. IDs, keys, type and JSON-LD context are system-managed. contract and instructions are opaque JSON values. Answer propose_advance for the named next_entity and next_field with exactly one allowed operation: keep preserves an existing value; add or remove names list entries; replace supplies the full new value; clear removes an optional field. New and replacement content in grounded fields needs citations whose quotes occur verbatim in that content. Keep, remove and clear do not take citations. Every field must receive a decision, including fields that already have values. Each result returns the complete inventory and its current draft values. Once all fields are answered, Polaroid validates the full candidate and attempts publication; if a check fails, the draft stays open so you can correct an already-answered field. An unchanged review closes without creating a publication. Use propose_advance with close true to abandon a draft.`
+7. v6/v7 propose_start and propose_advance writes are disabled. Use /mcp/agent/v8 for full-field review without automatic publication, followed by a capture authorization or authenticated operator approval. Read and walkthrough operations remain available.`
 
 // AgentFieldDrafter is what agent mode v6 adds: full, type-specific
 // field-review proposals, expressed only in wire shapes.
@@ -284,8 +285,8 @@ func newAgentServerV6(agent AgentKnowledge, resolver AgentResolver, guide AgentG
 	add(s, t, "resolve", "Resolve what applies to a record (procedure, concept or claim) in your context, at a snapshot: obligations with derivation identifiers, specializations, verified and rejected exceptions, derived facts, conflicts, unknowns, whether the result is complete, evidence status, and with then, whether a second procedure can follow it. Deterministic for the same snapshot, context and time.", read, t.agentResolve)
 	add(s, t, "start", "Start a stateful walkthrough of goal's composed steps, pinned at the active snapshot. Returns {token, snapshot, plan}: keep the token to call advance across later turns or sessions. Pass expand true for the whole nested plan tree instead of one leaf at a time.", write, t.agentStart)
 	add(s, t, "advance", "Report an outcome (done, skipped, escalate or blocked, with an optional reason) for one of a walkthrough's composed steps, or peek its current plan unchanged when outcome is omitted. Returns the updated {token, snapshot, plan, status}. Pass close true to end the walkthrough immediately, whether or not it is complete; pass expand true as start's.", write, t.agentAdvance)
-	add(s, t, "propose_start", "Start a full field review for a new or existing knowledge entity. Specify key, record_type, new, proposer and rationale. Returns every authorable field and its current value; Procedure reviews include both the guidance document and typed record.", write, t.agentFieldProposeStart)
-	add(s, t, "propose_advance", "Answer exactly the next field with an allowed keep, add, remove, replace or clear operation, or peek unchanged. Returns the full field inventory; after the last decision, validates and publishes the candidate immediately.", write, t.agentFieldProposeAdvance)
+	add(s, t, "propose_start", "Retired for writes: use /mcp/agent/v8 propose_start to review without publishing.", write, t.agentRetiredFieldStart)
+	add(s, t, "propose_advance", "Retired for writes: use /mcp/agent/v8 propose_advance, then propose_publish_capture or operator approval.", write, t.agentRetiredFieldAdvance)
 	return s
 }
 
@@ -305,15 +306,53 @@ func newAgentServerV7(agent AgentKnowledge, resolver AgentResolver, guide AgentG
 	add(s, t, "start", "Start a walkthrough pinned to the active snapshot or the supplied snapshot. Set allow_dynamic_children to keep a parent in_progress while it awaits task-specific child Procedures; attach them later with attach_child.", write, t.agentStartV7)
 	add(s, t, "attach_child", "Attach one Procedure visible at the walkthrough's pinned snapshot to an open dynamic-parent walkthrough. Children are runtime-only; attaching after complete reopens the parent. A concurrent child-set change returns walkthrough_conflict; peek and retry.", write, t.agentAttachChildV7)
 	add(s, t, "advance", "Report done, skipped, escalate or blocked for a static or dynamically attached leaf, or peek the plan unchanged. Close to abandon the parent.", write, t.agentAdvanceV7)
-	add(s, t, "propose_start", "Start a full field review for a new or existing knowledge entity. Specify key, record_type, new, proposer and rationale. Returns every authorable field and its current value; Procedure reviews include both the guidance document and typed record.", write, t.agentFieldProposeStart)
-	add(s, t, "propose_advance", "Answer exactly the next field with an allowed keep, add, remove, replace or clear operation, or peek unchanged. Returns the full field inventory; after the last decision, validates and publishes the candidate immediately.", write, t.agentFieldProposeAdvance)
+	add(s, t, "propose_start", "Retired for writes: use /mcp/agent/v8 propose_start to review without publishing.", write, t.agentRetiredFieldStart)
+	add(s, t, "propose_advance", "Retired for writes: use /mcp/agent/v8 propose_advance, then propose_publish_capture or operator approval.", write, t.agentRetiredFieldAdvance)
 	return s
 }
 
-func (t *tools) agentFieldProposeStart(ctx context.Context, in wire.FieldDraftStartRequest) (any, error) {
-	return t.fieldDrafter.Start(ctx, in)
+func (t *tools) agentRetiredFieldStart(_ context.Context, _ wire.FieldDraftStartRequest) (any, error) {
+	return nil, wire.NewKnowledgeError(http.StatusBadRequest, wire.InvalidRequest("v6/v7 proposal writes are disabled; use /mcp/agent/v8 propose_start", "proposal", "migrate to v8"))
 }
 
-func (t *tools) agentFieldProposeAdvance(ctx context.Context, in wire.FieldDraftAdvanceRequest) (any, error) {
-	return t.fieldDrafter.Advance(ctx, in)
+func (t *tools) agentRetiredFieldAdvance(_ context.Context, _ wire.FieldDraftAdvanceRequest) (any, error) {
+	return nil, wire.NewKnowledgeError(http.StatusBadRequest, wire.InvalidRequest("v6/v7 proposal writes are disabled; use /mcp/agent/v8 propose_advance", "proposal", "migrate to v8"))
+}
+
+type AgentFieldDrafterV8 interface {
+	StartV8(context.Context, wire.FieldDraftStartRequestV8) (wire.FieldDraftResult, error)
+	Advance(context.Context, wire.FieldDraftAdvanceRequest) (wire.FieldDraftResult, error)
+	PublishCapture(context.Context, wire.FieldDraftPublishRequest) (wire.FieldDraftResult, error)
+}
+
+const agentInstructionsV8 = agentInstructionsV7 + `
+9. v6/v7 proposal writes are disabled. On v8, propose_start begins a complete field review; supply walkthrough_token to bind a capture draft to an open polaroid.using parent with its local capture child. propose_advance validates the candidate after the final field but does not publish: it returns ready and candidate_hash. For capture, finish all task children before calling propose_publish_capture with the draft token and candidate_hash while capture is the active final step. Other drafts need an authenticated operator to inspect and approve the exact candidate through POST /v2/knowledge/drafts/{token}/publication; caller-supplied proposer/rationale do not authorize publication. No agent publication pushes to remotes.`
+
+func newAgentServerV8(agent AgentKnowledge, resolver AgentResolver, guide AgentGuideV7, drafter AgentFieldDrafterV8, logger *slog.Logger) *sdk.Server {
+	s := baseServer(agentInstructionsV8, logger)
+	t := &tools{agent: agent, resolver: resolver, guideV7: guide, fieldDrafterV8: drafter, logger: logger}
+	const read, write = true, false
+	add(s, t, "discover", discoverDescription, read, t.agentDiscover)
+	add(s, t, "read", "Get one procedure's executable guidance by its canonical key, at a snapshot (the active one by default).", read, t.agentRead)
+	add(s, t, "feedback", "Report a genuine deficiency in existing procedural knowledge.", write, t.agentFeedback)
+	add(s, t, "resolve", "Resolve typed knowledge against context at a pinned snapshot.", read, t.agentResolve)
+	add(s, t, "start", "Start a walkthrough pinned to a snapshot, optionally allowing dynamic children.", write, t.agentStartV7)
+	add(s, t, "attach_child", "Attach a runtime Procedure child to the open dynamic parent.", write, t.agentAttachChildV7)
+	add(s, t, "advance", "Advance or inspect a walkthrough.", write, t.agentAdvanceV7)
+	add(s, t, "propose_start", "Start a complete field review. Optionally bind to an open capture walkthrough. This does not publish.", write, t.agentFieldProposeStartV8)
+	add(s, t, "propose_advance", "Review the next field; final validation returns ready and candidate_hash without publishing.", write, t.agentFieldProposeAdvanceV8)
+	add(s, t, "propose_publish_capture", "Publish an exact ready draft only if its bound local capture walkthrough is currently eligible.", write, t.agentFieldPublishCapture)
+	return s
+}
+
+func (t *tools) agentFieldProposeStartV8(ctx context.Context, in wire.FieldDraftStartRequestV8) (any, error) {
+	return t.fieldDrafterV8.StartV8(ctx, in)
+}
+
+func (t *tools) agentFieldProposeAdvanceV8(ctx context.Context, in wire.FieldDraftAdvanceRequest) (any, error) {
+	return t.fieldDrafterV8.Advance(ctx, in)
+}
+
+func (t *tools) agentFieldPublishCapture(ctx context.Context, in wire.FieldDraftPublishRequest) (any, error) {
+	return t.fieldDrafterV8.PublishCapture(ctx, in)
 }

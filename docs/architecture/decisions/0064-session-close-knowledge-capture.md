@@ -26,3 +26,5 @@ The owner requires completed work in `github.com/ashuangiras/polaroid` to improv
 - Publication continues through the field-complete validation gate and preserves its immutable review receipt. Other proposal workflows keep their existing owner-approval requirement.
 - Local knowledge can grow without automatically sharing it. Remote fetch, activation and push remain explicit operator operations under the configured trust policy.
 - This is workflow enforcement for agents that follow `polaroid.using`, not a security boundary against non-compliant MCP clients.
+
+**Authorization amendment:** [ADR-0065](0065-capture-publication-authorization.md) replaces automatic final-field publication with a v8 server-checked capture publication or authenticated operator approval. The guidance here remains the knowledge-selection policy; it no longer describes the current write mechanism.

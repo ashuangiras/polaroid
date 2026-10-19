@@ -179,13 +179,14 @@ func setupKnowledge(dir, sourcesPath, authoritiesPath, tokenPath string, fb *mem
 		return nil, err
 	}
 	proposer := knowledgeops.NewProposer(syncer.Kernel(), ev, trust)
+	guide := knowledgeops.NewGuide(syncer.Kernel(), memory.NewWalkthroughs(walkthroughs), ev, trust)
 	return &knowledgeComponents{
 		agent:        knowledgeops.NewAgent(syncer.Kernel(), fb),
 		resolver:     knowledgeops.NewResolver(syncer.Kernel(), ev, trust),
-		guide:        knowledgeops.NewGuide(syncer.Kernel(), memory.NewWalkthroughs(walkthroughs), ev, trust),
+		guide:        guide,
 		proposer:     proposer,
 		drafter:      knowledgeops.NewDrafter(syncer.Kernel(), proposer, memory.NewDrafts(drafts)),
-		fieldDrafter: knowledgeops.NewFieldDrafter(syncer.Kernel(), proposer, memory.NewFieldDrafts(fieldDrafts)),
+		fieldDrafter: knowledgeops.NewFieldDrafter(syncer.Kernel(), proposer, memory.NewFieldDrafts(fieldDrafts), guide),
 		operator:     knowledgeops.NewOperator(syncer, policy, fb),
 		token:        token,
 	}, nil

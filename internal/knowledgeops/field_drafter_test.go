@@ -21,9 +21,64 @@ func fieldDrafterFixture(t *testing.T) (*knowledgeops.FieldDrafter, *knowledge.K
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	t.Cleanup(func() { _ = store.Close() })
 	proposer := knowledgeops.NewProposer(kernel, datalog.Evaluator{}, policy.Trust{})
 	return knowledgeops.NewFieldDrafter(kernel, proposer, memory.NewFieldDrafts(store)), kernel
+}
+
+func approveReviewedDraft(t *testing.T, d *knowledgeops.FieldDrafter, ready wire.FieldDraftResult) wire.FieldDraftResult {
+	t.Helper()
+	if ready.Status != "ready" || ready.CandidateHash == "" {
+		t.Fatalf("reviewed draft = %+v, want ready candidate", ready)
+	}
+	result, err := d.PublishApproved(context.Background(), wire.FieldDraftPublishRequest{Token: ready.Token, CandidateHash: ready.CandidateHash})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func TestFieldDrafterApprovalCannotApplyToChangedCandidate(t *testing.T) {
+	drafter, kernel := fieldDrafterFixture(t)
+	ctx := context.Background()
+	start, err := drafter.StartV8(ctx, wire.FieldDraftStartRequestV8{
+		Key: "draft.some-precondition", RecordType: "Concept", Proposer: "untrusted.agent", Rationale: "review changes",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ready wire.FieldDraftResult
+	for _, field := range start.Fields {
+		outcome := &wire.FieldDraftOutcomeArg{Entity: field.Entity, Field: field.Field, Operation: "keep"}
+		if field.Field == "definition" {
+			outcome.Operation, outcome.Value = "replace", "first correction"
+			outcome.Citations = []wire.ProposeCitation{{Source: "test", Quote: "first correction"}}
+		}
+		ready, err = drafter.Advance(ctx, wire.FieldDraftAdvanceRequest{Token: start.Token, Outcome: outcome})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	firstHash := ready.CandidateHash
+	changed, err := drafter.Advance(ctx, wire.FieldDraftAdvanceRequest{Token: start.Token, Outcome: &wire.FieldDraftOutcomeArg{
+		Entity: "record", Field: "definition", Operation: "replace", Value: "second correction",
+		Citations: []wire.ProposeCitation{{Source: "test", Quote: "second correction"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.CandidateHash == firstHash {
+		t.Fatal("modified draft kept the same candidate hash")
+	}
+	if _, err := drafter.PublishApproved(ctx, wire.FieldDraftPublishRequest{Token: start.Token, CandidateHash: firstHash}); err == nil {
+		t.Fatal("approval for a previous candidate was accepted")
+	}
+	active, err := kernel.Active(ctx)
+	if err != nil || active.Snapshot() != knowledge.Snapshot(start.Snapshot) {
+		t.Fatalf("failed approval changed active snapshot: %v", err)
+	}
+	approveReviewedDraft(t, drafter, changed)
 }
 
 func TestFieldDrafterReturnsAndReviewsFullProcedureState(t *testing.T) {
@@ -66,6 +121,7 @@ func TestFieldDrafterReturnsAndReviewsFullProcedureState(t *testing.T) {
 			t.Fatalf("answer %s.%s: %v", field.Entity, field.Field, err)
 		}
 	}
+	result = approveReviewedDraft(t, drafter, result)
 	if result.Status != "complete" || result.Key != "draft.producer" || result.Snapshot == "" {
 		t.Fatalf("final result = %+v, want committed proposal", result)
 	}
@@ -116,6 +172,7 @@ func TestFieldDrafterCreatesTypedRecordOnlyAfterEveryFieldIsReviewed(t *testing.
 			t.Fatalf("answer %s: %v", field.Field, err)
 		}
 	}
+	result = approveReviewedDraft(t, drafter, result)
 	if result.Status != "complete" || result.Key != "draft.new-concept" {
 		t.Fatalf("final result = %+v, want a published Concept", result)
 	}
@@ -179,6 +236,7 @@ func TestFieldDrafterCreatesProcedureWithBothReviewedLayers(t *testing.T) {
 			t.Fatalf("answer %s.%s: %v", field.Entity, field.Field, err)
 		}
 	}
+	result = approveReviewedDraft(t, drafter, result)
 	if result.Status != "complete" || result.Key != "draft.new-procedure" {
 		t.Fatalf("new Procedure result = %+v", result)
 	}
@@ -221,6 +279,7 @@ func TestFieldDrafterRemovesExistingListEntryWithReceiptDelta(t *testing.T) {
 			t.Fatalf("answer %s: %v", field.Field, err)
 		}
 	}
+	result = approveReviewedDraft(t, drafter, result)
 	if result.Status != "complete" || result.Key != "draft.some-precondition" {
 		t.Fatalf("removal result = %+v", result)
 	}
@@ -272,6 +331,7 @@ func TestFieldDrafterAllowsCorrectionAfterCandidateValidationFails(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	result = approveReviewedDraft(t, drafter, result)
 	if result.Status != "complete" || result.Snapshot == "" {
 		t.Fatalf("corrected draft = %+v, want published result", result)
 	}
