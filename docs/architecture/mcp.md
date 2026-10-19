@@ -1,23 +1,25 @@
 # MCP server
 
-`polaroidd` serves the [Model Context Protocol](https://modelcontextprotocol.io) at **`/mcp`**, beside the [HTTP API](http-api.md) and on the same listener. The default URL is `http://127.0.0.1:7417/mcp`. It exposes the same operations as tools and resources. Decisions are in [ADR-0014](decisions/0014-mcp-transport.md).
+`polaroidd` serves the [Model Context Protocol](https://modelcontextprotocol.io) only at **`/mcp/agent/v8`**, beside the [HTTP API](http-api.md) and on the same listener. The default URL is `http://127.0.0.1:7417/mcp/agent/v8`. The former `/mcp` operator tools and resources are available as HTTP/CLI operations; their complete mapping and the compatibility break are in [ADR-0066](decisions/0066-v8-only-mcp.md).
 
 ## Transport
 
 - **Protocol:** streamable HTTP, revisions **2026-07-28** and **2025-11-25** ([ADR-0016](decisions/0016-mcp-protocol-2025-11-25.md)). 2026-07-28 is sessionless by design. A 2025-11-25 client begins with the `initialize` handshake, but it gets no session either: each POST is a complete request at both revisions, with identical tools, results and errors.
 - **Older clients:** a request naming an older revision is refused with `400 Unsupported protocol version`. An older `initialize` is answered with 2025-11-25, and a client that cannot speak it disconnects.
 - **Responses:** JSON (`application/json`), never SSE. There is no `Mcp-Session-Id`, and `GET` and `DELETE` are not used.
-- **Limits and security:** bodies are limited to 1 MiB. `/mcp` sits behind the same loopback `Host` check and cross-origin protection as the API, with no authentication ([ADR-0006](decisions/0006-local-unauthenticated-api.md)).
-- **Caching:** every `server/discover`, list and `resources/read` result carries `ttlMs: 0`, the protocol's cache hint (SEP-2549) for "immediately stale". The tools change when `polaroidd` is upgraded and records change with every write, so a client must not answer from a cached result. `serverInfo.version` is informational and stays `v1`; it does not change with the tool catalogue.
-- **Server capabilities:** `tools` and `resources`, plus short instructions that describe the agent loop. They tell agents to find their repository's bindings and the procedures that may fit their task (`discover_procedures` with the task and `repository`: lexical matches with explanations, latest versions only, relevance judged by the agent; `list_procedures` with `repository` for everything that applies there; a listed scope is the latest version's, and unspecified declares nothing), that evidence under any identifier of a registered repository counts for all of them ([ADR-0022](decisions/0022-repository-identity-in-evidence.md)), that every graph node names its version's own scope, to be read with that version's contract before reuse, that `selection_evidence` explains why a version was selected and does not verify their checkout, that `commit` and `inputs` give `target_verification` for the exact run, and that an unverified target still has to be run and recorded ([ADR-0018](decisions/0018-selection-evidence-and-target-verification.md)). Children are recorded first, each with the inputs its reference maps from the parent's ([ADR-0024](decisions/0024-child-inputs-follow-the-reference-mapping.md)). A reference with a condition applies only when it holds: agents decide each one themselves, record a decision for each, and pass their decisions for target verification ([ADR-0029](decisions/0029-conditional-references-and-applicability-decisions.md)). Lists continue with the same arguments, and the procedure, binding and toil item lists can page a snapshot ([ADR-0023](decisions/0023-pagination-guarantees-and-scope-labels.md)). New procedures declare applicability and origin, and agents check a proposal with `suggest_duplicates` before creating or revising one, preferring to reuse or revise an overlapping procedure ([ADR-0032](decisions/0032-lexical-discovery-and-duplicate-suggestions.md)). The last step asks agents to check `list_feedback` with `status` `open` first, then report problems with Polaroid, and suggestions for it, with `report_feedback`, naming the subject, and to resolve a report they addressed with `resolve_feedback` ([ADR-0015](decisions/0015-feedback-reports.md), [ADR-0021](decisions/0021-targeted-feedback-and-bounded-lists.md), [ADR-0040](decisions/0040-feedback-resolution.md)). A final step asks agents who see repetitive, mechanical work to look for an existing toil item with `list_toil_items` before creating one, to revise it when they observe the activity again, to cite exact versions and executions, to keep observed facts apart from hypotheses, and to treat its status as their assessment, not verification ([ADR-0034](decisions/0034-toil-items.md)).
+- **Limits and security:** bodies are limited to 1 MiB. `/mcp/agent/v8` sits behind the same loopback `Host` check and cross-origin protection as the API, with no operator authentication ([ADR-0006](decisions/0006-local-unauthenticated-api.md)).
+- **Caching:** clients must refresh tool descriptions after an upgrade; v8 has no operator resources.
+- **Server capabilities:** v8 advertises only agent tools and instructions. Operator/evidence actions use the [HTTP API](http-api.md) or CLI, never the unauthenticated agent tool catalog.
 
-## Tools
+## Retired full-mode tools (historical inventory)
+
+The table below documents the 42 tools formerly served at `/mcp`; **none is advertised on v8**. Use [ADR-0066](decisions/0066-v8-only-mcp.md) to migrate each tool to HTTP. Historical schema snapshots are retained for reference, not as a live contract.
 
 Arguments are flat JSON objects, named after the record fields in [records.md](records.md).
 
 - **Decoding is strict, as for HTTP request bodies.** Unknown or duplicate members are rejected, and so are values of the wrong JSON type. Free-form objects (`contract`, `instructions`, `inputs`, `evidence`, `environment.attributes`, reference `inputs`, feedback `context`, toil `assessment` and `proposal`) are stored with their member order intact, as Polaroid receives it. MCP clients may reorder members before sending (VS Code Copilot chat does), so keep order-sensitive data in arrays ([records.md](records.md#procedure-version-implemented)).
 - **Schemas:** every tool advertises an input schema generated from its argument type.
-- **Contract:** this table, and the argument names, JSON types, nesting and requiredness in [`internal/transport/mcp/testdata/full-mode-tools.json`](../../internal/transport/mcp/testdata/full-mode-tools.json), are the v1 contract of `/mcp` ([ADR-0038](decisions/0038-stable-releases-and-compatibility.md)). Tests compare the served schemas with that file, and that file with this table, so any change to a tool's arguments must be made deliberately in both.
+- **Historical contract:** this table records the former v1 `/mcp` contract ([ADR-0038](decisions/0038-stable-releases-and-compatibility.md)); the full-mode schema fixture was retired with the endpoint.
 
 | Tool | Read-only | Arguments | Result |
 | --- | --- | --- | --- |
@@ -84,7 +86,7 @@ Field names in `fields` are the flat argument names. For example, a missing `phi
 
 See [knowledge-guide.md](knowledge-guide.md) for a practical, worked-example guide to using agent mode in a repository (setup, discover/read/resolve/feedback, storing knowledge); this section and the next are its normative tool contract.
 
-**Finalized, under the v1 compatibility guarantee** ([ADR-0038](decisions/0038-stable-releases-and-compatibility.md), amended by [ADR-0043](decisions/0043-knowledge-first-agent-mode.md), built on Git-native living knowledge by [ADR-0048](decisions/0048-git-native-agent-interface.md), finalized by [ADR-0049](decisions/0049-agent-mode-finalized-no-migration.md), `discover`'s `kind` argument added by [ADR-0051](decisions/0051-agent-mode-discover-kinds.md)): the same stability promise as `/mcp` applies to its three tools, their arguments and their result shapes.
+The following v1-v7 sections describe the historical evolution of the v8 tools, **not live endpoints**. Their route compatibility promise was superseded by [ADR-0066](decisions/0066-v8-only-mcp.md).
 
 A second endpoint on the same listener, with the same transport rules, serves only the three tools everyday procedural-knowledge use needs ([ADR-0043](decisions/0043-knowledge-first-agent-mode.md)). A client connected to it never loads the full API's schemas, and nothing it does records an execution. It is backed solely by living knowledge in a separate, Git-native store ([ADR-0045](decisions/0045-living-knowledge-kernel.md)), named only by canonical key and an opaque snapshot token: there is no procedure version, binding, or evidence-based selection anywhere in this mode, and it shares no record with `/mcp`'s procedures, versions, bindings, executions or verifications.
 
@@ -239,7 +241,7 @@ On servers implementing [ADR-0065](decisions/0065-capture-publication-authorizat
 
 ## Agent mode v8 (`/mcp/agent/v8`)
 
-V8 keeps v7 discovery, reads, resolution and dynamic walkthroughs, and separates field review from publication. Earlier proposal tool schemas remain unchanged but v6/v7 writes refuse with `invalid_request` and an actionable v8 migration message.
+V8 retains discovery, reads, resolution and dynamic walkthroughs, and separates field review from publication. It is the only live MCP tool catalog; older endpoint URLs return 404 ([ADR-0066](decisions/0066-v8-only-mcp.md)).
 
 | Tool | Read-only | Arguments | Result |
 | --- | --- | --- | --- |
@@ -249,7 +251,7 @@ V8 keeps v7 discovery, reads, resolution and dynamic walkthroughs, and separates
 
 The capture binding is persisted with the draft. At publication the server checks the original parent's repository, pinned local capture Procedure, live token and progress: capture must be the active final step, all other leaves must be done or skipped, and at least one task child must be attached. A caller-provided token, name, rationale or hash does not itself grant authorization. An ordinary draft remains ready until an authenticated operator reviews and approves it through the [operator draft routes](http-api.md#git-native-knowledge-operator-api). Both publication paths revalidate the exact candidate and its receipt against the active snapshot. A changed draft requires a new hash; a stale base returns `stale_snapshot`; expired or consumed tokens return `not_found`. Neither path pushes to remotes.
 
-## Resources
+## Retired resources (historical inventory)
 
 All resources are read-only and returned as `application/json`, with the same body as the matching tool.
 
@@ -266,12 +268,12 @@ An unknown record, or a version that is not a number, gets the protocol's resour
 Start the daemon (`bin/polaroidd`), then point the client at the URL. This repository ships the VS Code configuration in `.vscode/mcp.json`; for another workspace, add the same file:
 
 ```json
-{"servers": {"polaroid": {"type": "http", "url": "http://127.0.0.1:7417/mcp"}}}
+{"servers": {"polaroid-agent": {"type": "http", "url": "http://127.0.0.1:7417/mcp/agent/v8"}}}
 ```
 
-**After upgrading `polaroidd`, restart the server in the client.** Some clients cache the tool list despite `ttlMs: 0`. VS Code Copilot chat (VS Code 1.137) keeps it until **MCP: List Servers → polaroid → Restart**, and the new tools appear from the next chat request on.
+**After upgrading `polaroidd`, restart the server in the client.** Some clients cache the tool list despite `ttlMs: 0`. Update old URLs and restart the MCP server so the new ten-tool catalog is loaded.
 
-Verified clients (2026-10-09):
+Historical client verification (2026-10-09, before v8-only routing):
 
 | Client | Result |
 | --- | --- |

@@ -23,8 +23,8 @@ import (
 )
 
 // TestCorpusLogicAcceptance (ADR-0050): an operator publishes typed records
-// and a signed exception through /v1/knowledge; /mcp/agent v1 is unchanged;
-// /mcp/agent/v2 resolves deterministically with the exception verified
+// and a signed exception through /v1/knowledge; /mcp/agent/v8 resolves
+// deterministically with the exception verified
 // against operator-held trust material.
 func TestCorpusLogicAcceptance(t *testing.T) {
 	dir := t.TempDir()
@@ -145,33 +145,16 @@ func TestCorpusLogicAcceptance(t *testing.T) {
 		}
 		return out
 	}
-	v1, v2, v3 := connect("/mcp/agent"), connect("/mcp/agent/v2"), connect("/mcp/agent/v3")
-	t1, t2, t3 := tools(v1), tools(v2), tools(v3)
+	agent := connect("/mcp/agent/v8")
+	advertised := tools(agent)
 	if names := slices.Sorted(func(yield func(string) bool) {
-		for k := range t1 {
+		for k := range advertised {
 			if !yield(k) {
 				return
 			}
 		}
-	}); !slices.Equal(names, []string{"discover", "feedback", "read"}) {
-		t.Fatalf("v1 tools %v", names)
-	}
-	for name, schema := range t1 {
-		if t2[name] != schema {
-			t.Fatalf("v2 changed %s's arguments:\n%s\n%s", name, schema, t2[name])
-		}
-		if t3[name] != schema {
-			t.Fatalf("v3 changed %s's arguments:\n%s\n%s", name, schema, t3[name])
-		}
-	}
-	if len(t2) != 4 || t2["resolve"] == "" {
-		t.Fatalf("v2 tools %v", t2)
-	}
-	if t3["resolve"] != t2["resolve"] {
-		t.Fatalf("v3 changed resolve's arguments:\n%s\n%s", t2["resolve"], t3["resolve"])
-	}
-	if len(t3) != 6 || t3["start"] == "" || t3["advance"] == "" {
-		t.Fatalf("v3 tools %v", t3)
+	}); !slices.Equal(names, []string{"advance", "attach_child", "discover", "feedback", "propose_advance", "propose_publish_capture", "propose_start", "read", "resolve", "start"}) {
+		t.Fatalf("v8 tools %v", names)
 	}
 
 	call := func(s *sdk.ClientSession, name string, args map[string]any) string {
@@ -186,28 +169,16 @@ func TestCorpusLogicAcceptance(t *testing.T) {
 		}
 		return text
 	}
-	if r := call(v1, "read", map[string]any{"key": "go.verify"}); !strings.Contains(r, `"key":"go.verify"`) {
-		t.Fatalf("v1 read %s", r)
+	if r := call(agent, "read", map[string]any{"key": "go.verify"}); !strings.Contains(r, `"key":"go.verify"`) {
+		t.Fatalf("v8 read %s", r)
 	}
-	// discover(kind="tools") differs only in whether resolve is listed,
-	// the one place the two endpoints' shared discover handler (ADR-0051)
-	// behaves differently, since only the transport layer, not the
-	// knowledge-only Agent behind both, knows which endpoint is calling.
-	v1Tools := call(v1, "discover", map[string]any{"kind": "tools"})
-	if strings.Contains(v1Tools, `"resolve"`) {
-		t.Fatalf("discover(kind=tools) at v1 must not list resolve: %s", v1Tools)
-	}
-	v2Tools := call(v2, "discover", map[string]any{"kind": "tools"})
-	if !strings.Contains(v2Tools, `"resolve"`) {
-		t.Fatalf("discover(kind=tools) at v2 must list resolve: %s", v2Tools)
-	}
-	v3Tools := call(v3, "discover", map[string]any{"kind": "tools"})
-	if !strings.Contains(v3Tools, `"resolve"`) || !strings.Contains(v3Tools, `"start"`) || !strings.Contains(v3Tools, `"advance"`) {
-		t.Fatalf("discover(kind=tools) at v3 must list resolve, start and advance: %s", v3Tools)
+	v8Tools := call(agent, "discover", map[string]any{"kind": "tools"})
+	if !strings.Contains(v8Tools, `"resolve"`) || !strings.Contains(v8Tools, `"attach_child"`) || !strings.Contains(v8Tools, `"advance"`) {
+		t.Fatalf("discover(kind=tools) at v8 lacks walkthrough tools: %s", v8Tools)
 	}
 	args := map[string]any{"goal": "go.verify.concurrent", "context": map[string]any{"repository": repo, "concurrency": "true"}, "at": "2026-10-14T12:00:00Z"}
-	first := call(v2, "resolve", args)
-	if again := call(v2, "resolve", args); again != first {
+	first := call(agent, "resolve", args)
+	if again := call(agent, "resolve", args); again != first {
 		t.Fatalf("resolve is not deterministic:\n%s\n%s", first, again)
 	}
 	var res struct {
@@ -250,7 +221,7 @@ func TestCorpusLogicAcceptance(t *testing.T) {
 		} `json:"composition"`
 	}
 	for then, want := range map[string]string{"artifact.smoke": "compatible", "artifact.deploy": "incompatible", "artifact.review": "undetermined"} {
-		r := call(v2, "resolve", map[string]any{"goal": "artifact.build", "then": then, "at": "2026-10-14T12:00:00Z"})
+		r := call(agent, "resolve", map[string]any{"goal": "artifact.build", "then": then, "at": "2026-10-14T12:00:00Z"})
 		var comp composition
 		if err := json.Unmarshal([]byte(r), &comp); err != nil {
 			t.Fatal(err)
@@ -264,7 +235,7 @@ func TestCorpusLogicAcceptance(t *testing.T) {
 			t.Fatalf("deploy findings: %s", r)
 		}
 	}
-	if r := call(v2, "resolve", map[string]any{"goal": "go.verify"}); !strings.Contains(r, `"at":"`) || !strings.Contains(r, `"unknowns"`) {
+	if r := call(agent, "resolve", map[string]any{"goal": "go.verify"}); !strings.Contains(r, `"at":"`) || !strings.Contains(r, `"unknowns"`) {
 		t.Fatalf("resolve without context or time: %s", r)
 	}
 }

@@ -108,7 +108,7 @@ func readOperatorToken(path string) (string, error) {
 }
 
 // knowledgeComponents are what the daemon wires for the Git-native
-// knowledge path (ADR-0048): agent interfaces mounted at /mcp/agent/vN,
+// knowledge path (ADR-0048): the agent interface mounted at /mcp/agent/v8,
 // the operator interface mounted at /v1 and /v2/knowledge, and its token.
 type knowledgeComponents struct {
 	agent        *knowledgeops.Agent
@@ -138,14 +138,10 @@ func loadTrust(path string) (policy.Trust, error) {
 // missing), loads the trust policy at sourcesPath (empty if the file does
 // not exist: no source is contacted), the exception trust material at
 // authoritiesPath (empty if missing), and loads or creates the operator
-// token at tokenPath. walkthroughs backs /mcp/agent/v3-v7's stateful
-// start and advance (ADR-0053), including v7's runtime-selected child
-// attachments; drafts backs /mcp/agent/v5's stateful
-// propose_start and propose_advance (ADR-0060): both new, per-agent
-// storage, not Git-native knowledge, usually the same underlying
-// *sqlite.Store satisfying the interfaces. The v5 Drafter is a compatibility
-// stub and rejects its incomplete write contract; fieldDrafts backs v6's
-// field-complete proposal flow (ADR-0062). A Git catalog that starts empty
+// token at tokenPath. walkthroughs backs v8's stateful start, advance
+// and runtime-selected child attachments; fieldDrafts backs v8's
+// field-complete proposal flow. Both stores are per-agent SQLite state,
+// not Git-native knowledge. A Git catalog that starts empty
 // is not a failure here (ADR-0048's explicit migration boundary): only a
 // storage or policy problem is.
 func setupKnowledge(dir, sourcesPath, authoritiesPath, tokenPath string, fb *memory.Service, walkthroughs memory.WalkthroughStore, drafts memory.DraftStore, fieldDrafts memory.FieldDraftStore) (*knowledgeComponents, error) {
@@ -193,8 +189,8 @@ func setupKnowledge(dir, sourcesPath, authoritiesPath, tokenPath string, fb *mem
 }
 
 // logKnowledgeUnavailable reports why the Git-native knowledge path did
-// not start: /mcp/agent and /v1/knowledge or /v2/knowledge are not
-// mounted, but the legacy API and full-mode MCP are unaffected.
+// not start: /mcp/agent/v8 and /v1/knowledge or /v2/knowledge are not
+// mounted, but the SQLite HTTP API is unaffected.
 func logKnowledgeUnavailable(logger *slog.Logger, err error) {
-	logger.Warn("knowledge path unavailable: /mcp/agent and /v1/knowledge are not served", "error", err)
+	logger.Warn("knowledge path unavailable: /mcp/agent/v8 and /v1/knowledge are not served", "error", err)
 }

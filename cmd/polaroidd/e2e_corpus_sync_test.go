@@ -89,7 +89,7 @@ func TestCorpusLogicSyncBetweenDaemons(t *testing.T) {
 	resolve := func(in instance, snapshot string) string {
 		t.Helper()
 		c := sdk.NewClient(&sdk.Implementation{Name: "corpus-sync", Version: "v0"}, nil)
-		s, err := c.Connect(context.Background(), &sdk.StreamableClientTransport{Endpoint: in.base + "/mcp/agent/v2", DisableStandaloneSSE: true, MaxRetries: -1}, nil)
+		s, err := c.Connect(context.Background(), &sdk.StreamableClientTransport{Endpoint: in.base + "/mcp/agent/v8", DisableStandaloneSSE: true, MaxRetries: -1}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

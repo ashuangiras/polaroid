@@ -16,7 +16,6 @@ flowchart LR
   rsqlite --> db
   subgraph daemon["cmd/polaroidd (composition root)"]
     transport["internal/transport/http"] --> memory["internal/memory"]
-    mcpt["internal/transport/mcp"] --> memory
     transport --> wire["internal/transport/wire"]
     mcpt --> wire
     sqlite["internal/storage/sqlite"] --> memory
@@ -38,7 +37,7 @@ flowchart LR
 | `internal/memory` | Record types, validation, version rules, `Service`, and the `Store` interfaces it needs, including ephemeral walkthrough, legacy proposal and field-complete draft event stores | Standard library only (`uuid`, `encoding/json/jsontext`) |
 | `internal/storage/sqlite` | Implements `memory.Store` and runtime draft stores: atomic writes, canonical-key and binding-name uniqueness, immutability, migrations | `memory`, `database/sql`, `modernc.org/sqlite` |
 | `internal/transport/http` | The [HTTP API](http-api.md): parsing, JSON-shape checks, error mapping, security checks | `memory`, `wire`, `net/http` |
-| `internal/transport/mcp` | The [MCP server](mcp.md) at `/mcp`: tools, resources, strict argument decoding | `memory`, `wire`, the MCP Go SDK |
+| `internal/transport/mcp` | The [agent MCP server](mcp.md) at `/mcp/agent/v8`: Git-native tools, strict argument decoding | `wire`, the MCP Go SDK; `knowledgeops` through its interface |
 | `internal/transport/wire` | Record and error JSON shapes, strict decoding and error classification, shared by both transports so they cannot drift | `memory` |
 | `cmd/polaroidd` | Configuration, including the database location (the per-user default and its private directories, [ADR-0025](decisions/0025-per-user-default-database.md)) and the knowledge directory, sources policy and operator token (their own per-user defaults, [ADR-0048](decisions/0048-git-native-agent-interface.md)), wiring, listener, timeouts, graceful shutdown | all of the above, plus `knowledgeops`, `gitcore`, `knowledge`, `knowledgesync` and `transport/httpops` below: the only composition root for both knowledge paths |
 | `cmd/polaroid` | Generic CLI over the HTTP API, the local lifecycle commands, and the local catalog commands `backup`, `inspect-backup` and `restore`, which open the database files in the `polaroid` process ([ADR-0030](decisions/0030-catalog-backup-and-restore.md)) | Standard library, `lifecycle`, `recovery`, `version`; never storage or `memory` directly |
@@ -59,7 +58,7 @@ There is deliberately one interface (`memory.Store`): it lets the domain stay ig
 ## Request flow
 
 1. `polaroidd` accepts a request; the server enforces header/read/write timeouts.
-2. `transport/http` applies the loopback-host check (when bound to loopback) and cross-origin protection, decodes the body strictly (1 MiB limit, unknown or duplicate members rejected), and calls `memory.Service`. Requests to `/mcp` pass the same checks, and `transport/mcp` decodes tool arguments with the same strict rules.
+2. `transport/http` applies the loopback-host check (when bound to loopback) and cross-origin protection, decodes the body strictly (1 MiB limit, unknown or duplicate members rejected), and calls `memory.Service`. Requests to `/mcp/agent/v8` pass the same checks, and `transport/mcp` decodes tool arguments with the same strict rules.
 3. `memory.Service` validates the envelope, assigns IDs, version numbers and timestamps, and calls the `Store`.
 4. `storage/sqlite` performs the write in one transaction, or the read in one statement.
 5. Domain errors map to `400`/`404`/`409`; anything else is logged and returned as `500 internal` without detail.

@@ -17,7 +17,8 @@ OUT=bin/e2e
 mkdir -p "$OUT"
 REPORT=$OUT/REPORT.md
 BODY=$OUT/.body.md
-WORK="$(mktemp -d)"
+WORK="$PWD/$OUT/.e2e-work-$$"
+mkdir -m 700 "$WORK"
 DB="$WORK/polaroid.db"
 # Daemons run with this HOME, so none can reach the real ~/.polaroid (ADR-0025).
 REAL_HOME=${HOME:-}
@@ -590,46 +591,44 @@ check "graph context needs both parameters; resolution needs an environment" equ
 ["invalid_request","environment"]'
 
 ########################################################################
-section "Use Polaroid from an agent over MCP" \
-	"\`polaroidd\` serves MCP at \`/mcp\` (ADR-0014): stateless streamable HTTP, protocols 2026-07-28 and 2025-11-25 (ADR-0016), behind the same loopback and cross-origin checks. 42 tools mirror the HTTP API with flat arguments named after record fields; results are the API's record shapes, errors are tool errors with the API's codes, and three read-only resource templates serve procedures, versions and bindings. Below, raw JSON-RPC over curl shows exactly what an MCP client sends." \
-	"Point an MCP client at \`http://127.0.0.1:7417/mcp\`, e.g. VS Code \`.vscode/mcp.json\`: \`{\"servers\": {\"polaroid\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:7417/mcp\"}}}\`."
+section "Use the v8 agent MCP endpoint and the operator HTTP API" \
+	"\`polaroidd\` serves only the ten Git-native agent tools at \`/mcp/agent/v8\`: sessionless streamable HTTP with protocol revisions 2026-07-28 and 2025-11-25. Operator/evidence tools and resources formerly at \`/mcp\` use the existing HTTP API and CLI instead. This section tests the v8 transport and checks operator reads through HTTP; \`make e2e-mcp\` exercises the v8 tool workflows." \
+	"Point an MCP client at \`http://127.0.0.1:7417/mcp/agent/v8\`, e.g. VS Code \`.vscode/mcp.json\`: \`{\"servers\": {\"polaroid-agent\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:7417/mcp/agent/v8\"}}}\`."
 MCP_META='{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/clientInfo":{"name":"manual-test","version":"1"}}'
 rpc() { # rpc METHOD NAME PARAMS [PROTOCOL]: one JSON-RPC request; NAME may be empty
 	local meta params
 	meta="$(jq -c --arg v "${4:-2026-07-28}" '."io.modelcontextprotocol/protocolVersion" = $v' <<<"$MCP_META")"
 	params="$(jq -c --argjson m "$meta" '. + {_meta: $m}' <<<"$3")"
-	curl -sS -X POST "$URL/mcp" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+	curl -sS -X POST "$URL/mcp/agent/v8" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
 		-H "Mcp-Protocol-Version: ${4:-2026-07-28}" -H "Mcp-Method: $1" ${2:+-H "Mcp-Name: $2"} \
 		--data-binary "$(jq -cn --arg m "$1" --argjson p "$params" '{jsonrpc: "2.0", id: 1, method: $m, params: $p}')"
 }
 tool() { rpc tools/call "$1" "$(jq -cn --arg n "$1" --argjson a "$2" '{name: $n, arguments: $a}')"; }
 show 'rpc server/discover "" "{}" | jq -c "{versions: .result.supportedVersions, capabilities: (.result.capabilities | keys), server: .result._meta[\"io.modelcontextprotocol/serverInfo\"].name}"'
-check "server/discover: protocols 2026-07-28 and 2025-11-25, tools and resources" json_has '.versions == ["2026-07-28","2025-11-25"] and .capabilities == ["resources","tools"] and .server == "polaroid"'
-show 'rpc tools/list "" "{}" | jq -c "{tools: (.result.tools | length), read_only: [.result.tools[] | select(.annotations.readOnlyHint) | .name] | length, names: [.result.tools[].name] | sort}"'
-check "42 tools, 27 of them read-only" json_has '.tools == 42 and .read_only == 27'
-show 'tool get_procedure "{\"canonical_key\": \"go.dependency.add\"}" | jq -S .result.structuredContent | shasum -a 256 | cut -c1-16; get /v1/procedures/by-key/go.dependency.add | jq -S . | shasum -a 256 | cut -c1-16'
-check "get_procedure over MCP returns the same document as GET /v1/procedures/by-key" equal "$(sed -n 1p <<<"$LAST")" "$(sed -n 2p <<<"$LAST")"
-show 'tool create_procedure "{\"canonical_key\": \"mcp.created\", \"philosophy\": \"p\", \"method\": \"m\", \"contract\": {\"z\": 1, \"a\": 2}, \"instructions\": {}, \"revision_reason\": \"Created by an agent over MCP.\"}" | jq -r ".result.content[0].text" | jq -c "{id, canonical_key, contract: .versions[0].contract}"'
-check "create_procedure over MCP stores the record, keeping contract member order" json_has '.canonical_key == "mcp.created" and (.contract | keys_unsorted) == ["z","a"]'
-MCPID="$(head -n1 <<<"$LAST" | jq -r .id)"
-show 'bin/polaroid get "$MCPID" | jq -c "{canonical_key, latest_version}"'
-check "the HTTP API sees the procedure the agent created" json_has '.canonical_key == "mcp.created" and .latest_version == 1'
-show 'tool revise_procedure "$(jq -cn --arg id "$ID" "{procedure_id: \$id, base_version: 1, philosophy: \"p\", method: \"m\", contract: {}, instructions: {}, revision_reason: \"stale\"}")" | jq -c "{isError: .result.isError, error: (.result.content[0].text | fromjson | .error | {code, latest_version})}"'
-check "a stale revise_procedure is a tool error: version_conflict with latest_version" json_has '.isError == true and .error.code == "version_conflict" and .error.latest_version == 3'
-show 'tool create_procedure "{\"canonical_key\": \"mcp.bad\", \"method\": \"m\", \"contract\": {}, \"instructions\": {}, \"revision_reason\": \"r\", \"aliases\": []}" | jq -c ".result.content[0].text | fromjson | .error | {code, message}"; tool create_procedure "{\"canonical_key\": \"mcp.bad\", \"method\": \"m\", \"contract\": {}, \"instructions\": {}, \"revision_reason\": \"r\"}" | jq -c ".result.content[0].text | fromjson | .error | {code, fields: [.fields[].field]}"'
-check "an unknown argument is rejected" out_has '"message":"unknown field \"/aliases\""'
-check "a missing argument is named with its flat name" out_has '{"code":"invalid_request","fields":["philosophy"]}'
-show 'rpc resources/read "polaroid://procedures/$ID" "{\"uri\": \"polaroid://procedures/$ID\"}" | jq -r ".result.contents[0].text" | jq -S . | shasum -a 256 | cut -c1-16; get "/v1/procedures/$ID" | jq -S . | shasum -a 256 | cut -c1-16'
-check "resource polaroid://procedures/{id} matches GET /v1/procedures/{id}" equal "$(sed -n 1p <<<"$LAST")" "$(sed -n 2p <<<"$LAST")"
-show 'rpc tools/call list_procedures "{\"name\": \"list_procedures\", \"arguments\": {}}" 2025-06-18'
+check "server/discover: both supported protocol revisions and agent tools only" json_has '.versions == ["2026-07-28","2025-11-25"] and .capabilities == ["tools"] and .server == "polaroid"'
+show 'rpc tools/list "" "{}" | jq -c "[.result.tools[].name] | sort"'
+check "exactly ten v8 agent tools; no operator tools" equal "$LAST" '["advance","attach_child","discover","feedback","propose_advance","propose_publish_capture","propose_start","read","resolve","start"]'
+show 'tool discover "{\"kind\":\"tools\"}" | jq -c ".result.content[0].text | fromjson | [.tools[].name] | sort"'
+check "v8 discovers its own ten tools" equal "$LAST" '["advance","attach_child","discover","feedback","propose_advance","propose_publish_capture","propose_start","read","resolve","start"]'
+show 'rpc tools/list "" "{}" 2025-11-25 | jq -c "[.result.tools[].name] | length"'
+check "2025-11-25 also advertises the ten agent tools" equal "$LAST" 10
+show 'get /v1/procedures/by-key/go.dependency.add | jq -S . | shasum -a 256 | cut -c1-16; bin/polaroid get-by-key go.dependency.add | jq -S . | shasum -a 256 | cut -c1-16'
+check "HTTP and CLI agree on the former MCP procedure read" equal "$(sed -n 1p <<<"$LAST")" "$(sed -n 2p <<<"$LAST")"
+show 'get "/v1/procedures/$ID" | jq -S . | shasum -a 256 | cut -c1-16; bin/polaroid get "$ID" | jq -S . | shasum -a 256 | cut -c1-16'
+check "HTTP and CLI agree on the former MCP procedure resource" equal "$(sed -n 1p <<<"$LAST")" "$(sed -n 2p <<<"$LAST")"
+show 'rpc tools/call discover "{\"name\": \"discover\", \"arguments\": {\"kind\":\"tools\"}}" 2025-06-18'
 check "a request at protocol 2025-06-18 is refused before any tool runs" out_has "Unsupported protocol version (supported versions: 2026-07-28,2025-11-25)"
-show 'curl -sS -o /dev/null -w "%{http_code}\n" -X POST "$URL/mcp" -H "Host: evil.example" -H "Content-Type: application/json" --data-binary "{}"'
-check "a foreign Host on /mcp gets 403" equal "$LAST" 403
+show 'curl -sS -o /dev/null -w "%{http_code}\n" -X POST "$URL/mcp/agent/v8" -H "Host: evil.example" -H "Content-Type: application/json" --data-binary "{}"'
+check "a foreign Host on /mcp/agent/v8 gets 403" equal "$LAST" 403
+for retired in /mcp /mcp/agent /mcp/agent/v2 /mcp/agent/v3 /mcp/agent/v4 /mcp/agent/v5 /mcp/agent/v6 /mcp/agent/v7; do
+	show 'curl -sS -o /dev/null -w "%{http_code}\n" -X POST "$URL$retired" -H "Content-Type: application/json" --data-binary "{}"'
+	check "$retired does not fall back to an MCP endpoint" equal "$LAST" 404
+done
 
 ########################################################################
 section "Feedback box: report problems and suggestions about Polaroid" \
 	"Agents (and people) record what got in their way, or what would help, as immutable feedback reports (ADR-0015): \`kind\` problem or suggestion, a one-line \`summary\`, \`details\`, a canonical-key \`reporter\` and an optional free-form \`context\`. Polaroid stores and lists them, never changed or deleted. How a report was handled is a separate, append-only resolution (ADR-0040): \`outcome\` (addressed, declined, not_reproduced or duplicate), a reason, an actor and optional references; a second resolution is refused. Reports carry \`status\` (open or resolved), and the list takes a \`status\` filter." \
-	"\`bin/polaroid feedback report.json\` (or stdin), \`bin/polaroid feedbacks [problem|suggestion] [status=open|resolved]\`, \`bin/polaroid get-feedback ID\`, \`bin/polaroid resolve-feedback ID resolution.json\`; agents use the MCP tools \`report_feedback\` and \`resolve_feedback\`."
+	"\`bin/polaroid feedback report.json\` (or stdin), \`bin/polaroid feedbacks [problem|suggestion] [status=open|resolved]\`, \`bin/polaroid get-feedback ID\`, \`bin/polaroid resolve-feedback ID resolution.json\`; these operator actions are not v8 MCP tools."
 FB_BEFORE="$(digest /v1/procedures)$(digest "/v1/procedures/$ID")$(digest "/v1/bindings/$BA")$(digest "/v1/executions?procedure_id=$SOLO")"
 jq -n '{kind: "problem", summary: "record_execution rejected a short commit without saying why", details: "I passed a 7-character hash.\nThe error named the field but not the rule.", reporter: "copilot.vscode", context: {tool: "record_execution", z: 1, a: 2}}' >"$WORK/feedback.json"
 show 'jq -c . "$WORK/feedback.json"'
@@ -655,9 +654,9 @@ check "all four list queries are 400" equal "$(grep -c '^HTTP/1.1 400 ' <<<"$LAS
 show 'api GET /v1/feedback/0192f7e4-0000-7000-8000-000000000000 | tail -n1; api DELETE "/v1/feedback/$FB1" | head -n1'
 check "unknown report: not_found" out_has '"code":"not_found"'
 check "reports cannot be deleted over HTTP: 405" out_has "HTTP/1.1 405 "
-show 'tool report_feedback "{\"kind\": \"problem\", \"summary\": \"Reported by an agent over MCP\", \"details\": \"The report_feedback tool.\", \"reporter\": \"manual.agent\", \"context\": {\"tool\": \"report_feedback\"}}" | jq -r ".result.content[0].text"'
+show 'bin/polaroid feedback <<<"{\"kind\": \"problem\", \"summary\": \"Reported through the operator CLI\", \"details\": \"The feedback command.\", \"reporter\": \"manual.agent\", \"context\": {\"tool\": \"feedback\"}}"'
 FB3="$(head -n1 <<<"$LAST" | jq -r .id)"
-check "an agent's report over MCP is stored and is byte-identical through the CLI" equal "$(bin/polaroid get-feedback "$FB3")" "$(head -n1 <<<"$LAST")"
+check "an operator's report is stored and is byte-identical through HTTP" equal "$(get "/v1/feedback/$FB3")" "$(head -n1 <<<"$LAST")"
 check "reporting feedback changed no other record" equal "$(digest /v1/procedures)$(digest "/v1/procedures/$ID")$(digest "/v1/bindings/$BA")$(digest "/v1/executions?procedure_id=$SOLO")" "$FB_BEFORE"
 
 show 'bin/polaroid get-feedback "$FB2" | jq -c "{status, resolution}"'
@@ -734,7 +733,7 @@ local'
 ########################################################################
 section "Conditional references and applicability decisions" \
 	"A reference with a \`condition\` applies only when the condition holds, which the agent decides. Each execution records a decision per conditional reference: applicable, with its child, or not applicable, with a rationale and no child. Combinations tell executed from skipped work, and a target names its own decisions, so a skip never verifies a target that needs the work (ADR-0029)." \
-	"\`bin/polaroid create\`, \`record\`, \`verification ID\`, \`graph ID N REPO ENV COMMIT INPUTS DECISIONS\`; MCP \`record_execution\` and \`get_graph\`."
+	"\`bin/polaroid create\`, \`record\`, \`verification ID\`, \`graph ID N REPO ENV COMMIT INPUTS DECISIONS\`; HTTP \`POST /v1/executions\` and \`GET /v1/procedures/{id}/versions/{n}/graph\`."
 C50=5050505050505050505050505050505050505050
 show 'bin/polaroid create <<<"{\"canonical_key\": \"e2e.verify.scoped\", \"version\": {\"philosophy\": \"p\", \"method\": \"m\", \"contract\": {}, \"instructions\": {}, \"references\": [{\"name\": \"checks\", \"procedure_id\": \"$ID\", \"version_policy\": {\"pin\": 1}, \"inputs\": {}}, {\"name\": \"integration\", \"procedure_id\": \"$ID\", \"version_policy\": {\"pin\": 1}, \"inputs\": {}, \"condition\": \"Only when the change touches code.\"}], \"revision_reason\": \"e2e\"}}" | jq -c "{id, refs: [.versions[0].references[] | {name, condition}]}"'
 check "a required and a conditional reference; the condition is returned only for the conditional one" json_has '.refs == [{name: "checks", condition: null}, {name: "integration", condition: "Only when the change touches code."}]'
@@ -753,13 +752,13 @@ show 'for d in "{\"integration\": false}" "{\"integration\": true}" "{}"; do bin
 check "target decisions: not applicable is verified by the skip; applicable is not; undecided names the reference" equal "$LAST" '{"v":true,"u":null,"d":"not_applicable"}
 {"v":false,"u":null,"d":"applicable"}
 {"v":false,"u":["integration"],"d":"undecided"}'
-show 'tool get_graph "{\"procedure_id\": \"$SCOPED\", \"version\": 1, \"repository\": \"github.com/example/service-a\", \"environment\": \"e2e\", \"commit\": \"$C50\", \"inputs\": {}, \"decisions\": {\"integration\": false}}" | jq -r ".result.content[0].text" | jq -c "{v: .target_verification.verified, d: .references[1].decision}"'
-check "MCP get_graph takes the same decisions" json_has '.v and .d == "not_applicable"'
+show 'curl -sSG "$URL/v1/procedures/$SCOPED/versions/1/graph" --data-urlencode "repository=github.com/example/service-a" --data-urlencode "environment=e2e" --data-urlencode "commit=$C50" --data-urlencode "inputs={}" --data-urlencode "decisions={\"integration\":false}" | jq -c "{v: .target_verification.verified, d: .references[1].decision}"'
+check "HTTP graph takes the same target decisions as the CLI" json_has '.v and .d == "not_applicable"'
 
 ########################################################################
 section "Discover procedures for a task; check a proposal for duplicates" \
 	"Lexical discovery (ADR-0032): describe a task in your own words and get ranked candidates from each procedure's latest version, with the terms found per field. With a repository, procedures local to other repositories are left out. A duplicate check compares a proposal's canonical key, goal, method and philosophy with existing procedures: an existing key is a \`key_collision\`; overlapping content is an advisory suggestion. Both are read-only." \
-	"\`bin/polaroid discover TASK [repository=… limit=…]\` (\`GET /v1/procedures/discovery\`), \`bin/polaroid duplicates FILE\` (\`POST /v1/procedures/duplicates\`); MCP \`discover_procedures\`, \`suggest_duplicates\`."
+	"\`bin/polaroid discover TASK [repository=… limit=…]\` (\`GET /v1/procedures/discovery\`), \`bin/polaroid duplicates FILE\` (\`POST /v1/procedures/duplicates\`)."
 DISC_BEFORE="$(digest /v1/procedures)"
 show 'bin/polaroid discover "Adding a new module dependency with a permissive license" limit=3 | jq -c "{terms, matched, top: (.candidates[0] | {canonical_key, version, matched_terms, score, fields: [.matches[].field]})}"'
 check "a task in other words finds go.dependency.add first, at its latest version, explained by field" json_has --argjson v "$(get "/v1/procedures/$ID" | jq .latest_version)" \
@@ -782,7 +781,7 @@ check "discovery and duplicate checks wrote nothing" equal "$(digest /v1/procedu
 ########################################################################
 section "Toil items: assessments of repetitive work, with a lifecycle" \
 	"A toil item records an agent's evidence-backed assessment of repetitive work that a tool might replace (ADR-0034): exact procedure versions as sources (with declared step identifiers Polaroid never checks), supporting executions (a failed run is valid support), an assessment whose repetition and burden are each observed, hypothesis or unknown, an optional proposal, and a status that is the agent's judgment, not verification. Revisions are complete, append-only and need the latest \`base_revision\`." \
-	"\`bin/polaroid create-toil-item FILE\`, \`revise-toil-item ID FILE\`, \`toil-items [status=… repository=… procedure_id=…]\`, \`get-toil-item ID\`, \`get-toil-item-by-key KEY\`, \`get-toil-revision ID N\`; MCP \`create_toil_item\`, \`revise_toil_item\`, \`list_toil_items\`, \`get_toil_item\`, \`get_toil_revision\`."
+	"\`bin/polaroid create-toil-item FILE\`, \`revise-toil-item ID FILE\`, \`toil-items [status=… repository=… procedure_id=…]\`, \`get-toil-item ID\`, \`get-toil-item-by-key KEY\`, \`get-toil-revision ID N\`."
 RUN="$(bin/polaroid executions "$ID" | jq -r '.executions[0].id')"
 TOIL_REV() { # TOIL_REV STATUS [EXTRA_JQ]: a revision body citing go.dependency.add v1 and one of its runs
 	jq -nc --arg p "$ID" --arg e "$RUN" --arg s "$1" '{activity: "Check a module license by hand", applicability: {shared: {}},
@@ -808,7 +807,7 @@ check "revision 1 is unchanged and the history has both" equal "$LAST" $'{"revis
 ########################################################################
 section "Withdraw wrong evidence; retire and reactivate a procedure" \
 	"History is never rewritten (ADR-0035). An execution that did not do what its version claims is invalidated, once and for all, with a reason and an actor: it reads back unchanged with \`evidence_status\` invalidated, is never verified, never selects a version or verifies a target, and its parents report \`child_invalidated\`. A retired procedure leaves the default list and discovery, keeps everything that exists (its nodes say \`retirement\`), and refuses new versions, references and bindings until it is reactivated. Lifecycle changes name \`base_event\`." \
-	"\`bin/polaroid invalidate-execution ID FILE\`, \`get-execution-invalidation ID\`, \`retire-procedure ID FILE\`, \`reactivate-procedure ID FILE\`, \`get-procedure-lifecycle ID\`, \`list lifecycle=…\`, \`discover TASK lifecycle=…\`, \`executions evidence_status=…\`; MCP \`invalidate_execution\`, \`get_execution_invalidation\`, \`retire_procedure\`, \`reactivate_procedure\`, \`get_procedure_lifecycle\`."
+	"\`bin/polaroid invalidate-execution ID FILE\`, \`get-execution-invalidation ID\`, \`retire-procedure ID FILE\`, \`reactivate-procedure ID FILE\`, \`get-procedure-lifecycle ID\`, \`list lifecycle=…\`, \`discover TASK lifecycle=…\`, \`executions evidence_status=…\`."
 C91=9191919191919191919191919191919191919191
 mk91() { bin/polaroid create <<<"$(jq -nc --arg k "$1" --argjson r "$2" '{canonical_key: $k, version: {philosophy: "p", method: ("Exercise " + $k + "."), contract: {}, instructions: {}, references: $r, revision_reason: "e2e"}}')" | jq -r .id; }
 run91() { jq -cn --arg p "$1" --arg c "$C91" --argjson ch "${2:-[]}" '{procedure_id: $p, version: 1, repository: "github.com/example/service-a", commit: $c, environment: {name: "e2e", attributes: {}}, inputs: {}, outcome: "succeeded", evidence: {e2e: true}, children: $ch}' | bin/polaroid record | jq -r .id; }
@@ -862,7 +861,7 @@ check "the other seven get 409" count_is 7 409
 ########################################################################
 section "Catalog statistics, read-only" \
 	"One request summarizes the whole catalog (ADR-0036): record counts (identities apart from their revisions and relationship records), procedures by lifecycle and scope, executions by recorded outcome and by evidence status, toil items by latest status, logical payload bytes (UTF-8 bytes of the stored JSON text: count, total, mean, max), and database pages and file sizes. Counts and payloads are one snapshot; file sizes are read just after it. It takes no parameters, writes nothing and names no path." \
-	"\`bin/polaroid statistics\`, or \`curl http://127.0.0.1:7417/v1/statistics\`; MCP \`get_catalog_statistics\`."
+	"\`bin/polaroid statistics\`, or \`curl http://127.0.0.1:7417/v1/statistics\`."
 show 'bin/polaroid statistics | jq -c "{statistics_version, records: (.records | {procedures, procedure_versions, executions, execution_invalidations}), executions: .executions | {by_outcome, by_evidence_status}, storage: .storage | {schema_version, files: (.files | map_values(.present))}}"'
 check "version 1, schema 17, with the database, WAL and shared-memory files present" json_has '.statistics_version == 1 and .storage.schema_version == 17 and .storage.files == {database: true, wal: true, shm: true}'
 STATS="$(bin/polaroid statistics)"

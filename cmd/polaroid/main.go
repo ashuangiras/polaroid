@@ -236,7 +236,7 @@ var commands = []command{
 		}},
 	// walkthroughs and get-walkthrough are an operator's read-only
 	// visibility into guided-procedure walkthroughs (ADR-0056): agents run
-	// through them with /mcp/agent/v3's start and advance, not this CLI.
+	// through them with /mcp/agent/v8's start and advance, not this CLI.
 	{"walkthroughs", "[NAME=VALUE...]", "list guided-procedure walkthroughs; NAME is repository, goal, status (active, escalate or blocked), limit or after", 0, 0,
 		func(c *client, _ []string) error { return c.do(http.MethodGet, c.path("/v1/walkthroughs", nil), nil) }},
 	{"get-walkthrough", "TOKEN", "show one guided-procedure walkthrough's current state", 1, 1,

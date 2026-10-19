@@ -235,29 +235,42 @@ func TestShutdownDuringActiveWrites(t *testing.T) {
 	t.Logf("%d writes answered 201 across %d shutdowns under load", len(want), rounds)
 }
 
-func TestDaemonServesMCPBesideTheAPI(t *testing.T) {
-	base, _ := startDaemon(t, filepath.Join(t.TempDir(), "polaroid.db"))
+func TestDaemonServesOnlyAgentV8BesideTheAPI(t *testing.T) {
+	dir := t.TempDir()
+	base, _ := startConfig(t, config{
+		addr: "127.0.0.1:0", dbPath: filepath.Join(dir, "polaroid.db"),
+		dbSource: dbFromFlag, knowledgeDir: filepath.Join(dir, "knowledge"),
+	}, io.Discard)
 	if status, body := request(t, http.MethodPost, base+"/v1/procedures", createBody); status != http.StatusCreated {
 		t.Fatalf("create over HTTP: %d %s", status, body)
 	}
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "daemon-test", Version: "v0"}, nil)
-	session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: base + "/mcp", DisableStandaloneSSE: true, MaxRetries: -1}, nil)
+	session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: base + "/mcp/agent/v8", DisableStandaloneSSE: true, MaxRetries: -1}, nil)
 	if err != nil {
-		t.Fatalf("connect to /mcp: %v", err)
+		t.Fatalf("connect to /mcp/agent/v8: %v", err)
 	}
 	defer func() { _ = session.Close() }()
-	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "get_procedure", Arguments: map[string]any{"canonical_key": "demo.restart"}})
+	tools, err := session.ListTools(context.Background(), nil)
+	if err != nil || len(tools.Tools) != 10 {
+		t.Fatalf("v8 tools = %+v, %v, want ten", tools, err)
+	}
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "discover", Arguments: map[string]any{"task": "demo"}})
 	if err != nil || res.IsError {
-		t.Fatalf("get_procedure over MCP: %+v, %v", res, err)
+		t.Fatalf("discover over v8: %+v, %v", res, err)
 	}
 	_, viaHTTP := request(t, http.MethodGet, base+"/v1/procedures/by-key/demo.restart", "")
-	if text := res.Content[0].(*mcp.TextContent).Text; text+"\n" != string(viaHTTP) {
-		t.Fatalf("MCP and HTTP disagree:\n%s\n%s", text, viaHTTP)
+	if len(viaHTTP) == 0 {
+		t.Fatal("HTTP operator/evidence API is unavailable")
+	}
+	for _, path := range []string{"/mcp", "/mcp/agent", "/mcp/agent/v2", "/mcp/agent/v3", "/mcp/agent/v4", "/mcp/agent/v5", "/mcp/agent/v6", "/mcp/agent/v7", "/mcp/agent/v9"} {
+		status, _ := request(t, http.MethodPost, base+path, `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
+		if status != http.StatusNotFound {
+			t.Errorf("%s: %d, want 404 (not MCP or catch-all)", path, status)
+		}
 	}
 
-	// /mcp sits behind the same loopback-host check as the API.
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, base+"/mcp", strings.NewReader(`{}`))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, base+"/mcp/agent/v8", strings.NewReader(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +282,7 @@ func TestDaemonServesMCPBesideTheAPI(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("foreign Host on /mcp: %d, want 403", resp.StatusCode)
+		t.Fatalf("foreign Host on /mcp/agent/v8: %d, want 403", resp.StatusCode)
 	}
 }
 
