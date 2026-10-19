@@ -99,7 +99,7 @@ func dynamicChildren(ctx context.Context, tx *sql.Tx, token string) ([]string, e
 	if err != nil {
 		return nil, fmt.Errorf("read attached walkthrough children: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var children []string
 	for rows.Next() {
 		var key string
