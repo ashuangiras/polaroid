@@ -3,12 +3,14 @@ package knowledgeops
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/ashuangiras/polaroid/internal/knowledge"
 	"github.com/ashuangiras/polaroid/internal/memory"
@@ -20,14 +22,20 @@ import (
 // presents the complete existing state at Start, and commits a typed
 // review receipt through the shared publication gate.
 type FieldDrafter struct {
+	mu       sync.Mutex
 	kernel   *knowledge.Kernel
 	proposer *Proposer
 	drafts   *memory.FieldDrafts
+	guide    *Guide
 }
 
 // NewFieldDrafter builds the v6 full-field proposal drafter.
-func NewFieldDrafter(kernel *knowledge.Kernel, proposer *Proposer, drafts *memory.FieldDrafts) *FieldDrafter {
-	return &FieldDrafter{kernel: kernel, proposer: proposer, drafts: drafts}
+func NewFieldDrafter(kernel *knowledge.Kernel, proposer *Proposer, drafts *memory.FieldDrafts, guide ...*Guide) *FieldDrafter {
+	d := &FieldDrafter{kernel: kernel, proposer: proposer, drafts: drafts}
+	if len(guide) > 0 {
+		d.guide = guide[0]
+	}
+	return d
 }
 
 type fieldTarget struct {
@@ -44,6 +52,40 @@ type fieldItem struct {
 }
 
 func (d *FieldDrafter) Start(ctx context.Context, in wire.FieldDraftStartRequest) (wire.FieldDraftResult, error) {
+	return d.start(ctx, in, "")
+}
+
+func (d *FieldDrafter) StartV8(ctx context.Context, in wire.FieldDraftStartRequestV8) (wire.FieldDraftResult, error) {
+	if in.WalkthroughToken != "" {
+		if d.guide == nil {
+			return wire.FieldDraftResult{}, invalidField("walkthrough_token", "capture walkthrough is unavailable")
+		}
+		state, err := d.guide.walkthroughs.State(ctx, in.WalkthroughToken)
+		if err != nil {
+			return wire.FieldDraftResult{}, classify(err)
+		}
+		if state.Goal != "polaroid.using" || state.Repository != "github.com/ashuangiras/polaroid" ||
+			!state.AllowDynamicChildren || !slices.Contains(state.DynamicChildren, "polaroid.session-close-capture") {
+			return wire.FieldDraftResult{}, invalidField("walkthrough_token", "requires an open polaroid.using parent with the local capture child")
+		}
+		cat, err := d.kernel.At(ctx, knowledge.Snapshot(state.Snapshot))
+		if err != nil {
+			return wire.FieldDraftResult{}, classify(err)
+		}
+		doc, err := cat.Get("polaroid.session-close-capture")
+		if err != nil {
+			return wire.FieldDraftResult{}, classify(err)
+		}
+		if doc.Applicability.Scope != knowledge.ScopeLocal || !doc.Applicability.ApplicableIn(state.Repository) {
+			return wire.FieldDraftResult{}, invalidField("walkthrough_token", "capture is not local to the parent repository at its pinned snapshot")
+		}
+	}
+	return d.start(ctx, wire.FieldDraftStartRequest{
+		Key: in.Key, RecordType: in.RecordType, New: in.New, Proposer: in.Proposer, Rationale: in.Rationale,
+	}, in.WalkthroughToken)
+}
+
+func (d *FieldDrafter) start(ctx context.Context, in wire.FieldDraftStartRequest, walkthroughToken string) (wire.FieldDraftResult, error) {
 	if in.Key == "" {
 		return wire.FieldDraftResult{}, requiredField("key")
 	}
@@ -65,7 +107,7 @@ func (d *FieldDrafter) Start(ctx context.Context, in wire.FieldDraftStartRequest
 	if err != nil {
 		return wire.FieldDraftResult{}, err
 	}
-	state, err := d.drafts.Start(ctx, in.Key, string(cat.Snapshot()), string(typ), in.New, in.Proposer, in.Rationale)
+	state, err := d.drafts.Start(ctx, in.Key, string(cat.Snapshot()), string(typ), in.New, in.Proposer, in.Rationale, walkthroughToken)
 	if err != nil {
 		return wire.FieldDraftResult{}, classify(err)
 	}
@@ -79,12 +121,15 @@ func (d *FieldDrafter) Start(ctx context.Context, in wire.FieldDraftStartRequest
 	}
 	return wire.FieldDraftResult{
 		Token: state.Token, Snapshot: state.Snapshot, Key: state.Key, Status: "in_progress",
+		Proposer: state.Proposer, Rationale: state.Rationale,
 		NextEntity: fields[0].entity, NextField: fields[0].spec.Name,
 		Fields: info,
 	}, nil
 }
 
 func (d *FieldDrafter) Advance(ctx context.Context, in wire.FieldDraftAdvanceRequest) (wire.FieldDraftResult, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if in.Token == "" {
 		return wire.FieldDraftResult{}, requiredField("token")
 	}
@@ -111,6 +156,9 @@ func (d *FieldDrafter) Advance(ctx context.Context, in wire.FieldDraftAdvanceReq
 		return wire.FieldDraftResult{}, err
 	}
 	if in.Outcome == nil {
+		if nextFieldItem(items, state.Answers) == nil {
+			return d.review(ctx, cat, state, items)
+		}
 		return fieldDraftResult(state, items, target)
 	}
 	next := nextFieldItem(items, state.Answers)
@@ -176,18 +224,105 @@ func (d *FieldDrafter) Advance(ctx context.Context, in wire.FieldDraftAdvanceReq
 		}
 		return wire.FieldDraftResult{Snapshot: state.Snapshot, Key: state.Key, Status: "unchanged"}, nil
 	}
+	return d.review(ctx, cat, state, items)
+}
+
+func (d *FieldDrafter) review(ctx context.Context, cat *knowledge.Catalog, state memory.FieldDraftState, items []fieldItem) (wire.FieldDraftResult, error) {
 	prop, compositionKeys, err := buildFieldProposal(cat, state, items)
 	if err != nil {
 		return wire.FieldDraftResult{}, err
 	}
-	result, err := d.proposer.ProposeReviewed(ctx, prop, state.Key, compositionKeys)
+	if err := d.proposer.ValidateReviewed(ctx, prop, compositionKeys); err != nil {
+		return wire.FieldDraftResult{}, err
+	}
+	hash, err := candidateHash(prop)
 	if err != nil {
 		return wire.FieldDraftResult{}, err
 	}
-	if err := d.drafts.Close(ctx, state.Token); err != nil {
+	target, err := resolveFieldTarget(cat, state.Key, knowledge.RecordType(state.RecordType), state.New)
+	if err != nil {
+		return wire.FieldDraftResult{}, err
+	}
+	fields, err := fieldInfo(items, state.Answers, target)
+	if err != nil {
+		return wire.FieldDraftResult{}, err
+	}
+	return wire.FieldDraftResult{Token: state.Token, Snapshot: state.Snapshot, Key: state.Key, Status: "ready",
+		CandidateHash: hash, Fields: fields, Proposer: state.Proposer, Rationale: state.Rationale}, nil
+}
+
+func candidateHash(prop knowledge.Proposal) (string, error) {
+	data, err := json.Marshal(prop)
+	if err != nil {
+		return "", fmt.Errorf("encode reviewed candidate: %w", err)
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(data)), nil
+}
+
+func (d *FieldDrafter) PublishCapture(ctx context.Context, in wire.FieldDraftPublishRequest) (wire.FieldDraftResult, error) {
+	return d.publish(ctx, in, true)
+}
+
+func (d *FieldDrafter) PublishApproved(ctx context.Context, in wire.FieldDraftPublishRequest) (wire.FieldDraftResult, error) {
+	return d.publish(ctx, in, false)
+}
+
+func (d *FieldDrafter) publish(ctx context.Context, in wire.FieldDraftPublishRequest, capture bool) (wire.FieldDraftResult, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if in.Token == "" || in.CandidateHash == "" {
+		return wire.FieldDraftResult{}, requiredField("token and candidate_hash")
+	}
+	state, err := d.drafts.State(ctx, in.Token)
+	if err != nil {
 		return wire.FieldDraftResult{}, classify(err)
 	}
-	return wire.FieldDraftResult{Snapshot: result.Snapshot, Key: result.Key, Status: "complete"}, nil
+	if capture && state.WalkthroughToken == "" {
+		return wire.FieldDraftResult{}, invalidField("token", "draft is not bound to a capture walkthrough; use operator approval")
+	}
+	publish := func() (wire.FieldDraftResult, error) {
+		cat, err := d.kernel.At(ctx, knowledge.Snapshot(state.Snapshot))
+		if err != nil {
+			return wire.FieldDraftResult{}, classify(err)
+		}
+		items, err := fieldInventory(cat, state)
+		if err != nil {
+			return wire.FieldDraftResult{}, err
+		}
+		if nextFieldItem(items, state.Answers) != nil || !fieldDraftChanges(cat, state, items) {
+			return wire.FieldDraftResult{}, invalidField("token", "draft is incomplete or unchanged")
+		}
+		prop, keys, err := buildFieldProposal(cat, state, items)
+		if err != nil {
+			return wire.FieldDraftResult{}, err
+		}
+		hash, err := candidateHash(prop)
+		if err != nil {
+			return wire.FieldDraftResult{}, err
+		}
+		if hash != in.CandidateHash {
+			return wire.FieldDraftResult{}, invalidField("candidate_hash", "does not match the current reviewed candidate")
+		}
+		result, err := d.proposer.ProposeReviewed(ctx, prop, state.Key, keys)
+		if err != nil {
+			return wire.FieldDraftResult{}, err
+		}
+		if err := d.drafts.Close(ctx, state.Token); err != nil {
+			return wire.FieldDraftResult{}, classify(err)
+		}
+		return wire.FieldDraftResult{Snapshot: result.Snapshot, Key: result.Key, Status: "complete"}, nil
+	}
+	if capture {
+		if d.guide == nil {
+			return wire.FieldDraftResult{}, invalidField("token", "capture walkthrough is unavailable")
+		}
+		return d.guide.CaptureReady(ctx, state.WalkthroughToken, publish)
+	}
+	return publish()
+}
+
+func (d *FieldDrafter) Preview(ctx context.Context, token string) (wire.FieldDraftResult, error) {
+	return d.Advance(ctx, wire.FieldDraftAdvanceRequest{Token: token})
 }
 
 func encodeFieldDraftValue(value any) (jsontext.Value, error) {
@@ -206,7 +341,8 @@ func encodeFieldDraftValue(value any) (jsontext.Value, error) {
 
 func fieldDraftResult(state memory.FieldDraftState, items []fieldItem, target fieldTarget) (wire.FieldDraftResult, error) {
 	next := nextFieldItem(items, state.Answers)
-	result := wire.FieldDraftResult{Token: state.Token, Snapshot: state.Snapshot, Key: state.Key, Status: "in_progress"}
+	result := wire.FieldDraftResult{Token: state.Token, Snapshot: state.Snapshot, Key: state.Key, Status: "in_progress",
+		Proposer: state.Proposer, Rationale: state.Rationale}
 	if next != nil {
 		result.NextEntity, result.NextField = next.entity, next.spec.Name
 	}
@@ -235,6 +371,10 @@ func fieldInfo(items []fieldItem, answers map[string]memory.FieldDraftAnswer, ta
 		answer, answered := answers[memoryFieldKey(item.entity, item.spec.Name)]
 		if answered {
 			info.Answered, info.Operation = true, answer.Operation
+			info.AnswerValue = jsontext.Value(answer.Value)
+			for _, citation := range answer.Citations {
+				info.Citations = append(info.Citations, wire.ProposeCitation{Source: citation.Source, Quote: citation.Quote})
+			}
 			info.DraftValue, err = reviewValueFromAnswer(item.spec, value, answer, item.new)
 			if err != nil {
 				return nil, err

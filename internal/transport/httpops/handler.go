@@ -34,22 +34,29 @@ const MaxRequestBytes = wire.MaxRequestBytes
 const TokenHeader = "Polaroid-Operator-Token"
 
 type api struct {
-	op     *knowledgeops.Operator
-	token  string
-	logger *slog.Logger
-	mux    *http.ServeMux
+	op      *knowledgeops.Operator
+	drafter *knowledgeops.FieldDrafter
+	token   string
+	logger  *slog.Logger
+	mux     *http.ServeMux
 }
 
 // NewHandler serves the operator knowledge API at /v1 and its receipt-bearing
 // publication routes at /v2, with every request authenticated against token.
 // An empty token refuses every request: there is no way to disable authentication.
 func NewHandler(op *knowledgeops.Operator, token string, logger *slog.Logger) http.Handler {
-	a := &api{op: op, token: token, logger: logger, mux: http.NewServeMux()}
+	return NewHandlerWithDrafts(op, nil, token, logger)
+}
+
+func NewHandlerWithDrafts(op *knowledgeops.Operator, drafter *knowledgeops.FieldDrafter, token string, logger *slog.Logger) http.Handler {
+	a := &api{op: op, drafter: drafter, token: token, logger: logger, mux: http.NewServeMux()}
 	a.mux.HandleFunc("GET /v1/knowledge/status", a.status)
 	a.mux.HandleFunc("POST /v1/knowledge/publications", a.legacyPublish)
 	a.mux.HandleFunc("POST /v1/knowledge/rollbacks", a.legacyRollback)
 	a.mux.HandleFunc("POST /v2/knowledge/publications", a.publish)
 	a.mux.HandleFunc("POST /v2/knowledge/rollbacks", a.rollback)
+	a.mux.HandleFunc("GET /v2/knowledge/drafts/{token}", a.draft)
+	a.mux.HandleFunc("POST /v2/knowledge/drafts/{token}/publication", a.publishDraft)
 	a.mux.HandleFunc("POST /v1/knowledge/sources/{name}/fetch", a.fetch)
 	a.mux.HandleFunc("POST /v1/knowledge/sources/{name}/validation", a.validate)
 	a.mux.HandleFunc("POST /v1/knowledge/sources/{name}/activation", a.activate)
@@ -57,6 +64,40 @@ func NewHandler(op *knowledgeops.Operator, token string, logger *slog.Logger) ht
 	a.mux.HandleFunc("GET /v1/knowledge/activations", a.activations)
 	a.mux.HandleFunc("POST /v1/knowledge/reconciliations/{finding_id}", a.reconcile)
 	return a.authenticate(a)
+}
+
+func (a *api) draft(w http.ResponseWriter, r *http.Request) {
+	if a.drafter == nil {
+		writeError(w, http.StatusNotFound, wire.ErrorDetail{Code: "not_found", Message: "drafts are unavailable"})
+		return
+	}
+	res, err := a.drafter.Preview(r.Context(), r.PathValue("token"))
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	a.respond(w, r, http.StatusOK, res)
+}
+
+func (a *api) publishDraft(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		CandidateHash string `json:"candidate_hash"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if a.drafter == nil {
+		writeError(w, http.StatusNotFound, wire.ErrorDetail{Code: "not_found", Message: "drafts are unavailable"})
+		return
+	}
+	res, err := a.drafter.PublishApproved(r.Context(), wire.FieldDraftPublishRequest{
+		Token: r.PathValue("token"), CandidateHash: body.CandidateHash,
+	})
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	a.respond(w, r, http.StatusCreated, res)
 }
 
 func (a *api) authenticate(next http.Handler) http.Handler {

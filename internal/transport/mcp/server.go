@@ -101,6 +101,10 @@ func NewAgentHandlerV7(agent AgentKnowledge, resolver AgentResolver, guide Agent
 	return handler(newAgentServerV7(agent, resolver, guide, drafter, logger), logger)
 }
 
+func NewAgentHandlerV8(agent AgentKnowledge, resolver AgentResolver, guide AgentGuideV7, drafter AgentFieldDrafterV8, logger *slog.Logger) http.Handler {
+	return handler(newAgentServerV8(agent, resolver, guide, drafter, logger), logger)
+}
+
 func handler(server *sdk.Server, logger *slog.Logger) http.Handler {
 	h := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, &sdk.StreamableHTTPOptions{
 		Stateless:           true,
@@ -146,8 +150,9 @@ type tools struct {
 	// drafter is set only for agent mode v5 (ADR-0060).
 	drafter AgentDrafter
 	// fieldDrafter is set only for agent mode v6 (ADR-0062).
-	fieldDrafter AgentFieldDrafter
-	logger       *slog.Logger
+	fieldDrafter   AgentFieldDrafter
+	fieldDrafterV8 AgentFieldDrafterV8
+	logger         *slog.Logger
 }
 
 // Free-form JSON objects are advertised as objects; everything else is

@@ -12,11 +12,16 @@ import (
 	"testing"
 
 	"github.com/ashuangiras/polaroid/internal/gitcore"
+	"github.com/ashuangiras/polaroid/internal/knowledge"
+	"github.com/ashuangiras/polaroid/internal/knowledge/semantic"
 	"github.com/ashuangiras/polaroid/internal/knowledgeops"
 	"github.com/ashuangiras/polaroid/internal/knowledgesync"
 	"github.com/ashuangiras/polaroid/internal/memory"
+	"github.com/ashuangiras/polaroid/internal/reasoning/datalog"
+	"github.com/ashuangiras/polaroid/internal/reasoning/policy"
 	"github.com/ashuangiras/polaroid/internal/storage/sqlite"
 	"github.com/ashuangiras/polaroid/internal/transport/httpops"
+	"github.com/ashuangiras/polaroid/internal/transport/wire"
 )
 
 const token = "test-operator-token"
@@ -83,11 +88,86 @@ func TestOperatorRequiresToken(t *testing.T) {
 	if status, _ := do(t, http.MethodGet, url+"/v1/knowledge/status", "", nil); status != http.StatusUnauthorized {
 		t.Fatalf("no token: status = %d", status)
 	}
+
 	if status, _ := do(t, http.MethodGet, url+"/v1/knowledge/status", "wrong", nil); status != http.StatusUnauthorized {
 		t.Fatalf("wrong token: status = %d", status)
 	}
 	if status, body := do(t, http.MethodGet, url+"/v1/knowledge/status", token, nil); status != http.StatusOK {
 		t.Fatalf("correct token: status = %d, body = %v", status, body)
+	}
+}
+
+func TestOperatorApprovesExactReviewedDraft(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "polaroid.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	repo, err := gitcore.Open(filepath.Join(t.TempDir(), "knowledge"), gitcore.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sem, err := semantic.New(semantic.DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	syncer, err := knowledgesync.New(repo, knowledgesync.Policy{}, knowledge.WithRecordValidator(sem))
+	if err != nil {
+		t.Fatal(err)
+	}
+	kernel := syncer.Kernel()
+	drafter := knowledgeops.NewFieldDrafter(kernel, knowledgeops.NewProposer(kernel, datalog.Evaluator{}, policy.Trust{}), memory.NewFieldDrafts(store))
+	srv := httptest.NewServer(httpops.NewHandlerWithDrafts(
+		knowledgeops.NewOperator(syncer, knowledgesync.Policy{}, memory.NewService(store)), drafter, token,
+		slog.New(slog.NewTextHandler(io.Discard, nil))))
+	t.Cleanup(srv.Close)
+	start, err := drafter.StartV8(ctx, wire.FieldDraftStartRequestV8{
+		Key: "concept.approved", RecordType: string(knowledge.TypeConcept), New: true, Proposer: "agent", Rationale: "owner review",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ready wire.FieldDraftResult
+	for _, field := range start.Fields {
+		answer := &wire.FieldDraftOutcomeArg{Entity: field.Entity, Field: field.Field, Operation: "clear"}
+		switch field.Field {
+		case "label":
+			answer.Operation, answer.Value = "replace", "approved concept"
+			answer.Citations = []wire.ProposeCitation{{Source: "test", Quote: "approved concept"}}
+		case "definition":
+			answer.Operation, answer.Value = "replace", "A reviewed definition"
+			answer.Citations = []wire.ProposeCitation{{Source: "test", Quote: "reviewed definition"}}
+		}
+		ready, err = drafter.Advance(ctx, wire.FieldDraftAdvanceRequest{Token: start.Token, Outcome: answer})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	url := srv.URL + "/v2/knowledge/drafts/" + start.Token
+	if status, _ := do(t, http.MethodGet, url, "", nil); status != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated preview = %d", status)
+	}
+	if status, preview := do(t, http.MethodGet, url, token, nil); status != http.StatusOK || preview["candidate_hash"] != ready.CandidateHash ||
+		preview["rationale"] != "owner review" || len(preview["fields"].([]any)) == 0 {
+		t.Fatalf("operator preview = %d %v", status, preview)
+	}
+	endpoint := url + "/publication"
+	if status, _ := do(t, http.MethodPost, endpoint, "", map[string]any{"candidate_hash": ready.CandidateHash}); status != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated approval = %d", status)
+	}
+	if status, _ := do(t, http.MethodPost, endpoint, token, map[string]any{"candidate_hash": "fabricated"}); status != http.StatusBadRequest {
+		t.Fatalf("wrong candidate = %d", status)
+	}
+	before, err := kernel.Active(ctx)
+	if err != nil || before.Snapshot() != knowledge.Snapshot(start.Snapshot) {
+		t.Fatalf("unauthorized request moved snapshot: %v", err)
+	}
+	if status, result := do(t, http.MethodPost, endpoint, token, map[string]any{"candidate_hash": ready.CandidateHash}); status != http.StatusCreated || result["status"] != "complete" {
+		t.Fatalf("approval = %d %v", status, result)
+	}
+	if status, _ := do(t, http.MethodPost, endpoint, token, map[string]any{"candidate_hash": ready.CandidateHash}); status != http.StatusNotFound {
+		t.Fatalf("replayed approval = %d", status)
 	}
 }
 

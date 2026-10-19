@@ -9,13 +9,16 @@ import (
 	"github.com/ashuangiras/polaroid/internal/memory"
 )
 
-const fieldDraftColumns = "token, key, snapshot, record_type, is_new, proposer, rationale, answer_entity, answer_field, answer_operation, answer_value, answer_citations, created_at"
+const fieldDraftColumns = "token, key, snapshot, record_type, is_new, proposer, rationale, answer_entity, answer_field, answer_operation, answer_value, answer_citations, created_at, walkthrough_token"
 
 func (s *Store) AppendFieldDraftEvent(ctx context.Context, ev memory.FieldDraftEvent, expectedEvents int) error {
-	var key, snapshot, recordType, proposer, rationale any
+	var key, snapshot, recordType, proposer, rationale, walkthroughToken any
 	var isNew any
 	if ev.Key != "" {
 		key, snapshot, recordType, proposer, rationale = ev.Key, ev.Snapshot, ev.RecordType, ev.Proposer, ev.Rationale
+		if ev.WalkthroughToken != "" {
+			walkthroughToken = ev.WalkthroughToken
+		}
 		isNew = boolToInt(ev.New)
 	}
 	var answerEntity, answerField, answerOperation, answerValue, answerCitations any
@@ -46,10 +49,10 @@ func (s *Store) AppendFieldDraftEvent(ctx context.Context, ev memory.FieldDraftE
 			return memory.ErrFieldDraftConflict
 		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO field_draft_events
-			(token, key, snapshot, record_type, is_new, proposer, rationale, answer_entity, answer_field, answer_operation, answer_value, answer_citations, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(token, key, snapshot, record_type, is_new, proposer, rationale, answer_entity, answer_field, answer_operation, answer_value, answer_citations, created_at, walkthrough_token)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			ev.Token, key, snapshot, recordType, isNew, proposer, rationale,
-			answerEntity, answerField, answerOperation, answerValue, answerCitations, formatTime(ev.CreatedAt))
+			answerEntity, answerField, answerOperation, answerValue, answerCitations, formatTime(ev.CreatedAt), walkthroughToken)
 		if err != nil {
 			return fmt.Errorf("insert field draft event: %w", err)
 		}
@@ -63,13 +66,14 @@ func scanFieldDraftEvent(rows *sql.Rows) (memory.FieldDraftEvent, error) {
 	var isNew sql.NullInt64
 	var answerEntity, answerField, answerOperation, answerValue, answerCitations sql.NullString
 	var created string
+	var walkthroughToken sql.NullString
 	if err := rows.Scan(&token, &key, &snapshot, &recordType, &isNew, &proposer, &rationale,
-		&answerEntity, &answerField, &answerOperation, &answerValue, &answerCitations, &created); err != nil {
+		&answerEntity, &answerField, &answerOperation, &answerValue, &answerCitations, &created, &walkthroughToken); err != nil {
 		return memory.FieldDraftEvent{}, fmt.Errorf("scan field draft event: %w", err)
 	}
 	ev := memory.FieldDraftEvent{
 		Token: token, Key: key.String, Snapshot: snapshot.String, RecordType: recordType.String,
-		New: isNew.Valid && isNew.Int64 != 0, Proposer: proposer.String, Rationale: rationale.String,
+		New: isNew.Valid && isNew.Int64 != 0, Proposer: proposer.String, Rationale: rationale.String, WalkthroughToken: walkthroughToken.String,
 	}
 	if answerEntity.Valid {
 		var citations []memory.FieldDraftCitation

@@ -220,8 +220,10 @@ func run(ctx context.Context, cfg config, logger *slog.Logger, ready func(net.Ad
 			mux.Handle("/mcp/agent/v5", mcptransport.NewAgentHandlerV5(kc.agent, kc.resolver, kc.guide, kc.proposer, kc.drafter, logger))
 			mux.Handle("/mcp/agent/v6", mcptransport.NewAgentHandlerV6(kc.agent, kc.resolver, kc.guide, kc.fieldDrafter, logger))
 			mux.Handle("/mcp/agent/v7", mcptransport.NewAgentHandlerV7(kc.agent, kc.resolver, kc.guide, kc.fieldDrafter, logger))
-			mux.Handle("/v1/knowledge/", httpops.NewHandler(kc.operator, kc.token, logger))
-			mux.Handle("/v2/knowledge/", httpops.NewHandler(kc.operator, kc.token, logger))
+			mux.Handle("/mcp/agent/v8", mcptransport.NewAgentHandlerV8(kc.agent, kc.resolver, kc.guide, kc.fieldDrafter, logger))
+			operatorHandler := httpops.NewHandlerWithDrafts(kc.operator, kc.fieldDrafter, kc.token, logger)
+			mux.Handle("/v1/knowledge/", operatorHandler)
+			mux.Handle("/v2/knowledge/", operatorHandler)
 		}
 	}
 	var handler http.Handler = mux

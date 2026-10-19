@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ashuangiras/polaroid/internal/knowledge"
@@ -36,6 +37,7 @@ import (
 // a second correction, about the composes graph's actual (not) being
 // depth/node bounded at publish time.
 type Guide struct {
+	mu           sync.Mutex
 	kernel       *knowledge.Kernel
 	walkthroughs *memory.Walkthroughs
 	ev           reasoning.Evaluator
@@ -152,6 +154,8 @@ func (g *Guide) AdvanceV7(ctx context.Context, in wire.WalkthroughAdvanceRequest
 }
 
 func (g *Guide) advance(ctx context.Context, in wire.WalkthroughAdvanceRequest, allowDynamicChildren bool) (wire.WalkthroughResult, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	if in.Token == "" {
 		return wire.WalkthroughResult{}, requiredField("token")
 	}
@@ -200,12 +204,16 @@ func (g *Guide) advance(ctx context.Context, in wire.WalkthroughAdvanceRequest, 
 // AttachChild appends a dynamically selected Procedure to an active v7
 // walkthrough and recomputes the parent plan from its pinned snapshot.
 func (g *Guide) AttachChild(ctx context.Context, in wire.WalkthroughAttachChildRequest) (wire.WalkthroughResult, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	if in.Token == "" {
 		return wire.WalkthroughResult{}, requiredField("token")
 	}
+
 	if in.Key == "" {
 		return wire.WalkthroughResult{}, requiredField("key")
 	}
+
 	state, err := g.walkthroughs.State(ctx, in.Token)
 	if err != nil {
 		return wire.WalkthroughResult{}, classify(err)
@@ -269,6 +277,70 @@ func (g *Guide) AttachChild(ctx context.Context, in wire.WalkthroughAttachChildR
 		return wire.WalkthroughResult{}, err
 	}
 	return newWalkthroughResultForState(state, plan, resolution), nil
+}
+
+// CaptureReady checks the pinned parent and its live progress. The same
+// lock is held through publication so this server cannot close or change
+// the walkthrough between authorization and activation.
+func (g *Guide) CaptureReady(ctx context.Context, token string, publish func() (wire.FieldDraftResult, error)) (wire.FieldDraftResult, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	state, err := g.walkthroughs.State(ctx, token)
+	if err != nil {
+		return wire.FieldDraftResult{}, classify(err)
+	}
+	if state.Goal != "polaroid.using" || state.Repository != "github.com/ashuangiras/polaroid" || !state.AllowDynamicChildren ||
+		!slices.Contains(state.DynamicChildren, "polaroid.session-close-capture") || len(state.DynamicChildren) < 2 {
+		return wire.FieldDraftResult{}, invalidField("walkthrough", "requires an open polaroid.using parent with a local capture child and completed task children")
+	}
+	cat, err := g.kernel.At(ctx, knowledge.Snapshot(state.Snapshot))
+	if err != nil {
+		return wire.FieldDraftResult{}, classify(err)
+	}
+	doc, err := cat.Get("polaroid.session-close-capture")
+	if err != nil {
+		return wire.FieldDraftResult{}, classify(err)
+	}
+	if doc.Applicability.Scope != knowledge.ScopeLocal || !doc.Applicability.ApplicableIn(state.Repository) {
+		return wire.FieldDraftResult{}, invalidField("walkthrough", "capture must be local to the parent repository at its pinned snapshot")
+	}
+	goal, err := cat.Record(state.Goal)
+	if err != nil {
+		return wire.FieldDraftResult{}, classify(err)
+	}
+	walkGoal := withDynamicChildren(goal, state.DynamicChildren)
+	plan, err := planFor(cat, walkGoal, leafStatusFrom(state.Statuses), false)
+	if err != nil {
+		return wire.FieldDraftResult{}, classify(err)
+	}
+	var checkChildren func(*knowledge.Record, []string) error
+	checkChildren = func(parent *knowledge.Record, path []string) error {
+		for _, key := range parent.Composes {
+			childPath := append(slices.Clone(path), key)
+			if key == "polaroid.session-close-capture" && len(path) == 0 {
+				continue
+			}
+			child, err := cat.Record(key)
+			if err != nil {
+				return err
+			}
+			if len(child.Composes) > 0 {
+				if err := checkChildren(child, childPath); err != nil {
+					return err
+				}
+			} else if status := state.Statuses[encodePath(childPath)]; status != memory.WalkthroughDone && status != memory.WalkthroughSkipped {
+				return invalidField("walkthrough", "all task children must finish before capture publication")
+			}
+		}
+		return nil
+	}
+	if err := checkChildren(walkGoal, nil); err != nil {
+		return wire.FieldDraftResult{}, err
+	}
+	if !slices.Equal(nextLeafPath(plan), []string{"polaroid.session-close-capture"}) || state.Statuses["polaroid.session-close-capture"] != "" {
+		return wire.FieldDraftResult{}, invalidField("walkthrough", "capture must be the active final step after task children finish")
+	}
+	return publish()
 }
 
 func (g *Guide) catalogAt(ctx context.Context, snapshot string) (*knowledge.Catalog, error) {
