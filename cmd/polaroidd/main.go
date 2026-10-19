@@ -1,4 +1,4 @@
-// Command polaroidd serves Polaroid's HTTP API, and MCP at /mcp, over a
+// Command polaroidd serves Polaroid's HTTP API, and MCP at /mcp/agent/v8, over a
 // SQLite database file.
 //
 // Usage:
@@ -207,19 +207,11 @@ func run(ctx context.Context, cfg config, logger *slog.Logger, ready func(net.Ad
 	}
 	svc := memory.NewService(store)
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", mcptransport.NewHandler(svc, logger))
 	mux.Handle("/", httptransport.NewHandler(svc, logger))
 	if cfg.knowledgeDir != "" {
 		if kc, err := setupKnowledge(cfg.knowledgeDir, cfg.knowledgeDir+"-sources.json", cfg.knowledgeDir+"-authorities.json", cfg.knowledgeDir+"-operator-token", svc, store, store, store); err != nil {
 			logKnowledgeUnavailable(logger, err)
 		} else {
-			mux.Handle("/mcp/agent", mcptransport.NewAgentHandler(kc.agent, logger))
-			mux.Handle("/mcp/agent/v2", mcptransport.NewAgentHandlerV2(kc.agent, kc.resolver, logger))
-			mux.Handle("/mcp/agent/v3", mcptransport.NewAgentHandlerV3(kc.agent, kc.resolver, kc.guide, logger))
-			mux.Handle("/mcp/agent/v4", mcptransport.NewAgentHandlerV4(kc.agent, kc.resolver, kc.guide, kc.proposer, logger))
-			mux.Handle("/mcp/agent/v5", mcptransport.NewAgentHandlerV5(kc.agent, kc.resolver, kc.guide, kc.proposer, kc.drafter, logger))
-			mux.Handle("/mcp/agent/v6", mcptransport.NewAgentHandlerV6(kc.agent, kc.resolver, kc.guide, kc.fieldDrafter, logger))
-			mux.Handle("/mcp/agent/v7", mcptransport.NewAgentHandlerV7(kc.agent, kc.resolver, kc.guide, kc.fieldDrafter, logger))
 			mux.Handle("/mcp/agent/v8", mcptransport.NewAgentHandlerV8(kc.agent, kc.resolver, kc.guide, kc.fieldDrafter, logger))
 			operatorHandler := httpops.NewHandlerWithDrafts(kc.operator, kc.fieldDrafter, kc.token, logger)
 			mux.Handle("/v1/knowledge/", operatorHandler)

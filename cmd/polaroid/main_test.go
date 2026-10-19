@@ -37,7 +37,7 @@ func newServer(t *testing.T) string {
 
 // newServerAndStore is like newServer, but also returns the backing store,
 // for tests that need to seed data no CLI command creates — a
-// guided-procedure walkthrough is only ever started by /mcp/agent/v3's
+// guided-procedure walkthrough is only ever started by /mcp/agent/v8's
 // start (ADR-0053), not this CLI.
 func newServerAndStore(t *testing.T) (string, *sqlite.Store) {
 	t.Helper()

@@ -139,7 +139,7 @@ func TestCorpusAuthorizationAcceptance(t *testing.T) {
 	}
 
 	c := sdk.NewClient(&sdk.Implementation{Name: "authorization-acceptance", Version: "v0"}, nil)
-	s, err := c.Connect(ctx, &sdk.StreamableClientTransport{Endpoint: base + "/mcp/agent/v2", DisableStandaloneSSE: true, MaxRetries: -1}, nil)
+	s, err := c.Connect(ctx, &sdk.StreamableClientTransport{Endpoint: base + "/mcp/agent/v8", DisableStandaloneSSE: true, MaxRetries: -1}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

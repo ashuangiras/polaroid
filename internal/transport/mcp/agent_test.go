@@ -29,11 +29,7 @@ import (
 	"github.com/ashuangiras/polaroid/internal/transport/wire"
 )
 
-// ADR-0043, finalized for Git-native knowledge by ADR-0048: the agent-mode
-// endpoint, backed solely by living knowledge named by canonical key and
-// snapshot token.
-
-// knowledgeHarness runs the real agent-mode MCP handler over a real
+// knowledgeHarness runs the v8 MCP handler over a real
 // Git-core repository (for knowledge) and a real SQLite file (for
 // feedback), over real HTTP.
 type knowledgeHarness struct {
@@ -41,29 +37,6 @@ type knowledgeHarness struct {
 	kernel *knowledge.Kernel
 }
 
-func newKnowledgeHarness(t *testing.T) *knowledgeHarness {
-	t.Helper()
-	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "polaroid.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	repo, err := gitcore.Open(filepath.Join(t.TempDir(), "knowledge"), gitcore.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	kernel := knowledge.New(gitstore.New(repo))
-	agent := knowledgeops.NewAgent(kernel, memory.NewService(store))
-	logs := &syncBuffer{}
-	srv := httptest.NewServer(mcptransport.NewAgentHandler(agent, slog.New(slog.NewTextHandler(logs, nil))))
-	t.Cleanup(srv.Close)
-	h := &harness{url: srv.URL, store: store, logs: logs}
-	h.session = h.connect(t, "")
-	return &knowledgeHarness{harness: h, kernel: kernel}
-}
-
-// publish commits procs atop the active snapshot and returns the result.
 func (kh *knowledgeHarness) publish(t *testing.T, procs ...*knowledge.Procedure) knowledge.Snapshot {
 	t.Helper()
 	ctx := context.Background()
@@ -107,197 +80,8 @@ func (kh *knowledgeHarness) publishRecords(t *testing.T, procs []*knowledge.Proc
 	}))
 }
 
-// newKnowledgeHarnessV2 runs /mcp/agent/v2 (ADR-0050): the same discover,
-// read and feedback as v1, plus resolve, with real semantic and rule
-// validators so typed records (composes, precedes, requires) publish.
-func newKnowledgeHarnessV2(t *testing.T) *knowledgeHarness {
-	t.Helper()
-	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "polaroid.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	repo, err := gitcore.Open(filepath.Join(t.TempDir(), "knowledge"), gitcore.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sem, err := semantic.New(semantic.DefaultLimits)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ev := datalog.Evaluator{}
-	kernel := knowledge.New(gitstore.New(repo), knowledge.WithRecordValidator(sem), knowledge.WithRecordValidator(reasoning.RuleValidator{Evaluator: ev}))
-	agent := knowledgeops.NewAgent(kernel, memory.NewService(store))
-	resolver := knowledgeops.NewResolver(kernel, ev, policy.Trust{})
-	logs := &syncBuffer{}
-	srv := httptest.NewServer(mcptransport.NewAgentHandlerV2(agent, resolver, slog.New(slog.NewTextHandler(logs, nil))))
-	t.Cleanup(srv.Close)
-	h := &harness{url: srv.URL, store: store, logs: logs}
-	h.session = h.connect(t, "")
-	return &knowledgeHarness{harness: h, kernel: kernel}
-}
-
-// newKnowledgeHarnessV3 runs /mcp/agent/v3 (ADR-0053): the same discover,
-// read, feedback and resolve as v2, plus start and advance, backed by
-// walkthrough storage in the same SQLite file as feedback.
-func newKnowledgeHarnessV3(t *testing.T) *knowledgeHarness {
-	t.Helper()
-	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "polaroid.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	repo, err := gitcore.Open(filepath.Join(t.TempDir(), "knowledge"), gitcore.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sem, err := semantic.New(semantic.DefaultLimits)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ev := datalog.Evaluator{}
-	kernel := knowledge.New(gitstore.New(repo), knowledge.WithRecordValidator(sem), knowledge.WithRecordValidator(reasoning.RuleValidator{Evaluator: ev}))
-	agent := knowledgeops.NewAgent(kernel, memory.NewService(store))
-	resolver := knowledgeops.NewResolver(kernel, ev, policy.Trust{})
-	guide := knowledgeops.NewGuide(kernel, memory.NewWalkthroughs(store), ev, policy.Trust{})
-	logs := &syncBuffer{}
-	srv := httptest.NewServer(mcptransport.NewAgentHandlerV3(agent, resolver, guide, slog.New(slog.NewTextHandler(logs, nil))))
-	t.Cleanup(srv.Close)
-	h := &harness{url: srv.URL, store: store, logs: logs}
-	h.session = h.connect(t, "")
-	return &knowledgeHarness{harness: h, kernel: kernel}
-}
-
-// newKnowledgeHarnessV4 runs /mcp/agent/v4 (ADR-0059 Parts 2-3): the same
-// v3 tools, plus propose -- agent mode's first write to knowledge content
-// itself.
-func newKnowledgeHarnessV4(t *testing.T) *knowledgeHarness {
-	t.Helper()
-	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "polaroid.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	repo, err := gitcore.Open(filepath.Join(t.TempDir(), "knowledge"), gitcore.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sem, err := semantic.New(semantic.DefaultLimits)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ev := datalog.Evaluator{}
-	kernel := knowledge.New(gitstore.New(repo), knowledge.WithRecordValidator(sem), knowledge.WithRecordValidator(reasoning.RuleValidator{Evaluator: ev}))
-	agent := knowledgeops.NewAgent(kernel, memory.NewService(store))
-	resolver := knowledgeops.NewResolver(kernel, ev, policy.Trust{})
-	guide := knowledgeops.NewGuide(kernel, memory.NewWalkthroughs(store), ev, policy.Trust{})
-	proposer := knowledgeops.NewProposer(kernel, ev, policy.Trust{})
-	logs := &syncBuffer{}
-	srv := httptest.NewServer(mcptransport.NewAgentHandlerV4(agent, resolver, guide, proposer, slog.New(slog.NewTextHandler(logs, nil))))
-	t.Cleanup(srv.Close)
-	h := &harness{url: srv.URL, store: store, logs: logs}
-	h.session = h.connect(t, "")
-	return &knowledgeHarness{harness: h, kernel: kernel}
-}
-
-// newKnowledgeHarnessV5 runs /mcp/agent/v5 (ADR-0060): the same v4
-// tools, plus propose_start and propose_advance.
-func newKnowledgeHarnessV5(t *testing.T) *knowledgeHarness {
-	t.Helper()
-	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "polaroid.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	repo, err := gitcore.Open(filepath.Join(t.TempDir(), "knowledge"), gitcore.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sem, err := semantic.New(semantic.DefaultLimits)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ev := datalog.Evaluator{}
-	kernel := knowledge.New(gitstore.New(repo), knowledge.WithRecordValidator(sem), knowledge.WithRecordValidator(reasoning.RuleValidator{Evaluator: ev}))
-	agent := knowledgeops.NewAgent(kernel, memory.NewService(store))
-	resolver := knowledgeops.NewResolver(kernel, ev, policy.Trust{})
-	guide := knowledgeops.NewGuide(kernel, memory.NewWalkthroughs(store), ev, policy.Trust{})
-	proposer := knowledgeops.NewProposer(kernel, ev, policy.Trust{})
-	drafter := knowledgeops.NewDrafter(kernel, proposer, memory.NewDrafts(store))
-	logs := &syncBuffer{}
-	srv := httptest.NewServer(mcptransport.NewAgentHandlerV5(agent, resolver, guide, proposer, drafter, slog.New(slog.NewTextHandler(logs, nil))))
-	t.Cleanup(srv.Close)
-	h := &harness{url: srv.URL, store: store, logs: logs}
-	h.session = h.connect(t, "")
-	return &knowledgeHarness{harness: h, kernel: kernel}
-}
-
-func newKnowledgeHarnessV6(t *testing.T) *knowledgeHarness {
-	t.Helper()
-	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "polaroid.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	repo, err := gitcore.Open(filepath.Join(t.TempDir(), "knowledge"), gitcore.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sem, err := semantic.New(semantic.DefaultLimits)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ev := datalog.Evaluator{}
-	kernel := knowledge.New(gitstore.New(repo), knowledge.WithRecordValidator(sem), knowledge.WithRecordValidator(reasoning.RuleValidator{Evaluator: ev}))
-	agent := knowledgeops.NewAgent(kernel, memory.NewService(store))
-	resolver := knowledgeops.NewResolver(kernel, ev, policy.Trust{})
-	guide := knowledgeops.NewGuide(kernel, memory.NewWalkthroughs(store), ev, policy.Trust{})
-	proposer := knowledgeops.NewProposer(kernel, ev, policy.Trust{})
-	drafter := knowledgeops.NewFieldDrafter(kernel, proposer, memory.NewFieldDrafts(store))
-	logs := &syncBuffer{}
-	srv := httptest.NewServer(mcptransport.NewAgentHandlerV6(agent, resolver, guide, drafter, slog.New(slog.NewTextHandler(logs, nil))))
-	t.Cleanup(srv.Close)
-	h := &harness{url: srv.URL, store: store, logs: logs}
-	h.session = h.connect(t, "")
-	return &knowledgeHarness{harness: h, kernel: kernel}
-}
-
-func newKnowledgeHarnessV7(t *testing.T) *knowledgeHarness {
-	t.Helper()
-	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "polaroid.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	t.Cleanup(func() { _ = store.Close() })
-	repo, err := gitcore.Open(filepath.Join(t.TempDir(), "knowledge"), gitcore.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sem, err := semantic.New(semantic.DefaultLimits)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ev := datalog.Evaluator{}
-	kernel := knowledge.New(gitstore.New(repo), knowledge.WithRecordValidator(sem), knowledge.WithRecordValidator(reasoning.RuleValidator{Evaluator: ev}))
-	agent := knowledgeops.NewAgent(kernel, memory.NewService(store))
-	resolver := knowledgeops.NewResolver(kernel, ev, policy.Trust{})
-	guide := knowledgeops.NewGuide(kernel, memory.NewWalkthroughs(store), ev, policy.Trust{})
-	drafter := knowledgeops.NewFieldDrafter(kernel, knowledgeops.NewProposer(kernel, ev, policy.Trust{}), memory.NewFieldDrafts(store))
-	logs := &syncBuffer{}
-	srv := httptest.NewServer(mcptransport.NewAgentHandlerV7(agent, resolver, guide, drafter, slog.New(slog.NewTextHandler(logs, nil))))
-	t.Cleanup(srv.Close)
-	h := &harness{url: srv.URL, store: store, logs: logs}
-	h.session = h.connect(t, "")
-	return &knowledgeHarness{harness: h, kernel: kernel}
-}
-
+// The v8 harness includes semantic validation, Git-native knowledge and
+// SQLite-backed feedback, walkthroughs and drafts.
 func newKnowledgeHarnessV8(t *testing.T) (*knowledgeHarness, *knowledgeops.FieldDrafter) {
 	t.Helper()
 	ctx := context.Background()
@@ -350,31 +134,8 @@ func hasCandidate(discovery map[string]any, key string) bool {
 	return false
 }
 
-func TestAgentModeAdvertisesOnlyItsTools(t *testing.T) {
-	agent := newKnowledgeHarness(t)
-	var names []string
-	for tool, err := range agent.session.Tools(context.Background(), nil) {
-		if err != nil {
-			t.Fatal(err)
-		}
-		names = append(names, tool.Name)
-	}
-	slices.Sort(names)
-	if !slices.Equal(names, []string{"discover", "feedback", "read"}) {
-		t.Fatalf("agent tools = %v", names)
-	}
-	if instr := agent.session.InitializeResult().Instructions; !strings.Contains(instr, "Nothing is recorded here") || strings.Contains(instr, "record_execution") {
-		t.Fatalf("agent instructions = %q", instr)
-	}
-	for _, name := range []string{"record_execution", "get_procedure", "resolve_binding"} {
-		if _, err := agent.session.CallTool(context.Background(), &sdk.CallToolParams{Name: name, Arguments: json.RawMessage(`{}`)}); err == nil {
-			t.Errorf("%s is callable in agent mode", name)
-		}
-	}
-}
-
 func TestAgentDiscoverEmptyCatalog(t *testing.T) {
-	agent := newKnowledgeHarness(t)
+	agent := mustKnowledgeHarnessV8(t)
 	d := decodeJSON(t, agent.ok(t, "discover", `{"task":"anything"}`))
 	if d["empty"] != true {
 		t.Fatalf("discover of an empty catalog = %v", d)
@@ -385,7 +146,7 @@ func TestAgentDiscoverEmptyCatalog(t *testing.T) {
 }
 
 func TestAgentDiscoverAndRead(t *testing.T) {
-	agent := newKnowledgeHarness(t)
+	agent := mustKnowledgeHarnessV8(t)
 	leaf := &knowledge.Procedure{
 		Key: "go.module.tidy", Goal: "Tidy a Go module's dependencies.", Philosophy: "Keep dependencies minimal.", Method: "Run go mod tidy.",
 		Contract: jsontext.Value(`{"inputs":{"module":"path"}}`), Instructions: jsontext.Value(`{"steps":["go mod tidy"]}`),
@@ -464,7 +225,7 @@ func TestAgentDiscoverAndRead(t *testing.T) {
 }
 
 func TestAgentFeedback(t *testing.T) {
-	agent := newKnowledgeHarness(t)
+	agent := mustKnowledgeHarnessV8(t)
 	proc := &knowledge.Procedure{
 		Key: "go.module.tidy", Goal: "Tidy a Go module's dependencies.", Philosophy: "p", Method: "m",
 		Contract: jsontext.Value(`{}`), Instructions: jsontext.Value(`{}`),
@@ -486,7 +247,7 @@ func TestAgentFeedback(t *testing.T) {
 }
 
 func TestAgentDiscoverStats(t *testing.T) {
-	agent := newKnowledgeHarness(t)
+	agent := mustKnowledgeHarnessV8(t)
 	shared := &knowledge.Procedure{
 		Key: "go.module.tidy", Goal: "Tidy a Go module's dependencies.", Philosophy: "p", Method: "m",
 		Applicability: knowledge.Applicability{Scope: knowledge.ScopeShared},
@@ -548,7 +309,7 @@ func TestAgentDiscoverStats(t *testing.T) {
 }
 
 func TestAgentDiscoverTools(t *testing.T) {
-	agent := newKnowledgeHarness(t)
+	agent := mustKnowledgeHarnessV8(t)
 	d := decodeJSON(t, agent.ok(t, "discover", `{"kind":"tools"}`))
 	if d["kind"] != "tools" {
 		t.Fatalf("discover(kind=tools) = %v", d)
@@ -558,13 +319,13 @@ func TestAgentDiscoverTools(t *testing.T) {
 		names = append(names, tl.(map[string]any)["name"].(string))
 	}
 	slices.Sort(names)
-	if !slices.Equal(names, []string{"discover", "feedback", "read"}) {
-		t.Fatalf("discover(kind=tools) at /mcp/agent = %v, must not list resolve (that is /mcp/agent/v2 only)", names)
+	if !slices.Equal(names, []string{"advance", "attach_child", "discover", "feedback", "propose_advance", "propose_publish_capture", "propose_start", "read", "resolve", "start"}) {
+		t.Fatalf("discover(kind=tools) at v8 = %v", names)
 	}
 }
 
 func TestAgentDiscoverKindValidation(t *testing.T) {
-	agent := newKnowledgeHarness(t)
+	agent := mustKnowledgeHarnessV8(t)
 	if res := agent.call(t, "discover", `{"kind":"bogus"}`); !res.IsError {
 		t.Fatalf("discover with an unknown kind must fail")
 	}
@@ -582,9 +343,7 @@ func TestAgentDiscoverKindValidation(t *testing.T) {
 	}
 }
 
-// planFixture publishes, at /mcp/agent/v2, a parent Procedure record
-// composing three children, x precedes y precedes z, each with a
-// matching legacy procedure document.
+// planFixture publishes a parent Procedure record composing three children.
 func planFixture(t *testing.T, agent *knowledgeHarness) knowledge.Snapshot {
 	t.Helper()
 	procs := []*knowledge.Procedure{
@@ -641,7 +400,7 @@ func dynamicWalkthroughFixture(t *testing.T, agent *knowledgeHarness) knowledge.
 }
 
 func TestResolvePlanOrderedByPrecedes(t *testing.T) {
-	agent := newKnowledgeHarnessV2(t)
+	agent := mustKnowledgeHarnessV8(t)
 	snap := planFixture(t, agent)
 
 	d := decodeJSON(t, agent.ok(t, "resolve", `{"goal":"plan.parent","snapshot":"`+string(snap)+`","at":"2026-10-15T12:00:00Z"}`))
@@ -671,7 +430,7 @@ func TestResolvePlanOrderedByPrecedes(t *testing.T) {
 }
 
 func TestResolveNoPlanWithoutComposition(t *testing.T) {
-	agent := newKnowledgeHarnessV2(t)
+	agent := mustKnowledgeHarnessV8(t)
 	leaf := []*knowledge.Procedure{knowledgetest.SharedProc("plan.leaf", "Leaf")}
 	records := []*knowledge.Record{
 		{Type: knowledge.TypeConcept, Key: "test.obligation", Label: "done", Definition: "d"},
@@ -688,7 +447,7 @@ func TestResolveNoPlanWithoutComposition(t *testing.T) {
 }
 
 func TestResolveInvalidCompleted(t *testing.T) {
-	agent := newKnowledgeHarnessV2(t)
+	agent := mustKnowledgeHarnessV8(t)
 	snap := planFixture(t, agent)
 	res := agent.call(t, "resolve", `{"goal":"plan.parent","snapshot":"`+string(snap)+`","at":"2026-10-15T12:00:00Z","completed":["not-a-child"]}`)
 	if !res.IsError {
@@ -696,178 +455,6 @@ func TestResolveInvalidCompleted(t *testing.T) {
 	}
 	if !strings.Contains(res.Content[0].(*sdk.TextContent).Text, `"invalid_request"`) {
 		t.Fatalf("must be invalid_request: %s", res.Content[0].(*sdk.TextContent).Text)
-	}
-}
-
-// Agent mode v3 (ADR-0053): the v2 tools, unchanged, plus start and
-// advance. TestAgentV2AndV3SchemasMatch extends the invariant
-// cmd/polaroidd/e2e_corpus_test.go already checks between v1 and v2.
-
-func TestAgentV2AndV3SchemasMatch(t *testing.T) {
-	v2, v3 := newKnowledgeHarnessV2(t), newKnowledgeHarnessV3(t)
-	schemas := func(h *knowledgeHarness) map[string]string {
-		t.Helper()
-		out := map[string]string{}
-		for tool, err := range h.session.Tools(context.Background(), nil) {
-			if err != nil {
-				t.Fatal(err)
-			}
-			b, _ := json.Marshal(tool.InputSchema)
-			out[tool.Name] = string(b)
-		}
-		return out
-	}
-	s2, s3 := schemas(v2), schemas(v3)
-	for _, name := range []string{"discover", "read", "feedback", "resolve"} {
-		if s2[name] == "" || s2[name] != s3[name] {
-			t.Fatalf("%s schema differs between v2 and v3:\nv2: %s\nv3: %s", name, s2[name], s3[name])
-		}
-	}
-	if len(s3) != 6 || s3["start"] == "" || s3["advance"] == "" {
-		t.Fatalf("v3 tools = %v, want discover/read/feedback/resolve/start/advance", s3)
-	}
-	v3Tools := v3.ok(t, "discover", `{"kind":"tools"}`)
-	if !strings.Contains(v3Tools, `"start"`) || !strings.Contains(v3Tools, `"advance"`) {
-		t.Fatalf("discover(kind=tools) at v3 must list start and advance: %s", v3Tools)
-	}
-}
-
-// Agent mode v4 (ADR-0059 Parts 2-3): the v3 tools, unchanged, plus
-// propose -- agent mode's first write to knowledge content itself.
-
-func TestAgentV3AndV4SchemasMatch(t *testing.T) {
-	v3, v4 := newKnowledgeHarnessV3(t), newKnowledgeHarnessV4(t)
-	schemas := func(h *knowledgeHarness) map[string]string {
-		t.Helper()
-		out := map[string]string{}
-		for tool, err := range h.session.Tools(context.Background(), nil) {
-			if err != nil {
-				t.Fatal(err)
-			}
-			b, _ := json.Marshal(tool.InputSchema)
-			out[tool.Name] = string(b)
-		}
-		return out
-	}
-	s3, s4 := schemas(v3), schemas(v4)
-	for _, name := range []string{"discover", "read", "feedback", "resolve", "start", "advance"} {
-		if s3[name] == "" || s3[name] != s4[name] {
-			t.Fatalf("%s schema differs between v3 and v4:\nv3: %s\nv4: %s", name, s3[name], s4[name])
-		}
-	}
-	if len(s4) != 7 || s4["propose"] == "" {
-		t.Fatalf("v4 tools = %v, want discover/read/feedback/resolve/start/advance/propose", s4)
-	}
-	v4Tools := v4.ok(t, "discover", `{"kind":"tools"}`)
-	if !strings.Contains(v4Tools, `"propose"`) {
-		t.Fatalf("discover(kind=tools) at v4 must list propose: %s", v4Tools)
-	}
-}
-
-// proposeFixture publishes the same vacuous producer/consumer shape
-// #173's own fixtures use, over the real kernel the harness itself
-// wraps (not through propose, so the fixture's own validity is never in
-// question) -- for proving propose actually closes it over the real
-// transport.
-func proposeFixture(t *testing.T, agent *knowledgeHarness) knowledge.Snapshot {
-	t.Helper()
-	procs := []*knowledge.Procedure{
-		knowledgetest.SharedProc("propose.producer", "producer"), knowledgetest.SharedProc("propose.consumer", "consumer"),
-		knowledgetest.SharedProc("propose.parent", "parent"),
-	}
-	records := []*knowledge.Record{
-		{Type: knowledge.TypeConcept, Key: "test.obligation", Label: "done", Definition: "d"},
-		{Type: knowledge.TypeConcept, Key: "propose.some-precondition", Label: "x", Definition: "d"},
-		{Type: knowledge.TypeProcedure, Key: "propose.producer", Label: "producer", Definition: "d",
-			Precedes: []string{"propose.consumer"}, Requires: []string{"test.obligation"}},
-		{Type: knowledge.TypeProcedure, Key: "propose.consumer", Label: "consumer", Definition: "d",
-			Preconditions: []string{"propose.some-precondition"}, Requires: []string{"test.obligation"}},
-		{Type: knowledge.TypeProcedure, Key: "propose.parent", Label: "parent", Definition: "d",
-			Composes: []string{"propose.producer", "propose.consumer"}, Requires: []string{"test.obligation"}},
-	}
-	s, err := agent.publishRecords(t, procs, records)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return s
-}
-
-func TestLegacySingleShotProposeRequiresV6(t *testing.T) {
-	agent := newKnowledgeHarnessV4(t)
-	errJSON := agent.fail(t, "propose", `{"proposer":"test.agent","rationale":"r"}`, "invalid_request")
-	if !strings.Contains(errJSON.Message, "/mcp/agent/v6") {
-		t.Fatalf("error = %+v, want migration guidance to v6", errJSON)
-	}
-}
-
-func TestLegacyProposeRejectsIncompleteCitationPayloadAsMigration(t *testing.T) {
-	agent := newKnowledgeHarnessV4(t)
-	errJSON := agent.fail(t, "propose", `{"proposer":"test.agent","rationale":"r",
-		"existing_procedure":{"key":"propose.producer","postconditions":["propose.some-precondition"]}}`, "invalid_request")
-	if !strings.Contains(errJSON.Message, "/mcp/agent/v6") {
-		t.Fatalf("error = %+v, want migration guidance to v6", errJSON)
-	}
-}
-
-func TestLegacyProposeRejectsOrchestrationPayloadAsMigration(t *testing.T) {
-	agent := newKnowledgeHarnessV4(t)
-	errJSON := agent.fail(t, "propose", `{"proposer":"test.agent","rationale":"r",
-		"new_orchestration":{"key":"propose.orchestration","label":"o","definition":"d","composes":[]}}`, "invalid_request")
-	if !strings.Contains(errJSON.Message, "/mcp/agent/v6") {
-		t.Fatalf("error = %+v, want migration guidance to v6", errJSON)
-	}
-}
-
-func TestLegacyProposalFailureDoesNotAffectFeedback(t *testing.T) {
-	agent := newKnowledgeHarnessV4(t)
-	snap := proposeFixture(t, agent)
-	before := agent.ok(t, "feedback", `{"key":"propose.producer","snapshot":"`+string(snap)+`","classification":"improved_method","summary":"s","details":"d","reporter":"test.agent"}`)
-	if _, err := agent.publishRecords(t, nil, []*knowledge.Record{
-		{Type: knowledge.TypeConcept, Key: "propose.unrelated-concept", Label: "u", Definition: "d"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	res := agent.call(t, "propose", `{"proposer":"test.agent","rationale":"r","new_concept":{"key":"propose.via-tool","label":"v","definition":"grounded content",
-		"citations":[{"source":"test.md","quote":"grounded content"}]}}`)
-	if !res.IsError || !strings.Contains(res.Content[0].(*sdk.TextContent).Text, "/mcp/agent/v6") {
-		t.Fatalf("legacy proposal result = %+v, want migration error", res)
-	}
-	after := agent.ok(t, "feedback", `{"key":"propose.producer","snapshot":"`+string(snap)+`","classification":"improved_method","summary":"s2","details":"d","reporter":"test.agent"}`)
-	if before == "" || after == "" {
-		t.Fatalf("feedback must keep working normally alongside retired proposals: before=%q after=%q", before, after)
-	}
-}
-
-// Agent mode v5 (ADR-0060): the v4 tools, unchanged, plus propose_start
-// and propose_advance.
-
-func TestAgentV4AndV5SchemasMatch(t *testing.T) {
-	v4, v5 := newKnowledgeHarnessV4(t), newKnowledgeHarnessV5(t)
-	schemas := func(h *knowledgeHarness) map[string]string {
-		t.Helper()
-		out := map[string]string{}
-		for tool, err := range h.session.Tools(context.Background(), nil) {
-			if err != nil {
-				t.Fatal(err)
-			}
-			b, _ := json.Marshal(tool.InputSchema)
-			out[tool.Name] = string(b)
-		}
-		return out
-	}
-	s4, s5 := schemas(v4), schemas(v5)
-	for _, name := range []string{"discover", "read", "feedback", "resolve", "start", "advance", "propose"} {
-		if s4[name] == "" || s4[name] != s5[name] {
-			t.Fatalf("%s schema differs between v4 and v5:\nv4: %s\nv5: %s", name, s4[name], s5[name])
-		}
-	}
-
-	if len(s5) != 9 || s5["propose_start"] == "" || s5["propose_advance"] == "" {
-		t.Fatalf("v5 tools = %v, want discover/read/feedback/resolve/start/advance/propose/propose_start/propose_advance", s5)
-	}
-	v5Tools := v5.ok(t, "discover", `{"kind":"tools"}`)
-	if !strings.Contains(v5Tools, `"propose_start"`) || !strings.Contains(v5Tools, `"propose_advance"`) {
-		t.Fatalf("discover(kind=tools) at v5 must list propose_start and propose_advance: %s", v5Tools)
 	}
 }
 
@@ -942,23 +529,6 @@ func TestAgentV8FieldCompleteProposalOverRealTransport(t *testing.T) {
 	}
 	if len(record.Postconditions) != 1 || record.Postconditions[0] != "draft.some-precondition" {
 		t.Fatalf("v8 published postconditions = %v", record.Postconditions)
-	}
-}
-
-func TestAgentV6V7ProposalWritesRefused(t *testing.T) {
-	for _, setup := range []struct {
-		name string
-		open func(*testing.T) *knowledgeHarness
-	}{{"v6", newKnowledgeHarnessV6}, {"v7", newKnowledgeHarnessV7}} {
-		t.Run(setup.name, func(t *testing.T) {
-			agent := setup.open(t)
-			for _, tool := range []string{"propose_start", "propose_advance"} {
-				err := agent.fail(t, tool, `{}`, "invalid_request")
-				if !strings.Contains(err.Message, "/mcp/agent/v8") {
-					t.Fatalf("%s: %v", tool, err)
-				}
-			}
-		})
 	}
 }
 
@@ -1084,58 +654,8 @@ func draftFixture(t *testing.T, agent *knowledgeHarness) knowledge.Snapshot {
 	return s
 }
 
-func TestDraftWalksFieldsAndCommits(t *testing.T) {
-	agent := newKnowledgeHarnessV5(t)
-	errJSON := agent.fail(t, "propose_start", `{"key":"draft.producer","proposer":"test.agent","rationale":"r"}`, "invalid_request")
-	if !strings.Contains(errJSON.Message, "/mcp/agent/v6") {
-		t.Fatalf("error = %+v, want migration guidance to v6", errJSON)
-	}
-}
-
-// TestDraftStillVacuousFailsAndStaysOpen proves a still-vacuous
-// composition is returned as the specific error over the real
-// transport, and the draft remains open: confirmed by a peek (no
-// outcome) staying safe and not re-erroring, then a correction
-// succeeding.
-func TestDraftStillVacuousFailsAndStaysOpen(t *testing.T) {
-	agent := newKnowledgeHarnessV5(t)
-	errJSON := agent.fail(t, "propose_start", `{"key":"draft.producer","proposer":"test.agent","rationale":"r"}`, "invalid_request")
-	if !strings.Contains(errJSON.Message, "/mcp/agent/v6") {
-		t.Fatalf("error = %+v, want migration guidance to v6", errJSON)
-	}
-}
-
-func TestDraftMissingCitationIsRejected(t *testing.T) {
-	agent := newKnowledgeHarnessV5(t)
-	errJSON := agent.fail(t, "propose_start", `{"key":"draft.producer","proposer":"test.agent","rationale":"r"}`, "invalid_request")
-	if !strings.Contains(errJSON.Message, "/mcp/agent/v6") {
-		t.Fatalf("error = %+v, want migration guidance to v6", errJSON)
-	}
-}
-
-// TestDraftOffersAlreadyNonEmptyFieldWithExistingValues proves
-// (ADR-0061), over the real transport, that propose_start still offers
-// a field already holding published content -- draft.consumer's own
-// preconditions -- instead of silently skipping it, and surfaces its
-// current values and *Complete state so an answer can extend it.
-func TestDraftOffersAlreadyNonEmptyFieldWithExistingValues(t *testing.T) {
-	agent := newKnowledgeHarnessV5(t)
-	errJSON := agent.fail(t, "propose_start", `{"key":"draft.consumer","proposer":"test.agent","rationale":"r"}`, "invalid_request")
-	if !strings.Contains(errJSON.Message, "/mcp/agent/v6") {
-		t.Fatalf("error = %+v, want migration guidance to v6", errJSON)
-	}
-}
-
-func TestDraftCloseOverRealTransport(t *testing.T) {
-	agent := newKnowledgeHarnessV5(t)
-	errJSON := agent.fail(t, "propose_advance", `{"token":"never-started"}`, "invalid_request")
-	if !strings.Contains(errJSON.Message, "/mcp/agent/v6") {
-		t.Fatalf("error = %+v, want migration guidance to v6", errJSON)
-	}
-}
-
 func TestWalkthroughStartPinsSnapshotAndReturnsPlan(t *testing.T) {
-	agent := newKnowledgeHarnessV3(t)
+	agent := mustKnowledgeHarnessV8(t)
 	snap := planFixture(t, agent)
 
 	res := decodeJSON(t, agent.ok(t, "start", `{"goal":"plan.parent"}`))
@@ -1161,8 +681,8 @@ func TestWalkthroughStartPinsSnapshotAndReturnsPlan(t *testing.T) {
 	}
 }
 
-func TestAgentV7DynamicChildCompletesAndCanReopenParentFlow(t *testing.T) {
-	agent := newKnowledgeHarnessV7(t)
+func TestAgentV8DynamicChildCompletesAndCanReopenParentFlow(t *testing.T) {
+	agent := mustKnowledgeHarnessV8(t)
 	snapshot := dynamicWalkthroughFixture(t, agent)
 	const repository = "github.com/ashuangiras/polaroid"
 
@@ -1251,13 +771,13 @@ func TestAgentV7DynamicChildCompletesAndCanReopenParentFlow(t *testing.T) {
 	}
 }
 
-func TestAgentV7DynamicChildValidationAndPinnedSnapshot(t *testing.T) {
-	agent := newKnowledgeHarnessV7(t)
+func TestAgentV8DynamicChildValidationAndPinnedSnapshot(t *testing.T) {
+	agent := mustKnowledgeHarnessV8(t)
 	snapshot := dynamicWalkthroughFixture(t, agent)
 	const repository = "github.com/ashuangiras/polaroid"
 	static := decodeJSON(t, agent.ok(t, "start", `{"goal":"polaroid.using","snapshot":"`+string(snapshot)+`","repository":"`+repository+`"}`))
 	if static["status"] != "complete" {
-		t.Fatalf("ordinary v7 start of a leaf = %v, want complete", static)
+		t.Fatalf("ordinary v8 start of a leaf = %v, want complete", static)
 	}
 	agent.fail(t, "attach_child", `{"token":"`+static["token"].(string)+`","key":"dynamic.late"}`, "invalid_request")
 
@@ -1282,49 +802,8 @@ func TestAgentV7DynamicChildValidationAndPinnedSnapshot(t *testing.T) {
 	agent.fail(t, "attach_child", `{"token":"`+token+`","key":"dynamic.late"}`, "not_found")
 }
 
-func TestAgentV7PreservesV6ToolsAndAdvertisesDynamicAttachment(t *testing.T) {
-	v6, v7 := newKnowledgeHarnessV6(t), newKnowledgeHarnessV7(t)
-	schemas := func(h *knowledgeHarness) map[string]string {
-		t.Helper()
-		out := map[string]string{}
-		for tool, err := range h.session.Tools(context.Background(), nil) {
-			if err != nil {
-				t.Fatal(err)
-			}
-			encoded, err := json.Marshal(tool.InputSchema)
-			if err != nil {
-				t.Fatal(err)
-			}
-			out[tool.Name] = string(encoded)
-		}
-		return out
-	}
-	v6Schemas, v7Schemas := schemas(v6), schemas(v7)
-	for _, name := range []string{"discover", "read", "feedback", "resolve", "advance", "propose_start", "propose_advance"} {
-		if v6Schemas[name] == "" || v6Schemas[name] != v7Schemas[name] {
-			t.Fatalf("%s schema changed between v6 and v7:\nv6: %s\nv7: %s", name, v6Schemas[name], v7Schemas[name])
-		}
-	}
-	if v6Schemas["attach_child"] != "" || v7Schemas["attach_child"] == "" {
-		t.Fatalf("attach_child schemas v6=%q v7=%q", v6Schemas["attach_child"], v7Schemas["attach_child"])
-	}
-	if strings.Contains(v6Schemas["start"], `"allow_dynamic_children"`) || strings.Contains(v6Schemas["start"], `"snapshot"`) {
-		t.Fatalf("v6 start schema unexpectedly includes v7 arguments: %s", v6Schemas["start"])
-	}
-	if !strings.Contains(v7Schemas["start"], `"allow_dynamic_children"`) || !strings.Contains(v7Schemas["start"], `"snapshot"`) {
-		t.Fatalf("v7 start schema lacks dynamic mode or snapshot: %s", v7Schemas["start"])
-	}
-	if v7Schemas["start"] == v6Schemas["start"] {
-		t.Fatal("v7 start schema must add dynamic-parent arguments without changing v6")
-	}
-	tools := v7.ok(t, "discover", `{"kind":"tools"}`)
-	if !strings.Contains(tools, `"attach_child"`) {
-		t.Fatalf("v7 discover(kind=tools) does not advertise attach_child: %s", tools)
-	}
-}
-
 func TestWalkthroughAdvancePeekIsUnchanged(t *testing.T) {
-	agent := newKnowledgeHarnessV3(t)
+	agent := mustKnowledgeHarnessV8(t)
 	planFixture(t, agent)
 	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"plan.parent"}`))
 	token := start["token"].(string)
@@ -1338,7 +817,7 @@ func TestWalkthroughAdvancePeekIsUnchanged(t *testing.T) {
 }
 
 func TestWalkthroughAdvanceFoldsPerKeyAndEscalateFreezesNext(t *testing.T) {
-	agent := newKnowledgeHarnessV3(t)
+	agent := mustKnowledgeHarnessV8(t)
 	planFixture(t, agent)
 	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"plan.parent"}`))
 	token := start["token"].(string)
@@ -1357,7 +836,7 @@ func TestWalkthroughAdvanceFoldsPerKeyAndEscalateFreezesNext(t *testing.T) {
 }
 
 func TestWalkthroughAdvanceInvalidOutcomeKey(t *testing.T) {
-	agent := newKnowledgeHarnessV3(t)
+	agent := mustKnowledgeHarnessV8(t)
 	planFixture(t, agent)
 	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"plan.parent"}`))
 	token := start["token"].(string)
@@ -1369,7 +848,7 @@ func TestWalkthroughAdvanceInvalidOutcomeKey(t *testing.T) {
 }
 
 func TestWalkthroughAdvanceUnknownTokenIsNotFound(t *testing.T) {
-	agent := newKnowledgeHarnessV3(t)
+	agent := mustKnowledgeHarnessV8(t)
 	res := agent.call(t, "advance", `{"token":"never-started"}`)
 	if !res.IsError || !strings.Contains(res.Content[0].(*sdk.TextContent).Text, `"not_found"`) {
 		t.Fatalf("an unknown token must be not_found: %v", res)
@@ -1377,18 +856,14 @@ func TestWalkthroughAdvanceUnknownTokenIsNotFound(t *testing.T) {
 }
 
 func TestWalkthroughStartUnknownGoalIsNotFound(t *testing.T) {
-	agent := newKnowledgeHarnessV3(t)
+	agent := mustKnowledgeHarnessV8(t)
 	res := agent.call(t, "start", `{"goal":"nope"}`)
 	if !res.IsError || !strings.Contains(res.Content[0].(*sdk.TextContent).Text, `"not_found"`) {
 		t.Fatalf("an unknown goal must be not_found: %v", res)
 	}
 }
 
-// Multi-level plans, path-addressed leaves (ADR-0054, issue #161),
-// exercised over real HTTP at /mcp/agent/v3.
-
-// deepPlanFixture publishes goal -> a -> b (a leaf), each a typed
-// Procedure record with a matching legacy document.
+// deepPlanFixture publishes goal -> a -> b (a leaf).
 func deepPlanFixture(t *testing.T, agent *knowledgeHarness) {
 	t.Helper()
 	procs := []*knowledge.Procedure{
@@ -1409,7 +884,7 @@ func deepPlanFixture(t *testing.T, agent *knowledgeHarness) {
 }
 
 func TestWalkthroughStartDescendsToDeepLeaf(t *testing.T) {
-	agent := newKnowledgeHarnessV3(t)
+	agent := mustKnowledgeHarnessV8(t)
 	deepPlanFixture(t, agent)
 	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"deep.goal"}`))
 	plan := start["plan"].([]any)
@@ -1424,7 +899,7 @@ func TestWalkthroughStartDescendsToDeepLeaf(t *testing.T) {
 }
 
 func TestWalkthroughAdvanceDeepLeafByPath(t *testing.T) {
-	agent := newKnowledgeHarnessV3(t)
+	agent := mustKnowledgeHarnessV8(t)
 	deepPlanFixture(t, agent)
 	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"deep.goal"}`))
 	token := start["token"].(string)
@@ -1437,7 +912,7 @@ func TestWalkthroughAdvanceDeepLeafByPath(t *testing.T) {
 }
 
 func TestWalkthroughAdvanceComposedTargetIsInvalidRequest(t *testing.T) {
-	agent := newKnowledgeHarnessV3(t)
+	agent := mustKnowledgeHarnessV8(t)
 	deepPlanFixture(t, agent)
 	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"deep.goal"}`))
 	token := start["token"].(string)
@@ -1449,7 +924,7 @@ func TestWalkthroughAdvanceComposedTargetIsInvalidRequest(t *testing.T) {
 }
 
 func TestWalkthroughAdvanceKeyAndPathBothGivenIsInvalidRequest(t *testing.T) {
-	agent := newKnowledgeHarnessV3(t)
+	agent := mustKnowledgeHarnessV8(t)
 	deepPlanFixture(t, agent)
 	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"deep.goal"}`))
 	token := start["token"].(string)
@@ -1460,11 +935,10 @@ func TestWalkthroughAdvanceKeyAndPathBothGivenIsInvalidRequest(t *testing.T) {
 	}
 }
 
-// Walkthrough completion semantics and an explicit close (ADR-0055,
-// issue #162), exercised over real HTTP at /mcp/agent/v3.
+// Walkthrough completion and close behavior over real v8 HTTP.
 
 func TestWalkthroughStatusCompleteAndInProgress(t *testing.T) {
-	agent := newKnowledgeHarnessV3(t)
+	agent := mustKnowledgeHarnessV8(t)
 	planFixture(t, agent)
 	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"plan.parent"}`))
 	if start["status"] != "in_progress" {
@@ -1483,7 +957,7 @@ func TestWalkthroughStatusCompleteAndInProgress(t *testing.T) {
 }
 
 func TestWalkthroughStatusReopenAfterComplete(t *testing.T) {
-	agent := newKnowledgeHarnessV3(t)
+	agent := mustKnowledgeHarnessV8(t)
 	deepPlanFixture(t, agent)
 	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"deep.goal"}`))
 	token := start["token"].(string)
@@ -1499,7 +973,7 @@ func TestWalkthroughStatusReopenAfterComplete(t *testing.T) {
 }
 
 func TestWalkthroughAdvanceCloseEndsItImmediately(t *testing.T) {
-	agent := newKnowledgeHarnessV3(t)
+	agent := mustKnowledgeHarnessV8(t)
 	planFixture(t, agent)
 	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"plan.parent"}`))
 	token := start["token"].(string)
@@ -1515,7 +989,7 @@ func TestWalkthroughAdvanceCloseEndsItImmediately(t *testing.T) {
 }
 
 func TestWalkthroughAdvanceCloseWithOutcomeAppliesThenCloses(t *testing.T) {
-	agent := newKnowledgeHarnessV3(t)
+	agent := mustKnowledgeHarnessV8(t)
 	planFixture(t, agent)
 	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"plan.parent"}`))
 	token := start["token"].(string)
@@ -1531,7 +1005,7 @@ func TestWalkthroughAdvanceCloseWithOutcomeAppliesThenCloses(t *testing.T) {
 }
 
 func TestWalkthroughAdvanceCloseAlreadyClosedIsNotFound(t *testing.T) {
-	agent := newKnowledgeHarnessV3(t)
+	agent := mustKnowledgeHarnessV8(t)
 	planFixture(t, agent)
 	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"plan.parent"}`))
 	token := start["token"].(string)
@@ -1543,11 +1017,10 @@ func TestWalkthroughAdvanceCloseAlreadyClosedIsNotFound(t *testing.T) {
 	}
 }
 
-// A blocked status, with a reason, and expand (ADR-0056, issue #163),
-// exercised over real HTTP at /mcp/agent/v3.
+// Blocked status, reason and expanded plan over real v8 HTTP.
 
 func TestWalkthroughAdvanceBlockedWithReason(t *testing.T) {
-	agent := newKnowledgeHarnessV3(t)
+	agent := mustKnowledgeHarnessV8(t)
 	planFixture(t, agent)
 	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"plan.parent"}`))
 	token := start["token"].(string)
@@ -1563,7 +1036,7 @@ func TestWalkthroughAdvanceBlockedWithReason(t *testing.T) {
 }
 
 func TestWalkthroughAdvanceInvalidStatusIsInvalidRequest(t *testing.T) {
-	agent := newKnowledgeHarnessV3(t)
+	agent := mustKnowledgeHarnessV8(t)
 	planFixture(t, agent)
 	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"plan.parent"}`))
 	token := start["token"].(string)
@@ -1575,7 +1048,7 @@ func TestWalkthroughAdvanceInvalidStatusIsInvalidRequest(t *testing.T) {
 }
 
 func TestWalkthroughStartExpandAttachesNestedChildren(t *testing.T) {
-	agent := newKnowledgeHarnessV3(t)
+	agent := mustKnowledgeHarnessV8(t)
 	deepPlanFixture(t, agent)
 	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"deep.goal","expand":true}`))
 	plan := start["plan"].([]any)
@@ -1590,7 +1063,7 @@ func TestWalkthroughStartExpandAttachesNestedChildren(t *testing.T) {
 }
 
 func TestWalkthroughAdvanceExpandReflectsReportedChild(t *testing.T) {
-	agent := newKnowledgeHarnessV3(t)
+	agent := mustKnowledgeHarnessV8(t)
 	deepPlanFixture(t, agent)
 	start := decodeJSON(t, agent.ok(t, "start", `{"goal":"deep.goal"}`))
 	token := start["token"].(string)
@@ -1601,4 +1074,8 @@ func TestWalkthroughAdvanceExpandReflectsReportedChild(t *testing.T) {
 	if len(children) != 1 || children[0].(map[string]any)["key"] != "deep.b" || children[0].(map[string]any)["status"] != "done" {
 		t.Fatalf("expand must reflect the reported child's own status: %v", children)
 	}
+}
+func mustKnowledgeHarnessV8(t *testing.T) *knowledgeHarness {
+	h, _ := newKnowledgeHarnessV8(t)
+	return h
 }

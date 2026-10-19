@@ -1,0 +1,41 @@
+{
+  "base_version": 2,
+  "version": {
+    "philosophy": "Task knowledge belongs in Polaroid's records, not in a repository's own files or in one conversation's memory. A fresh agent must rediscover and check that knowledge against the repository's real conventions.",
+    "method": "Connect to /mcp/agent/v8 to discover and follow Git-native guidance. Use the JSON HTTP API or polaroid CLI for the separate SQLite repository registry, bindings, execution evidence, duplicate checks and feedback. Inspect the target repository before selecting shared procedures. Resolve a binding at the exact commit and effective inputs, run the task with the repository's own tools, record child executions before parents, and check derived verification. Report inaccurate guidance without rewriting stored history. Publish new Git-native knowledge only through reviewed capture or explicit operator authorization.",
+    "goal": "Adopt Polaroid's procedural memory in a repository: discover applicable knowledge, reuse a suitable procedure, complete a real task, record evidence at the exact commit, and leave durable pointers for a later agent.",
+    "applicability": {"shared": {}},
+    "contract": {
+      "inputs": {
+        "polaroid_endpoint": "The agent MCP endpoint, for example http://127.0.0.1:7417/mcp/agent/v8; the same daemon serves the separate JSON HTTP API.",
+        "repository_identifier": "The repository's canonical host/owner/path identifier.",
+        "task_source": "The issue or other accepted criteria for the development task."
+      },
+      "boundaries": [
+        "Do not use retired /mcp operator tools or earlier agent endpoint versions.",
+        "Do not treat another commit's or repository's execution evidence as verification of this task.",
+        "Do not create a duplicate or alter an existing stored version to suit local conventions.",
+        "Do not publish knowledge or synchronize a remote without the applicable authorization."
+      ],
+      "expected_outcome": "The repository is registered, applicable guidance is read, a suitable procedure is reused or an explicitly justified new one is authored, the real task has verified execution evidence, and a later agent can find the binding and knowledge.",
+      "verification": [
+        "The CLI or HTTP API shows the registered repository and binding.",
+        "The binding preparation and execution verification for the exact commit and inputs report verified after the real task succeeds.",
+        "A new v8 agent session can rediscover the Git-native guidance without relying on this conversation."
+      ]
+    },
+    "instructions": {
+      "steps": [
+        {"id": "connect", "action": "Connect a fresh MCP client to /mcp/agent/v8 and confirm discover and read work. If the service is missing, diagnose it rather than silently substituting an HTTP probe."},
+        {"id": "inspect", "action": "Inspect the target repository's own task criteria, build, test, security and contribution conventions. Do not assume another repository's commands apply."},
+        {"id": "discover", "action": "Discover and read relevant Git-native procedures at one snapshot through v8. For the SQLite evidence catalog, list this repository's bindings and search procedures using polaroid bindings, discover and list or the corresponding /v1 HTTP endpoints. Read candidate contracts and scope before reuse."},
+        {"id": "register", "action": "Use polaroid repository-by-identifier and register, or the corresponding /v1/repositories endpoints, to register the repository if needed. Add an alias only for another identifier of the same repository."},
+        {"id": "select", "action": "Reuse a suitable shared procedure through a binding with this repository's inputs. Check proposed SQLite procedure content with polaroid duplicates or POST /v1/procedures/duplicates before creating a new version or identity; prefer a local wrapper for repository-specific orchestration."},
+        {"id": "execute", "action": "Resolve the binding with the exact environment, commit, effective inputs and decisions. Perform the real work using this repository's tools and record each execution through the CLI or POST /v1/executions, children before parents, with honest outcomes and evidence."},
+        {"id": "verify", "action": "Read /v1/executions/{id}/verification and binding preparation for this exact target, or their CLI equivalents. Recheck the checkout and effective inputs before claiming verification."},
+        {"id": "close", "action": "Leave minimal durable pointers to the service and bindings. Report genuine procedural deficiencies through v8 feedback, or use the HTTP/CLI feedback endpoints for SQLite records. Correct guidance by appending versions, never editing history; publish Git-native changes only after the required review and authorization."}
+      ]
+    },
+    "revision_reason": "Issue #198: retire operator MCP and older agent endpoints without rewriting the historical v1/v2 adoption instructions. The current guidance uses v8 for agent knowledge and HTTP/CLI for SQLite operator and evidence workflows."
+  }
+}

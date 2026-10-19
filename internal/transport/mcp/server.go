@@ -1,7 +1,4 @@
-// Package mcp exposes the memory service as an MCP server over stateless
-// streamable HTTP (ADR-0014). Tools take flat arguments named after the
-// record fields and return the same record shapes as the HTTP API; the
-// contract is docs/architecture/mcp.md.
+// Package mcp serves Git-native procedural knowledge over stateless streamable HTTP.
 package mcp
 
 import (
@@ -12,115 +9,29 @@ import (
 	"log/slog"
 	"net/http"
 	"reflect"
-	"strconv"
-	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/ashuangiras/polaroid/internal/memory"
 	"github.com/ashuangiras/polaroid/internal/transport/wire"
 )
 
-// ProtocolVersion is the preferred MCP revision: the sessionless one.
+// ProtocolVersion is the preferred sessionless MCP revision.
 const ProtocolVersion = "2026-07-28"
 
-// HandshakeProtocolVersion is the older revision also served, through the
-// initialize handshake but still without sessions (ADR-0016).
+// HandshakeProtocolVersion is also supported without sessions.
 const HandshakeProtocolVersion = "2025-11-25"
 
-const instructions = `Polaroid stores procedures: versioned, shared instructions for tasks. Typical loop:
-1. Find what applies to your task before writing anything: list_bindings for your repository's bindings (a binding that covers the task is resolved in step 2), and discover_procedures with the task in your own words and your repository. Discovery is lexical: it ranks latest versions by shared words and explains each score, which is a ranking value, not a confidence or a verification. Fetch plausible candidates with get_procedure or get_version and read their contracts; whether one fits is your judgment. Procedure records may describe this in more detail: follow one that discovery finds for adopting or reusing procedures. list_procedures with repository lists everything that applies there. A procedure's scope (shared, local to one registered repository, or unspecified: no declaration) is its latest version's; q searches canonical keys and goals. get_repository finds a registered repository by any of its identifiers, and evidence recorded under any of them counts for all.
-2. Resolve what to run: resolve_binding for a repository's binding, or get_graph with repository and environment. Every edge says how its version was selected (pin, evidence or latest), and every node names that version's own scope; read the selected version's contract before reuse. selection_evidence names the execution, and the commit, that made a version a candidate; it does not verify your checkout. Pass commit and inputs to see target_verification for the exact commit and inputs you will run.
-3. Follow the selected versions' instructions with your own tools. If target_verification.verified is false or target_verification is absent, the work is not verified there until you run it and record it. A reference with a condition applies only when the condition holds for your task: decide each one yourself (Polaroid never evaluates conditions), run the applicable ones, and pass your decisions to get_graph or resolve_binding to see target_verification.
-4. Record each run with record_execution, children first, then the parent with "children" linking them. The commit claims that exactly that commit ran: commit uncommitted changes locally before the run you record. A child must have run with the inputs its reference maps from the parent's. List a decision for every conditional reference: applicable with its child, or not applicable with a concrete rationale and no child. Required references cannot be skipped. Keep evidence concise: results, short excerpts and references (commits, URLs, log locations), never whole logs; a value over its size limit is refused with value_too_large, and get_catalog_statistics lists the limits.
-5. Improve a procedure with revise_procedure, passing the version you read as base_version; a version_conflict means re-read and try again. Before creating or revising one, check the proposal with suggest_duplicates (exclude_procedure_id when revising): key_collision means the key is taken, and suggestions are overlapping procedures to read and reuse, bind or revise if they fit; the decision is yours. A new procedure declares its applicability (shared, or local to a repository) and origin.
-6. When Polaroid itself gets in your way (a confusing error, a missing capability, a tool that misbehaved) or you see how it could serve you better, check list_feedback with status open first, then say so with report_feedback, naming its subject (the service, a repository, procedure version, binding or execution). When your own work addresses an open report, resolve_feedback it with the outcome and a reference to what you changed.
-7. When you see repetitive, mechanical work that a tool might replace, look for an existing toil item with list_toil_items (by procedure_id, repository or status) before creating one with create_toil_item, and revise it with revise_toil_item when you observe the same activity again. Cite exact procedure versions and executions, keep observed facts apart from hypotheses, and treat its status as your assessment, not verification.
-8. History is never rewritten. An execution recorded wrongly (it did not do what its version claims) is withdrawn as evidence with invalidate_execution and a precise reason: it stays readable with evidence_status invalidated, never supports selection or verification again, and its parents are unverified (child_invalidated); record a new genuine run to replace it. A procedure that should no longer be used is retired with retire_procedure (base_event from get_procedure_lifecycle): discovery and list_procedures hide it unless lifecycle is retired or all, new versions of it, new bindings and binding revisions of it and new references to it are refused, and graph nodes of it carry retirement while keeping their evidence. reactivate_procedure reverses it.
-Lists take limit and return next to continue after, with the same other arguments; list_procedures, list_bindings and list_toil_items also take snapshot to page a fixed snapshot. Tool errors carry an error object with a stable code (invalid_request, not_found, version_conflict, ...).`
-
-// NewHandler returns the full MCP endpoint over svc: every operation of the
-// HTTP API as a tool, and the resources. It applies the same cross-origin
-// protection as the HTTP API; wrap it with a loopback-host check when
-// listening on loopback.
-func NewHandler(svc *memory.Service, logger *slog.Logger) http.Handler {
-	return handler(newServer(svc, logger), logger)
-}
-
-// NewAgentHandler returns the agent-mode MCP endpoint over agent (ADR-0043,
-// ADR-0048): only the few tools everyday procedural-knowledge use needs, so
-// a client that connects to it never loads the full API's schemas. It is
-// backed by Git-native living knowledge, named only by canonical key and
-// snapshot token: no procedure version, binding or evidence-based
-// selection ever appears here.
-func NewAgentHandler(agent AgentKnowledge, logger *slog.Logger) http.Handler {
-	return handler(newAgentServer(agent, logger), logger)
-}
-
-// NewAgentHandlerV2 returns agent mode v2 (ADR-0050): the v1 tools, with
-// the same contracts, plus resolve.
-func NewAgentHandlerV2(agent AgentKnowledge, resolver AgentResolver, logger *slog.Logger) http.Handler {
-	return handler(newAgentServerV2(agent, resolver, logger), logger)
-}
-
-// NewAgentHandlerV3 returns agent mode v3 (ADR-0053): the v2 tools, with
-// the same contracts, plus start and advance, Polaroid's first stateful
-// agent-mode tools: a token-identified, expiring walkthrough of a
-// procedure's composed steps.
-func NewAgentHandlerV3(agent AgentKnowledge, resolver AgentResolver, guide AgentGuide, logger *slog.Logger) http.Handler {
-	return handler(newAgentServerV3(agent, resolver, guide, logger), logger)
-}
-
-// NewAgentHandlerV4 returns agent mode v4 (ADR-0059 Parts 2-3): the v3
-// tools, with the same contracts, plus propose, agent mode's first write
-// to knowledge content itself (start/advance write only one agent's own
-// runtime progress, never knowledge content).
-func NewAgentHandlerV4(agent AgentKnowledge, resolver AgentResolver, guide AgentGuide, proposer AgentProposer, logger *slog.Logger) http.Handler {
-	return handler(newAgentServerV4(agent, resolver, guide, proposer, logger), logger)
-}
-
-// NewAgentHandlerV5 returns agent mode v5 (ADR-0060): the v4 tools, with
-// the same contracts, plus propose_start and propose_advance:
-// interactive, field-by-field construction of a propose request,
-// complementing single-shot propose (v4), unaffected.
-func NewAgentHandlerV5(agent AgentKnowledge, resolver AgentResolver, guide AgentGuide, proposer AgentProposer, drafter AgentDrafter, logger *slog.Logger) http.Handler {
-	return handler(newAgentServerV5(agent, resolver, guide, proposer, drafter, logger), logger)
-}
-
-// NewAgentHandlerV6 returns agent mode v6 (ADR-0062): the v3 read and
-// walkthrough tools, with a complete field-review proposal flow covering
-// both Procedure guidance documents and all typed record kinds.
-func NewAgentHandlerV6(agent AgentKnowledge, resolver AgentResolver, guide AgentGuide, drafter AgentFieldDrafter, logger *slog.Logger) http.Handler {
-	return handler(newAgentServerV6(agent, resolver, guide, drafter, logger), logger)
-}
-
-// NewAgentHandlerV7 adds runtime-selected child walkthroughs while keeping
-// every earlier agent endpoint and its tool schemas unchanged.
-func NewAgentHandlerV7(agent AgentKnowledge, resolver AgentResolver, guide AgentGuideV7, drafter AgentFieldDrafter, logger *slog.Logger) http.Handler {
-	return handler(newAgentServerV7(agent, resolver, guide, drafter, logger), logger)
-}
-
+// NewAgentHandlerV8 serves the ten Git-native agent tools.
 func NewAgentHandlerV8(agent AgentKnowledge, resolver AgentResolver, guide AgentGuideV7, drafter AgentFieldDrafterV8, logger *slog.Logger) http.Handler {
 	return handler(newAgentServerV8(agent, resolver, guide, drafter, logger), logger)
 }
 
 func handler(server *sdk.Server, logger *slog.Logger) http.Handler {
 	h := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, &sdk.StreamableHTTPOptions{
-		Stateless:           true,
-		JSONResponse:        true,
-		Logger:              logger,
-		MaxRequestBodyBytes: wire.MaxRequestBytes,
+		Stateless: true, JSONResponse: true, Logger: logger, MaxRequestBodyBytes: wire.MaxRequestBytes,
 	})
 	return http.NewCrossOriginProtection().Handler(h)
-}
-
-func newServer(svc *memory.Service, logger *slog.Logger) *sdk.Server {
-	s := baseServer(instructions, logger)
-	t := &tools{svc: svc, logger: logger}
-	t.register(s)
-	t.registerResources(s)
-	return s
 }
 
 func baseServer(instructions string, logger *slog.Logger) *sdk.Server {
@@ -129,40 +40,23 @@ func baseServer(instructions string, logger *slog.Logger) *sdk.Server {
 		Logger:                    logger,
 		Capabilities:              &sdk.ServerCapabilities{},
 		SupportedProtocolVersions: []string{ProtocolVersion, HandshakeProtocolVersion},
-		// Tools and records change with upgrades and writes, so clients must
-		// never serve a cached discover, list or read result (SEP-2549).
-		SetCacheable: func(_ context.Context, _ sdk.Request, c *sdk.Cacheable) { c.TTLMs = 0 },
+		SetCacheable:              func(_ context.Context, _ sdk.Request, c *sdk.Cacheable) { c.TTLMs = 0 },
 	})
 }
 
 type tools struct {
-	svc *memory.Service
-	// agent is set only for the agent-mode server; full mode never reads it.
-	agent AgentKnowledge
-	// resolver is set only for agent mode v2, v3, v4 and v5.
-	resolver AgentResolver
-	// guide is set only for agent mode v3, v4 and v5 (ADR-0053).
-	guide AgentGuide
-	// guideV7 is set only for agent mode v7's runtime-selected children.
-	guideV7 AgentGuideV7
-	// proposer is set only for agent mode v4 and v5 (ADR-0059).
-	proposer AgentProposer
-	// drafter is set only for agent mode v5 (ADR-0060).
-	drafter AgentDrafter
-	// fieldDrafter is set only for agent mode v6 (ADR-0062).
-	fieldDrafter   AgentFieldDrafter
+	agent          AgentKnowledge
+	resolver       AgentResolver
+	guideV7        AgentGuideV7
 	fieldDrafterV8 AgentFieldDrafterV8
 	logger         *slog.Logger
 }
 
-// Free-form JSON objects are advertised as objects; everything else is
-// inferred from the argument types.
 var schemaOptions = &jsonschema.ForOptions{TypeSchemas: map[reflect.Type]*jsonschema.Schema{
 	reflect.TypeFor[jsontext.Value](): {Type: "object"},
 }}
 
-// add registers a tool whose arguments decode strictly into In, exactly as
-// HTTP request bodies do, so free-form objects keep their member order.
+// add retains strict HTTP-equivalent argument decoding and error mapping.
 func add[In any](s *sdk.Server, t *tools, name, description string, readOnly bool, run func(context.Context, In) (any, error)) {
 	schema, err := jsonschema.For[In](schemaOptions)
 	if err != nil {
@@ -202,7 +96,6 @@ func add[In any](s *sdk.Server, t *tools, name, description string, readOnly boo
 		})
 }
 
-// failure is a tool error carrying the HTTP API's error body.
 func (t *tools) failure(detail wire.ErrorDetail) *sdk.CallToolResult {
 	body, err := json.Marshal(wire.ErrorBody{Error: detail})
 	if err != nil {
@@ -215,71 +108,6 @@ func (t *tools) failure(detail wire.ErrorDetail) *sdk.CallToolResult {
 	}
 }
 
-// rawJSON embeds already-encoded JSON verbatim in the SDK's result.
 type rawJSON []byte
 
 func (r rawJSON) MarshalJSON() ([]byte, error) { return r, nil }
-
-// required returns an invalid_request error naming field.
-func required(field string) error {
-	return &memory.ValidationError{Problems: []memory.FieldProblem{{Field: field, Message: "is required"}}}
-}
-
-const resourceType = "application/json"
-
-func (t *tools) registerResources(s *sdk.Server) {
-	s.AddResourceTemplate(&sdk.ResourceTemplate{
-		Name: "procedure", Title: "Procedure history", MIMEType: resourceType,
-		URITemplate: "polaroid://procedures/{id}",
-		Description: "A procedure with all of its versions, as get_procedure returns it.",
-	}, t.readResource)
-	s.AddResourceTemplate(&sdk.ResourceTemplate{
-		Name: "procedure-version", Title: "Procedure version", MIMEType: resourceType,
-		URITemplate: "polaroid://procedures/{id}/versions/{version}",
-		Description: "One version of a procedure, as get_version returns it.",
-	}, t.readResource)
-	s.AddResourceTemplate(&sdk.ResourceTemplate{
-		Name: "binding", Title: "Binding history", MIMEType: resourceType,
-		URITemplate: "polaroid://bindings/{id}",
-		Description: "A repository binding with all of its revisions, as get_binding returns it.",
-	}, t.readResource)
-}
-
-func (t *tools) readResource(ctx context.Context, req *sdk.ReadResourceRequest) (*sdk.ReadResourceResult, error) {
-	uri := req.Params.URI
-	var body any
-	var err error
-	switch parts := strings.Split(strings.TrimPrefix(uri, "polaroid://"), "/"); {
-	case len(parts) == 2 && parts[0] == "procedures":
-		var h memory.History
-		h, err = t.svc.Procedure(ctx, parts[1])
-		body = wire.NewHistory(h)
-	case len(parts) == 4 && parts[0] == "procedures" && parts[2] == "versions":
-		n, convErr := strconv.Atoi(parts[3])
-		if convErr != nil {
-			return nil, sdk.ResourceNotFoundError(uri)
-		}
-		var v memory.Version
-		v, err = t.svc.Version(ctx, parts[1], n)
-		body = wire.NewVersion(v)
-	case len(parts) == 2 && parts[0] == "bindings":
-		var h memory.BindingHistory
-		h, err = t.svc.Binding(ctx, parts[1])
-		body = wire.NewBindingHistory(h)
-	default:
-		return nil, sdk.ResourceNotFoundError(uri)
-	}
-	if err != nil {
-		if _, _, ok := wire.Classify(err); ok {
-			return nil, sdk.ResourceNotFoundError(uri)
-		}
-		t.logger.ErrorContext(ctx, "mcp resource failed", "uri", uri, "error", err)
-		return nil, fmt.Errorf("internal error")
-	}
-	text, err := json.Marshal(body)
-	if err != nil {
-		t.logger.ErrorContext(ctx, "mcp encode resource", "uri", uri, "error", err)
-		return nil, fmt.Errorf("internal error")
-	}
-	return &sdk.ReadResourceResult{Contents: []*sdk.ResourceContents{{URI: uri, MIMEType: resourceType, Text: string(text)}}}, nil
-}

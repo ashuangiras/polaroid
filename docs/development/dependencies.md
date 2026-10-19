@@ -28,7 +28,7 @@ Licenses were verified on 2026-10-09. Each module's own LICENSE file in the Go m
 | `golang.org/x/sys` | `v0.48.0` | BSD-3-Clause | linux, darwin | System calls for modernc.org/libc and modernc.org/memory. |
 | `github.com/mattn/go-isatty` | `v0.0.24` | MIT | darwin | Needed by modernc.org/libc on darwin. |
 | `github.com/ncruces/go-strftime` | `v1.0.0` | MIT | darwin | Needed by modernc.org/libc on darwin. |
-| `github.com/modelcontextprotocol/go-sdk` | `v1.8.0` | Apache-2.0 AND MIT | linux, darwin | Direct: the official MCP Go SDK, for the `/mcp` endpoint ([ADR-0014](../architecture/decisions/0014-mcp-transport.md)). The project is relicensing from MIT to Apache-2.0. Its LICENSE holds both texts: new contributions are Apache-2.0, and older ones stay MIT until relicensed. |
+| `github.com/modelcontextprotocol/go-sdk` | `v1.8.0` | Apache-2.0 AND MIT | linux, darwin | Direct: the official MCP Go SDK, for the `/mcp/agent/v8` endpoint ([ADR-0066](../architecture/decisions/0066-v8-only-mcp.md)). The project is relicensing from MIT to Apache-2.0. Its LICENSE holds both texts: new contributions are Apache-2.0, and older ones stay MIT until relicensed. |
 | `github.com/google/jsonschema-go` | `v0.4.3` | MIT | linux, darwin | JSON Schema inference for tool input schemas; needed by the MCP SDK. |
 | `github.com/segmentio/encoding` | `v0.5.4` | MIT | linux, darwin | JSON encoding inside the MCP SDK. |
 | `github.com/segmentio/asm` | `v1.1.3` | MIT | linux, darwin | Needed by github.com/segmentio/encoding. |

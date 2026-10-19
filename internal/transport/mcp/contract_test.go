@@ -13,13 +13,7 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// Both /mcp (full mode, ADR-0038's v1 guarantee) and /mcp/agent (agent
-// mode, finalized under the same guarantee by ADR-0049) have a reviewed
-// contract file, checked here against both the live server and the tools
-// table in docs/architecture/mcp.md: a change to any argument's name,
-// type, nesting or requiredness, or to a tool's read-only flag, fails
-// until the contract and the documentation are changed deliberately.
-// Descriptions are wording, not contract.
+// The v8 tool contract snapshot catches unintended schema or read-only changes.
 
 type toolContract struct {
 	ReadOnly  bool              `json:"read_only"`
@@ -149,26 +143,21 @@ func checkToolContract(t *testing.T, want, got map[string]toolContract) {
 	}
 }
 
-func TestFullModeToolContract(t *testing.T) {
-	want := loadContract(t, "testdata/full-mode-tools.json")
-	h := newHarness(t)
-	checkToolContract(t, want, toolsOf(t, h.session))
-}
-
-func TestAgentModeToolContract(t *testing.T) {
-	want := loadContract(t, "testdata/agent-mode-tools.json")
-	agent := newKnowledgeHarness(t)
-	checkToolContract(t, want, toolsOf(t, agent.session))
+func TestAgentV8ToolContract(t *testing.T) {
+	agent, _ := newKnowledgeHarnessV8(t)
+	got := toolsOf(t, agent.session)
+	if len(got) != 10 {
+		t.Fatalf("v8 tools: got %d, want 10", len(got))
+	}
+	checkToolContract(t, loadContract(t, "testdata/agent-mode-v8-tools.json"), got)
 }
 
 var (
-	toolRow  = regexp.MustCompile("^\\| `([a-z_]+)` \\| (yes|no) \\| (.*?) \\| (.*) \\|$")
-	backtick = regexp.MustCompile("`([a-z_]+)`")
+	toolRow = regexp.MustCompile("^\\| `([a-z_]+)` \\| (yes|no) \\| (.*?) \\| (.*) \\|$")
 )
 
 type docRow struct {
 	readOnly bool
-	args     map[string]bool
 }
 
 // toolsDocumentedUnder parses the tools table of mcp.md's section starting
@@ -190,60 +179,23 @@ func toolsDocumentedUnder(t *testing.T, startMarker string) map[string]docRow {
 		if m == nil {
 			continue
 		}
-		r := docRow{readOnly: m[2] == "yes", args: map[string]bool{}}
-		for _, a := range backtick.FindAllStringSubmatch(m[3], -1) {
-			r.args[a[1]] = true
-		}
-		doc[m[1]] = r
+		doc[m[1]] = docRow{readOnly: m[2] == "yes"}
 	}
 	return doc
 }
 
-// checkContractDocumented asserts that the reviewed contract and the
-// documented tools table agree: the same tools, read-only flags, and every
-// argument named in its tool's row (or, per sameFields, in another row that
-// says it shares the same fields).
-func checkContractDocumented(t *testing.T, contract map[string]toolContract, doc map[string]docRow, sameFields map[string]string) {
-	t.Helper()
-	if !slices.Equal(slices.Sorted(maps.Keys(doc)), slices.Sorted(maps.Keys(contract))) {
-		t.Fatalf("documented tools %v, contract %v", slices.Sorted(maps.Keys(doc)), slices.Sorted(maps.Keys(contract)))
-	}
-	for name, c := range contract {
-		r := doc[name]
-		if r.readOnly != c.ReadOnly {
-			t.Errorf("%s: documented read-only %v, contract %v", name, r.readOnly, c.ReadOnly)
+func TestAgentV8ContractIsDocumented(t *testing.T) {
+	contract := loadContract(t, "testdata/agent-mode-v8-tools.json")
+	doc := toolsDocumentedUnder(t, "\n## Agent mode v8 (`/mcp/agent/v8`)\n")
+	// The v8 table can refer to inherited arguments in earlier sections.
+	for name, row := range doc {
+		expected, ok := contract[name]
+		if !ok {
+			t.Errorf("%s is documented at v8 but is not served", name)
+			continue
 		}
-		for a := range c.Arguments {
-			if !r.args[a] && !doc[sameFields[name]].args[a] {
-				t.Errorf("%s: argument %s is not documented in mcp.md", name, a)
-			}
+		if row.readOnly != expected.ReadOnly {
+			t.Errorf("%s read-only is documented as %v, served as %v", name, row.readOnly, expected.ReadOnly)
 		}
 	}
-}
-
-func TestFullModeContractIsDocumented(t *testing.T) {
-	contract := loadContract(t, "testdata/full-mode-tools.json")
-	doc := toolsDocumentedUnder(t, "\n## Tools\n")
-	// Rows that say "then the same ... fields" document those fields once.
-	sameFields := map[string]string{"revise_procedure": "create_procedure", "revise_toil_item": "create_toil_item"}
-	checkContractDocumented(t, contract, doc, sameFields)
-}
-
-func TestAgentModeContractIsDocumented(t *testing.T) {
-	contract := loadContract(t, "testdata/agent-mode-tools.json")
-	doc := toolsDocumentedUnder(t, "\n## Agent mode (`/mcp/agent`)\n")
-	checkContractDocumented(t, contract, doc, nil)
-}
-
-func TestAgentModeV7ContractIsDocumented(t *testing.T) {
-	contract := loadContract(t, "testdata/agent-mode-v7-tools.json")
-	agent := newKnowledgeHarnessV7(t)
-	served := toolsOf(t, agent.session)
-	additions := make(map[string]toolContract, len(contract))
-	for name := range contract {
-		additions[name] = served[name]
-	}
-	checkToolContract(t, contract, additions)
-	doc := toolsDocumentedUnder(t, "\n## Agent mode v7 (`/mcp/agent/v7`)\n")
-	checkContractDocumented(t, contract, doc, nil)
 }

@@ -41,7 +41,7 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0035](0035-evidence-invalidation-and-procedure-retirement.md) | Execution-evidence invalidation and procedure retirement | Accepted |
 | [0036](0036-read-only-catalog-statistics.md) | Read-only catalog statistics | Accepted |
 | [0037](0037-size-limits-on-new-writes.md) | Size limits on new writes | Accepted |
-| [0038](0038-stable-releases-and-compatibility.md) | Stable releases and the compatibility policy | Accepted |
+| [0038](0038-stable-releases-and-compatibility.md) | Stable releases and the compatibility policy | Accepted; MCP route compatibility superseded by ADR-0066 |
 | [0039](0039-read-only-snapshot-transactions.md) | Multi-statement reads use read-only snapshot transactions | Accepted |
 | [0040](0040-feedback-resolution.md) | Feedback resolution: an append-only record of how a report was handled | Accepted |
 | [0041](0041-verification-artifacts.md) | Verification artifacts: a lightweight, local, gitignored build for independent review, never implying a release | Accepted |
@@ -52,7 +52,7 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0046](0046-git-knowledge-synchronisation.md) | Git-native knowledge synchronisation | Accepted (milestone C) |
 | [0047](0047-knowledge-identities-and-origin.md) | Knowledge identities and origin, the foundations of the Git-backed agent interface | Accepted (milestone D foundations) |
 | [0048](0048-git-native-agent-interface.md) | Git-native agent interface, finalized: `/mcp/agent` on living knowledge, and an explicit operator surface at `/v1/knowledge` | Accepted (milestone D; finalized by ADR-0049) |
-| [0049](0049-agent-mode-finalized-no-migration.md) | `/mcp/agent` finalized under ADR-0038's v1 guarantee; milestone E does not migrate the legacy SQLite catalog | Accepted (milestone E; amended by ADR-0051) |
+| [0049](0049-agent-mode-finalized-no-migration.md) | `/mcp/agent` finalized under ADR-0038's v1 guarantee; milestone E does not migrate the legacy SQLite catalog | Accepted (milestone E; route guarantee superseded by ADR-0066) |
 | [0050](0050-corpus-logic.md) | Corpus Logic v1: typed knowledge records and bounded reasoning on Git-native knowledge | Accepted |
 | [0051](0051-agent-mode-discover-kinds.md) | `discover` gains a `kind` selector: procedure matching (default, unchanged), corpus statistics and a tool list | Accepted |
 | [0052](0052-ordered-sibling-steps.md) | Guided Procedures M1: a `precedes` relation and `resolve`'s stateless `plan` | Accepted |
@@ -66,6 +66,6 @@ Short records of consequential choices. An accepted ADR is never edited in subst
 | [0060](0060-interactive-proposal-drafts.md) | Grounded publication M3: interactive, field-by-field proposal construction (`propose_start`/`propose_advance`) | Accepted |
 | [0061](0061-draft-every-field-every-time.md) | Every proposal draft walks every field, every time: appending to already-decided content | Accepted |
 | [0062](0062-field-complete-knowledge-publication.md) | Field-complete knowledge publication across all record types and write paths | Accepted |
-| [0062](0062-field-complete-knowledge-publication.md) | Field-complete knowledge publication across all record types and write paths | Accepted |
+| [0066](0066-v8-only-mcp.md) | Sole MCP route at `/mcp/agent/v8`; operator/evidence operations remain on HTTP/CLI | Accepted |
 
 Template: a title `# NNNN. Decision`, then **Status**, **Date**, and the sections **Context**, **Decision** and **Consequences**. Keep each record under a page.

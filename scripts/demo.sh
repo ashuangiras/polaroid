@@ -8,7 +8,7 @@
 #
 # Then it replays the procedural-memory loop (#28) on Polaroid's development
 # procedures: load the fixtures with scripts/load-fixtures.sh, resolve the
-# binding over MCP, fail the labelled stale version, append the exported
+# binding over the CLI, fail the labelled stale version, append the exported
 # correction and refuse a stale base, and follow verification as the
 # selected child version changes, the parent is re-recorded, a later failure
 # withdraws it, and a second repository stays unverified. Outcomes are
@@ -45,7 +45,8 @@ command -v sqlite3 >/dev/null 2>&1 || { echo "demo: sqlite3 is required" >&2; ex
 make -s binaries
 
 example=examples/procedures/go-dependency-add
-work="$(mktemp -d)"
+work="bin/.demo-work-$$"
+mkdir -m 700 "$work"
 db="$work/polaroid.db"
 # The daemon runs with this HOME, so it can never reach the real ~/.polaroid.
 mkdir -p "$work/home"
@@ -205,14 +206,7 @@ fixture_repo=example.com/fixtures/go-service
 dev_commit=89abcdef0123456789abcdef0123456789abcdef
 scripted='make demo replays the loop with fixed outcomes; a regression check, not an agent run'
 
-# mcp_tool NAME ARGS calls one MCP tool (protocol 2026-07-28) and prints its
-# result text, which is the HTTP API's document or error.
-mcp_tool() {
-	curl -sS -X POST "$POLAROID_URL/mcp" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
-		-H 'Mcp-Protocol-Version: 2026-07-28' -H 'Mcp-Method: tools/call' -H "Mcp-Name: $1" \
-		--data-binary "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"$1\",\"arguments\":$2,\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"demo\",\"version\":\"1\"}}}}" |
-		jq -r '.result.content[0].text'
-}
+http_get() { curl -fsS "$POLAROID_URL$1"; }
 
 # One line per graph node: name@version selected_by verified_by.
 selection_filter='"root@\(.graph.version) \(.selected_by) \(.graph.verified_by // "-")",
@@ -294,12 +288,12 @@ store="$(bin/polaroid list)"
 jq -c '.procedures' <<<"$loaded"
 echo "$dev_repo and $fixture_repo bind procedure $verify_id without copying it; a second load changed nothing"
 
-step "10. Over MCP, resolve the $dev_repo binding: nothing is verified yet, so every version is the latest"
-resolved="$(mcp_tool resolve_binding "{\"binding_id\":\"$dev_binding\",\"environment\":\"demo.ci\"}")"
+step "10. Resolve the $dev_repo binding through the CLI: nothing is verified yet, so every version is the latest"
+resolved="$(bin/polaroid resolve "$dev_binding" demo.ci)"
 want="root@1 latest -
 build@1 latest -
 checks@1 latest -"
-[[ "$(jq -r "$selection_filter" <<<"$resolved")" == "$want" ]] || fail "unexpected MCP resolution: $resolved"
+[[ "$(jq -r "$selection_filter" <<<"$resolved")" == "$want" ]] || fail "unexpected binding resolution: $resolved"
 checks_v1="$(bin/polaroid get-version "$checks_id" 1)"
 jq -e '(.revision_reason | contains("DEMONSTRATION SEED")) and any(.instructions.steps[]; .action | contains("./test/..."))' <<<"$checks_v1" >/dev/null ||
 	fail "go.module.checks version 1 is not the labelled seed"
@@ -318,15 +312,17 @@ jq -e --arg c "$checks1" '.verified == false and [.problems[] | [.code, .referen
 	<<<"$verification" >/dev/null || fail "unexpected verification of the failed parent: $verification"
 jq -c '{verified, problems}' <<<"$verification"
 
-step "12. Append the correction (exported fixture v2.revise.json, replayed by the loader); a stale base is refused over MCP"
+step "12. Append the correction (exported fixture v2.revise.json, replayed by the loader); a stale base is refused over the CLI"
 # The fixtures as they were for #28; later versions load in steps 18 and 20.
 scripts/load-fixtures.sh "$dev28" >/dev/null 2>&1 || fail "the loader did not append version 2"
 jq -e '.latest_version == 2' <<<"$(bin/polaroid get "$checks_id")" >/dev/null || fail "go.module.checks has no version 2"
 [[ "$(bin/polaroid get-version "$checks_id" 1)" == "$checks_v1" ]] || fail "version 1 changed"
-conflict="$(mcp_tool revise_procedure "$(jq -c --arg id "$checks_id" '{procedure_id: $id, base_version: 1} + .version' "$dev/procedures/go-module-checks/v2.revise.json")")"
+if conflict="$(bin/polaroid revise "$checks_id" "$dev/procedures/go-module-checks/v2.revise.json" 2>/dev/null)"; then
+	fail "a stale version was appended"
+fi
 jq -e '.error.code == "version_conflict" and .error.latest_version == 2' <<<"$conflict" >/dev/null || fail "unexpected stale revision response: $conflict"
 jq -e '.latest_version == 2' <<<"$(bin/polaroid get "$checks_id")" >/dev/null || fail "a stale revision was stored"
-echo "stale base_version 1 over MCP: $(jq -c .error <<<"$conflict"); version 1 is unchanged"
+echo "stale base_version 1 over the CLI: $(jq -c .error <<<"$conflict"); version 1 is unchanged"
 
 step "13. A verified new child version changes the selected child, but the parent stays unverified"
 expect_selection "$dev_binding" "root@1 latest -
@@ -427,7 +423,7 @@ grep -q 'version 2 in the store differs' <<<"$refused" || fail "unexpected refus
 echo "versions 1 and 2 stored; a second load changed nothing; a differing version 2 was refused: $(tail -1 <<<"$refused")"
 dev_commit=cccccccccccccccccccccccccccccccccccccccc
 at_dev_target() { # at_dev_target COMMIT: one line per node, "name@version verified latest"
-	mcp_tool resolve_binding "$(jq -cn --arg b "$dev_binding" --arg c "$1" --argjson in "$dev_inputs" '{binding_id: $b, environment: "demo.ci", commit: $c, inputs: $in}')" |
+	bin/polaroid resolve "$dev_binding" demo.ci "$1" "$dev_inputs" |
 		jq -r '"root@\(.graph.version) \(.graph.target_verification.verified) \(.graph.target_verification.latest_execution_id // "-")",
 			(.graph.references[] | "\(.name)@\(.node.version) \(.node.target_verification.verified) \(.node.target_verification.latest_execution_id // "-")")'
 }
@@ -504,9 +500,9 @@ adopt="$(jq -cn --arg r "$repo_fb" --arg p "$release_id" '{repository: $r, name:
 	revision: {inputs: {}, version_policy: {contextual: {}}, revision_reason: "Try to adopt A'\''s release."}}')"
 if refused="$(bin/polaroid bind <<<"$adopt" 2>/dev/null)"; then fail "B adopted A's local procedure"; fi
 jq -e '.error.code == "invalid_request" and .error.fields[0].field == "procedure_id"' <<<"$refused" >/dev/null || fail "unexpected refusal: $refused"
-refused_mcp="$(mcp_tool create_binding "$(jq -c '{repository, name, procedure_id} + .revision' <<<"$adopt")")"
-jq -e '.error.fields[0].field == "procedure_id"' <<<"$refused_mcp" >/dev/null || fail "MCP let B adopt A's local procedure: $refused_mcp"
-echo "6. B binding service-a.release is refused over HTTP and MCP: $(jq -r '.error.fields[0].message' <<<"$refused")"
+[[ "$(bin/polaroid bindings "$repo_fb" | jq -c --arg p "$release_id" '[.bindings[] | select(.procedure_id == $p)]')" == '[]' ]] ||
+	fail "the refused binding was stored for B"
+echo "6. B binding service-a.release is refused and not stored: $(jq -r '.error.fields[0].message' <<<"$refused")"
 
 ab_commit=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
 record_ab() { # record_ab BINDING REPOSITORY INPUTS: a scripted success of go.test.run v1
@@ -526,7 +522,7 @@ echo "7. at ${ab_commit:0:7}, A's run $run_fa verifies A only; B is verified by 
 feedback_ab() { bin/polaroid feedback <<<"$(jq -cn --arg s "$scripted" --argjson extra "$1" '{kind: "suggestion", summary: "Scripted report (make demo)", details: $s, reporter: "scripts.demo"} + $extra')" | jq -r .id; }
 fb_service="$(feedback_ab '{"subject":{"type":"service"}}')"
 fb_version="$(feedback_ab "$(jq -cn --arg p "$test_id" --arg e "$run_fa" --arg r "$mirror_fa" '{subject: {type: "procedure", procedure_id: $p, version: 1}, repository: $r, execution_id: $e}')")"
-fb_run="$(mcp_tool report_feedback "$(jq -cn --arg e "$run_fb" --arg s "$scripted" '{kind: "problem", summary: "Scripted report (make demo)", details: $s, reporter: "scripts.demo", subject: {type: "execution", execution_id: $e}}')" | jq -r .id)"
+fb_run="$(jq -cn --arg e "$run_fb" --arg s "$scripted" '{kind: "problem", summary: "Scripted report (make demo)", details: $s, reporter: "scripts.demo", subject: {type: "execution", execution_id: $e}}' | bin/polaroid feedback | jq -r .id)"
 wrong="$(feedback_ab "$(jq -cn --arg p "$test_id" --arg e "$run_fa" --arg r "$repo_fb" '{subject: {type: "procedure", procedure_id: $p, version: 1}, repository: $r, execution_id: $e}')" 2>/dev/null || true)"
 [[ "$wrong" == null ]] || fail "a report claiming A's execution ran in B was accepted"
 about() { bin/polaroid feedbacks "$@" | jq -c '[.feedback[].id]'; }
@@ -650,8 +646,9 @@ req39="$(jq -n --arg p "$verify_id" --arg r "$dev_repo" --arg c "$c39" --argjson
 if refused39="$(bin/polaroid record <<<"$req39" 2>/dev/null)"; then fail "a parent claiming a clean tree linked a build of a dirty one"; fi
 jq -e '[.error.fields[].field] == ["children[0].execution_id"] and (.error.fields[0].message | contains("\"working_tree\":\"dirty\"") and contains("maps the parent'\''s inputs to"))' \
 	<<<"$refused39" >/dev/null || fail "unexpected refusal: $refused39"
-jq -e '[.error.fields[].field] == ["children[0].execution_id"]' <<<"$(mcp_tool record_execution "$req39")" >/dev/null || fail "MCP accepted the mismatched child"
-echo "a parent with working_tree clean linking a build of a dirty tree is refused over HTTP and MCP:"
+[[ "$(bin/polaroid executions "$verify_id" | jq --arg c "$c39" '[.executions[] | select(.commit == $c)] | length')" == 0 ]] ||
+	fail "the refused parent execution was stored"
+echo "a parent with working_tree clean linking a build of a dirty tree is refused and not stored:"
 jq -r '.error.fields[0].message' <<<"$refused39"
 echo "at ${c39:0:7}, the build its mapping implies (clean) has not run:"
 expect_dev_target "$c39" "root@2 false -
@@ -810,9 +807,9 @@ toil_keys() { bin/polaroid toil-items "$@" | jq -c '[.toil_items[].canonical_key
 [[ "$(toil_keys status=candidate)" == "[\"$toil_key\"]" && "$(toil_keys status=observed)" == "[]" ]] || fail "the status filter does not use the latest revision"
 [[ "$(toil_keys "repository=$dev_repo")" == "[\"$toil_key\"]" && "$(toil_keys "repository=$fixture_repo")" == "[]" ]] || fail "the local item is not limited to $dev_repo"
 [[ "$(toil_keys "procedure_id=$records_id")" == "[\"$toil_key\"]" && "$(toil_keys "procedure_id=$classify_id")" == "[]" ]] || fail "the procedure filter does not use the sources"
-[[ "$(mcp_tool get_toil_item "{\"canonical_key\":\"$toil_key\"}")" == "$toil_history" ]] || fail "get_toil_item does not return the HTTP document"
+[[ "$(http_get "/v1/toil-items/by-key/$toil_key")" == "$toil_history" ]] || fail "the toil item CLI and HTTP documents differ"
 [[ "$(dev_snapshot)" == "$dev_before" ]] || fail "a toil item changed a procedure, execution, verification or binding"
-echo "4. filters use the latest revision: candidate, local to $dev_repo (not $fixture_repo), citing polaroid.change.records (not the run's dev.change.classify); MCP returns the same document; no other record changed"
+echo "4. filters use the latest revision: candidate, local to $dev_repo (not $fixture_repo), citing polaroid.change.records (not the run's dev.change.classify); HTTP returns the same document; no other record changed"
 
 step "26. Evidence invalidation and procedure retirement, with isolated example procedures (#91, ADR-0035; scripted regression evidence)"
 lc_repo=example.com/demo/lifecycle lc_commit=4444444444444444444444444444444444444444
@@ -869,12 +866,12 @@ jq -e '.lifecycle_status == "retired" and .latest_version == 2' <<<"$(bin/polaro
 echo "3. child retired (a stale base is lifecycle_conflict): left out of the default list, still read by ID, its pinned and contextual nodes keep their versions and evidence and report retirement, and a new parent version referencing it is procedure_retired"
 lc_life="$(lc_lifecycle 1 "Scripted: needed again." | bin/polaroid reactivate-procedure "$lc_child")"
 jq -e '.status == "active" and ([.events[].status] == ["retired", "active"])' <<<"$lc_life" >/dev/null || fail "unexpected reactivation: $lc_life"
-[[ "$(mcp_tool get_procedure_lifecycle "{\"procedure_id\":\"$lc_child\"}")" == "$(bin/polaroid get-procedure-lifecycle "$lc_child")" ]] || fail "MCP and HTTP lifecycles differ"
+[[ "$(http_get "/v1/procedures/$lc_child/lifecycle/events")" == "$(bin/polaroid get-procedure-lifecycle "$lc_child")" ]] || fail "CLI and HTTP lifecycles differ"
 [[ "$(lc_graph | jq -c '[.edges[].retired]')" == '[false,false]' ]] || fail "reactivated nodes still report retirement"
 [[ "$(lc_dev)" == "$lc_dev_before" ]] || fail "the lifecycle demonstration changed a development record"
 lc_invalidation="$(bin/polaroid get-execution-invalidation "$lc_c2")"
 dev_before="$(dev_snapshot)"
-echo "4. reactivated: the history keeps both events, MCP returns the same document, the graph is ordinary again; no development record changed"
+echo "4. reactivated: the history keeps both events, HTTP returns the same document, the graph is ordinary again; no development record changed"
 
 step "27. Catalog statistics: one read-only summary of everything above (#96, ADR-0036; scripted regression evidence)"
 stats96="$(bin/polaroid statistics)"
@@ -885,10 +882,10 @@ jq -e '.statistics_version == 1 and .storage.schema_version == 17 and (.procedur
 	fail "unexpected statistics: $stats96"
 [[ "$(bin/polaroid executions | jq '.executions | length')" == "$(jq '.records.executions' <<<"$stats96")" ]] || fail "statistics count other executions than the list"
 stats96_counts() { jq -c 'del(.generated_at, .storage.files)'; }
-[[ "$(mcp_tool get_catalog_statistics '{}' | stats96_counts)" == "$(stats96_counts <<<"$stats96")" ]] || fail "MCP and HTTP statistics differ"
+[[ "$(http_get /v1/statistics | stats96_counts)" == "$(stats96_counts <<<"$stats96")" ]] || fail "CLI and HTTP statistics differ"
 [[ "$(dev_snapshot)" == "$dev_before" ]] || fail "reading statistics changed a development record"
 jq -r '"\(.records.procedures) procedures (\(.records.procedure_versions) versions), \(.records.executions) executions (\(.executions.by_outcome.failed) failed, \(.records.execution_invalidations) invalidated), \(.records.toil_items) toil item; \(.payloads.execution_evidence.total_bytes) bytes of execution evidence; schema \(.storage.schema_version)"' <<<"$stats96"
-echo "the counts add up, match the execution list and the MCP tool, name no path, and reading them changed nothing"
+echo "the counts add up, match the execution list and HTTP API, name no path, and reading them changed nothing"
 
 step "28. Size limits on new writes: an oversized value is refused, nothing is stored (#98, ADR-0037; scripted regression evidence)"
 limits98="$(jq -c '.write_limits' <<<"$stats96")"
@@ -910,8 +907,8 @@ fb_resolution="$(jq -n --arg s "$scripted" '{outcome: "addressed", reason: ("Scr
 jq -e '.outcome == "addressed" and .actor == "scripts.demo" and (.references | length) == 1' <<<"$fb_resolution" >/dev/null || fail "unexpected resolution: $fb_resolution"
 if refused127="$(jq -n '{outcome: "addressed", reason: "again", actor: "scripts.demo"}' | bin/polaroid resolve-feedback "$fb_version" 2>/dev/null)"; then fail "a second resolution was accepted"; fi
 jq -e '.error.code == "feedback_resolved"' <<<"$refused127" >/dev/null || fail "unexpected refusal of a second resolution: $refused127"
-[[ "$(mcp_tool get_feedback "{\"id\":\"$fb_version\"}" | jq -c '{status, resolution}')" == "$(jq -c '{status, resolution}' <<<"$(bin/polaroid get-feedback "$fb_version")")" ]] ||
-	fail "MCP and HTTP feedback resolutions differ"
+[[ "$(http_get "/v1/feedback/$fb_version" | jq -c '{status, resolution}')" == "$(jq -c '{status, resolution}' <<<"$(bin/polaroid get-feedback "$fb_version")")" ]] ||
+	fail "CLI and HTTP feedback resolutions differ"
 open_ids() { bin/polaroid feedbacks status="$1" | jq -c '[.feedback[].id] | sort'; }
 [[ "$(open_ids resolved)" == "[\"$fb_version\"]" ]] || fail "status=resolved does not list it"
 [[ "$(bin/polaroid feedbacks | jq --arg i "$fb_version" 'any(.feedback[]; .id == $i)')" == true ]] || fail "the unfiltered list dropped the resolved report"

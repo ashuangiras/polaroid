@@ -44,47 +44,30 @@ func TestKnowledgeAcceptance(t *testing.T) {
 
 	ctx := context.Background()
 	client := sdk.NewClient(&sdk.Implementation{Name: "acceptance-test", Version: "v0"}, nil)
-	session, err := client.Connect(ctx, &sdk.StreamableClientTransport{Endpoint: base + "/mcp/agent", DisableStandaloneSSE: true, MaxRetries: -1}, nil)
+	session, err := client.Connect(ctx, &sdk.StreamableClientTransport{Endpoint: base + "/mcp/agent/v8", DisableStandaloneSSE: true, MaxRetries: -1}, nil)
 	if err != nil {
 		t.Fatalf("connect agent mode: %v", err)
 	}
 	t.Cleanup(func() { _ = session.Close() })
-	v6Client := sdk.NewClient(&sdk.Implementation{Name: "acceptance-test-v6", Version: "v0"}, nil)
-	v6Session, err := v6Client.Connect(ctx, &sdk.StreamableClientTransport{Endpoint: base + "/mcp/agent/v6", DisableStandaloneSSE: true, MaxRetries: -1}, nil)
+	v8Tools, err := session.ListTools(ctx, nil)
 	if err != nil {
-		t.Fatalf("connect agent mode v6: %v", err)
+		t.Fatalf("list v8 tools: %v", err)
 	}
-	t.Cleanup(func() { _ = v6Session.Close() })
-	v6Tools, err := v6Session.ListTools(ctx, nil)
-	if err != nil {
-		t.Fatalf("list v6 tools: %v", err)
+	expected := map[string]bool{
+		"discover": false, "read": false, "feedback": false, "resolve": false,
+		"start": false, "attach_child": false, "advance": false,
+		"propose_start": false, "propose_advance": false, "propose_publish_capture": false,
 	}
-	var hasFullProposalStart, hasFullProposalAdvance bool
-	for _, tool := range v6Tools.Tools {
-		hasFullProposalStart = hasFullProposalStart || tool.Name == "propose_start"
-		hasFullProposalAdvance = hasFullProposalAdvance || tool.Name == "propose_advance"
+	for _, tool := range v8Tools.Tools {
+		if _, ok := expected[tool.Name]; !ok || expected[tool.Name] {
+			t.Fatalf("unexpected or duplicate v8 tool %s", tool.Name)
+		}
+		expected[tool.Name] = true
 	}
-	if !hasFullProposalStart || !hasFullProposalAdvance {
-		t.Fatalf("v6 endpoint tools = %v, want full proposal tools", v6Tools.Tools)
-	}
-	v7Client := sdk.NewClient(&sdk.Implementation{Name: "acceptance-test-v7", Version: "v0"}, nil)
-	v7Session, err := v7Client.Connect(ctx, &sdk.StreamableClientTransport{Endpoint: base + "/mcp/agent/v7", DisableStandaloneSSE: true, MaxRetries: -1}, nil)
-	if err != nil {
-		t.Fatalf("connect agent mode v7: %v", err)
-	}
-	t.Cleanup(func() { _ = v7Session.Close() })
-	v7Tools, err := v7Session.ListTools(ctx, nil)
-	if err != nil {
-		t.Fatalf("list v7 tools: %v", err)
-	}
-	var hasDynamicStart, hasAttachChild, hasAdvance bool
-	for _, tool := range v7Tools.Tools {
-		hasDynamicStart = hasDynamicStart || tool.Name == "start"
-		hasAttachChild = hasAttachChild || tool.Name == "attach_child"
-		hasAdvance = hasAdvance || tool.Name == "advance"
-	}
-	if !hasDynamicStart || !hasAttachChild || !hasAdvance {
-		t.Fatalf("v7 endpoint tools = %v, want start/attach_child/advance", v7Tools.Tools)
+	for name, present := range expected {
+		if !present {
+			t.Fatalf("missing v8 tool %s", name)
+		}
 	}
 
 	callTool := func(name string, args map[string]any) map[string]any {
